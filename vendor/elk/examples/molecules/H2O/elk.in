@@ -1,0 +1,46 @@
+
+! Water molecule in a box.
+
+tasks
+  2    ! optimise the atomic positions
+
+! molecule calculation (atomic positions are in Cartesian coordinates)
+molecule
+  .true.
+
+epsforce
+  1.e-4
+
+! use LAPW
+nxoapwlo
+  1
+
+! use subspace diagonalisation for the first-variational step with a quarter of
+! the LAPW+l.o. basis
+mefvs
+ -4
+
+! extra local-orbitals required
+nxlo
+  4
+
+! put molecule in a large box
+avec
+ 10.0  0.0  0.0
+  0.0 10.0  0.0
+  0.0  0.0 10.0
+
+sppath
+  '../../../species/'
+
+! atomic positions in Cartesian coordinates
+atoms
+  2                                     : nspecies
+  'O.in'                                : spfname
+  1                                     : natoms; atposc below
+  0.0  0.0  0.0
+  'H.in'
+  2
+  1.811        0.0          0.0
+ -0.451907959  1.753710409  0.0
+

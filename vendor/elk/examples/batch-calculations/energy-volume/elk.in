@@ -1,0 +1,85 @@
+
+! Elk can run a batch of calculations while varying a particular input
+! parameter.
+
+! In this example, we use this feature to generate an energy-volume curve of
+! AlAs. Only certain variables can be varied but more can be added on request.
+! The output data is stored in a standard format in the file VARIABLES.OUT.
+
+! To extract the set of volumes use:
+!
+!   sed -n '/\bomega\b/{n;n;p}' VARIABLES.OUT > omega
+!
+! and to extract the corresponding total energies use:
+!
+!   sed -n '/\bengytot\b/{n;n;p}' VARIABLES.OUT > engytot
+!
+! These can be combined into a single file using:
+!
+!   paste omega engytot > e_vs_v
+!
+! which can be plotted or fitted to an equation of state.
+
+
+! run several consecutive ground-state calculations
+tasks
+  0
+  1
+  1
+  1
+  1
+  1
+  1
+  1
+  1
+  1
+  1
+
+! enable a batch calculation
+batch
+ .true.
+
+! Don't reset the muffin-tin radii to the input species file values for each
+! calculation. This has the effect of keeping the radii fixed to those of the
+! first calculation (smallest volume) for every point on the E-V curve, which
+! in turn reduces the relative error between points.
+trmt0
+ .false.
+
+! GGA exchange-correlation functional
+xctype
+  20
+
+! these are the lattice vectors and their changes between each calculation
+avec
+  5.0  5.0  0.0      0.1  0.1  0.0
+  5.0  0.0  5.0      0.1  0.0  0.1
+  0.0  5.0  5.0      0.0  0.1  0.1
+
+! Reference lattice vectors for generating the G-vector set and derived
+! quantities. These are kept fixed for all volumes and the G-vectors are
+! transformed to match those that would be generated from avec. This improves
+! stability of the E-V curve by keeping the G-vector grid size fixed throughout.
+avecref
+  5.0  5.0  0.0
+  5.0  0.0  5.0
+  0.0  5.0  5.0
+
+! use avecref for generating a G-point set and derived quatities; this is kept
+! fixed for all volumes and the G-vectors are
+
+ngridk
+  8  8  8
+
+sppath
+  '../../../species/'
+
+atoms
+  2                                 : nspecies
+  'Al.in'                           : spfname
+  1                                 : natoms; atposl below
+  0.0   0.0   0.0
+  'As.in'
+  1
+  0.25  0.25  0.25
+

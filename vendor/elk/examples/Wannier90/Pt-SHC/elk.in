@@ -1,0 +1,84 @@
+
+! Wannier90 example for fcc Pt Spin Hall Conductivity (SHC).
+! Adapted from Wannier90's Pt example. Calculate the SHC as a function of the energy.
+! Try the 25x25x25 k-mesh first. Try increasing berry_kmesh to 50x50x50, add the 
+! adaptive mesh and reduce the energy step size to 0.05eV.
+! Compare with Ryoo et al., Phys. Rev. B 99, 235113 (2019). A high-quality result
+! is available in this folder. Thanks to Markus Meinert.
+
+tasks
+  0
+  550
+
+spinorb
+ .true.
+
+highq
+ .true.
+
+nempty
+  9
+
+ngridk
+  10 10 10
+
+projw90
+ .true.
+
+! s, p, d projectors
+lprojw90
+ 1   0 1 2  : species, angular momenta
+
+! select the band indices for wannierisation to avoid the semicore states
+! check with EIGVAL.out and LINENGY.OUT: first 20 states are p and f semicore states.
+idxw90
+ 21-50
+
+! Number of iterations in disentanglement procedure
+dis_num_iter
+  500
+
+! Number of iterations in the minimisation procedure
+num_iter
+  1000
+
+! Extra lines to be included in the .win file.
+! Here we optimize the disentanglement and wannierisation energy windows.
+! Energies in elk's output are given relative to the Fermi energy, i.e. E_F = 0.
+xlwin
+dis_win_min       =  -15.0d0
+dis_win_max       =  40.0d0
+dis_froz_min      =  -15.0d0
+dis_froz_max      =  10.00d0
+shc_freq_scan = false
+shc_alpha = 1
+shc_beta = 2
+shc_gamma = 3
+berry = true
+berry_task = eval_shc
+berry_kmesh =  25 25 25
+berry_curv_unit = ang2
+fermi_energy_min = -7
+fermi_energy_max = 3
+fermi_energy_step = 0.25
+!berry_curv_adpt_kmesh = 5
+!berry_curv_adpt_kmesh_thresh = 100.0
+
+avec
+  0.5  0.5  0.0
+  0.5  0.0  0.5
+  0.0  0.5  0.5
+
+scale
+  7.40772
+
+sppath
+ '../../../species/'
+
+atoms
+  1                                   : nspecies
+  'Pt.in'                             : spfname
+  1                                   : natoms
+  0.0  0.0  0.0    0.0  0.0  0.0      : atposl, bfcmt
+
+

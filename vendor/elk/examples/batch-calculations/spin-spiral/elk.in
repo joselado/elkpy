@@ -1,0 +1,79 @@
+
+! Batch calculation of the spin-spiral state of γ-Fe. The output data is stored
+! in a standard format in the file VARIABLES.OUT.
+
+! To extract the x-component of the spin-spiral q-vector in Cartesian
+! coordinates use:
+!
+!   sed -n '/\bvqcss\b/{n;n;p}' VARIABLES.OUT > vqcss
+!
+! and to extract the corresponding total energies use:
+!
+!   sed -n '/\bengytot\b/{n;n;p}' VARIABLES.OUT > engytot
+!
+! These can be combined into a single file using:
+!
+!   paste vqcss engytot > e_vs_q
+!
+! which can be plotted.
+
+! run several consecutive ground-state calculations
+tasks
+  0
+  1
+  1
+  1
+  1
+  1
+  1
+  1
+  1
+  1
+  1
+  1
+  1
+  1
+  1
+  1
+  1
+  1
+
+batch
+ .true.
+
+wrtdisk
+ .false.
+
+spinsprl
+  .true.
+
+! spin-spiral q-vector (x-direction) and increment in lattice coordinates
+vqlss
+  0.0  0.0  0.0    0.03  0.03  0.0
+
+! enable high-quality settings
+highq
+ .true.
+
+! spiral magnetic field along q with perpendicular component only
+bfieldc
+  0.01  0.0  0.0
+
+! fcc lattice
+avec
+  1.0  1.0  0.0
+  1.0  0.0  1.0
+  0.0  1.0  1.0
+
+scale
+  3.375
+
+sppath
+  '../../../species/'
+
+atoms
+  1                                   : nspecies
+  'Fe.in'                             : spfname
+  1                                   : natoms
+  0.0  0.0  0.0    0.0  0.0  0.0      : atposl, bfcmt
+
