@@ -9,7 +9,26 @@ SI_SPECIES = {"Si": [(0.0, 0.0, 0.0), (0.25, 0.25, 0.25)]}
 def test_construct():
     s = Structure(SI_AVEC, SI_SPECIES)
     assert s.avec == SI_AVEC
-    assert list(s.species["Si"]) == SI_SPECIES["Si"]
+    # bare positions normalize to (position, bfcmt) pairs with zero bfcmt
+    assert list(s.species["Si"]) == [
+        ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)),
+        ((0.25, 0.25, 0.25), (0.0, 0.0, 0.0)),
+    ]
+    assert s.species_filename("Si") == "Si.in"
+
+
+def test_construct_with_per_atom_bfcmt():
+    species = {"Fe": [((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)), ((0.5, 0.5, 0.5), (0.0, 0.0, -1.0))]}
+    s = Structure(SI_AVEC, species)
+    assert s.species["Fe"] == [
+        ((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+        ((0.5, 0.5, 0.5), (0.0, 0.0, -1.0)),
+    ]
+
+
+def test_species_files_override():
+    s = Structure(SI_AVEC, SI_SPECIES, species_files={"Si": "Si_custom.in"})
+    assert s.species_filename("Si") == "Si_custom.in"
 
 
 def test_from_ase_to_ase_roundtrip():

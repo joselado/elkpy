@@ -57,3 +57,38 @@ class InputFile:
         path = str(path)
         with open(path, "w") as fh:
             fh.write(self.render())
+
+
+def read_blocks(path):
+    """Read a file in Elk's block format (elk.in itself, or an Elk output
+    file written in the same syntax, e.g. GEOMETRY_OPT.OUT -- see
+    src/writegeom.f90) into (name, [token_lists]) pairs.
+
+    Trailing " : comment" and full-line "!..." comments are stripped, each
+    remaining non-blank line becomes a list of whitespace-split tokens, and
+    a block ends at the next blank line. If a block name repeats (as
+    GEOMETRY_OPT.OUT does, once per optimisation step), every occurrence is
+    returned in file order -- callers that want "the last one" take
+    blocks[-1] themselves.
+    """
+    blocks = []
+    current_name = None
+    current_lines = []
+    with open(path) as fh:
+        for raw in fh:
+            line = raw.split("!", 1)[0]
+            line = line.split(":", 1)[0]
+            line = line.strip()
+            if not line:
+                if current_name is not None:
+                    blocks.append((current_name, current_lines))
+                    current_name = None
+                    current_lines = []
+                continue
+            if current_name is None:
+                current_name = line
+            else:
+                current_lines.append(line.split())
+    if current_name is not None:
+        blocks.append((current_name, current_lines))
+    return blocks

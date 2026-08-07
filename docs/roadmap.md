@@ -1,110 +1,98 @@
 # elkpy implementation roadmap
 
-Status: planning document, ordered by what unblocks the most future work per
-unit of effort. Builds on the v0 slice (`Structure`, `Calculation.get_energy
-/get_bands/get_dos`, `run_tasks` escape hatch — see `docs/design.md` §10 and
-commit history) and on `docs/design.md`'s object model. "Additional
+Status: Tiers 1-3 implemented and verified against a real compiled Elk binary
+(see git log; `tests/test_calculation_si.py`, `tests/test_calculation_fe.py`).
+Tiers 4-6 remain planning only. Builds on the v0 slice (`Structure`,
+`Calculation.get_energy/get_bands/get_dos`, `run_tasks` escape hatch — see
+`docs/design.md` §10) and on `docs/design.md`'s object model. "Additional
 implementations" here means broader coverage of Elk's own standard
 DFT-workflow capabilities (relaxation, forces, phonons, ...) — confirmed with
 the user, not novel physics built on Elk's export tasks; that's noted as a
 possible later direction in Tier 4 but is not the near-term goal.
 
-## Tier 1 — Usability primitives (do these before adding more `get_*` methods)
+## Tier 1 — Usability primitives — DONE
 
-Every item here is either a known gap that blocks real calculations today, or
-a known bug. Doing these first means Tier 3's new methods don't inherit the
-same gaps.
+All six items implemented in `src/elkpy/calculation.py`/`structure.py`,
+verified against real Elk runs (`tests/test_calculation_si.py`,
+`tests/test_calculation_fe.py`).
 
-1. **Generic block passthrough.** `Calculation.__init__` only exposes `xc`,
-   `spinpol`, `rgkmax`, `ngridk`, `vkloff`, `sppath` — every other Elk block
-   (`maxscl`, `nempty`, `stype`/`swidth`, `epspot`/`epsengy`, `mixtype`,
-   `spinorb`, `autokpt`/`radkpt`, `molecule`, `dft+u`, ...) is unreachable.
-   Hand-adding each as a named kwarg defeats the point of the generic
-   `InputFile` writer. Add `extra_blocks={}` (or `**kwargs`), merged in
-   `_add_base_blocks` and included in `_basis_signature()` so it correctly
-   participates in ground-state cache invalidation. Small (~5 lines) and
-   makes the package usable for real calculations immediately — e.g.
-   `spinorb` (needed for the bundled Au spin-orbit example) is otherwise
-   unreachable.
-2. **First-class non-convergence status.** `ensure_ground_state()` currently
-   raises `RuntimeError` on non-convergence. `docs/design.md` §7 wants this
-   as an inspectable result state, not exception-only — add a
-   `calc.converged` property / `calc.status()` so callers building sweeps
-   (Tier 5) can handle a non-converged point without a try/except around
-   every call.
-3. **`run_tasks` subdirectory collision.** The auto-generated subdirectory
-   name is derived only from the task numbers, not `blocks` — two
-   `run_tasks([120], blocks=A)` / `run_tasks([120], blocks=B)` calls silently
-   overwrite each other's output. Either require an explicit `label` when
-   `blocks` is given, or fold a hash of `blocks` into the default label.
-4. **Species override.** Species filenames are always `{symbol}.in` resolved
-   against one `sppath` (defaults to `vendor/elk/species/`). Real use needs
-   per-`Structure` or per-species override (custom species files, doped/
-   fractional `spzn`, ...).
-5. **Per-atom magnetic fields (`bfcmt`) and moments.** `_add_base_blocks`
-   hardcodes `bfcmt = (0,0,0)` for every atom. Needed for any real
-   `spinpol` workflow (antiferromagnetic setups, symmetry breaking) — see
-   manual §5.2.
-6. **Symbolic k-path resolution for `get_bands`.** Currently only raw
-   fractional vertices are accepted; `docs/design.md`'s illustrative
-   `kpath="GXWLGK"` example is aspirational, not implemented. Needs
-   Bravais-lattice-aware special points — an optional `spglib`/ASE-`bandpath`
-   dependency, not hand-rolled. Lower priority than 1-5 (raw vertices are a
-   real, if less convenient, escape valve already).
+1. **Generic block passthrough** — `Calculation(..., extra_blocks={...})`,
+   merged in `_add_base_blocks` and included in `_basis_signature()`.
+2. **First-class non-convergence status** — `calc.converged` property
+   (`None`/`True`/`False`); `raise_on_nonconvergence=True` (default) keeps the
+   old raise-immediately behavior for single-calculation use, set `False` for
+   sweep-style usage that wants to check `.converged` and move on instead.
+3. **`run_tasks` subdirectory collision** — default label now folds in a
+   short hash of `blocks`, not just the task numbers.
+4. **Species override** — `Structure(..., species_files={"Si": "custom.in"})`.
+5. **Per-atom `bfcmt`** — species entries accept either a bare position or a
+   `(position, bfcmt)` pair.
+6. **Symbolic k-path** — `get_bands(kpath="GXWLGK")` via ASE's
+   `Cell.bandpath().special_points` (optional dependency); disconnected
+   segments (a `,` break in the path string) raise rather than silently
+   dropping part of the path — not implemented, use `vertices=` for that case.
 
-## Tier 2 — `spec` module (small, scoped)
+**Fix found during Tier 3 implementation, not anticipated here**:
+`_run_resumed`'s subdirectory is now wiped clean before every run, not just
+created-if-missing. Reusing a subdirectory that held partial output from an
+earlier killed/crashed run caused a real, reproduced failure once phonon
+DFPT (Tier 3 #5) was implemented — task 205 treats existing `DYN`/`DVS` files
+as "already done" and resumed from corrupt partial state instead of erroring.
+Same fix applies to every `_run_resumed` caller (bands/dos/forces/effmass/
+density/phonons), not just phonons.
 
-`docs/design.md` §7 calls for one module holding all version-coupled
-knowledge. What actually exists inline right now is small: `XC_CODES` (9
-entries) in `calculation.py`, task numbers scattered across
-`calculation.py`/`run_tasks` call sites, and output filenames hardcoded in
-each `parsers/*.py`. Consolidate these into `src/elkpy/spec.py` before Tier
-3 adds more of the same pattern — cheap now, more valuable the more `get_*`
-methods exist.
+## Tier 2 — `spec` module — DONE
 
-Explicitly **not** in scope yet: auto-generating the block schema from
-`docs/elk_manual.txt`. That text is pdftotext output with wrapped
-descriptions and mangled math — brittle for a payoff not needed yet, since
-`InputFile` doesn't validate block names anyway. Revisit only if
-hand-maintaining `spec.py` across an Elk version bump turns out to be
-genuinely painful.
+`src/elkpy/spec.py`: `XC_CODES`, `TASKS`, `OUTPUT_FILES`, each entry
+cross-checked against `vendor/elk/src/` (not just the manual). The
+manual-scraping generator discussed as a stretch goal is still out of scope —
+not revisited, `spec.py` stayed small enough to maintain by hand through this
+round of additions.
 
-## Tier 3 — More `get_*` methods (the "additional implementations")
+## Tier 3 — More `get_*` methods (the "additional implementations") — DONE
 
-In rough priority order; each entry notes what's non-trivial about it, not
-just what task number it wraps.
+1. **`get_forces()`** — DONE, but not as originally planned: forces from a
+   plain ground-state run go to `INFO.OUT`'s "Forces :" section
+   (`src/writeforces.f90`), not a separate `FORCES.OUT` — there's no such
+   file for a non-relaxation run. Implemented as a resumed run (task 1) with
+   `tforce` in its own subdirectory, parsing that subdirectory's `INFO.OUT`.
+2. **`get_relaxed()`** — DONE. Resolved the flagged trap by choosing the
+   documented-tradeoff option: the new `Calculation` reconverges its own
+   ground state from atomic densities rather than reusing the relaxation
+   run's `STATE.OUT` (see the docstring in `calculation.py` for why —
+   avoiding a repeat of the same stale-cache bug class). Confirmed correct on
+   Si: forces ~0 at the input geometry (already near-equilibrium), relaxed
+   energy differs from the original by ~6e-8 Hartree.
+3. **`get_effective_mass()`** — DONE as planned (task 25, `vklem` block,
+   `EFFMASS.OUT`).
+4. **Volumetric plot family** — partially done: `get_density()` (task 33)
+   implemented with a genuinely reusable parser
+   (`parsers/volumetric.py::parse_plot3d`, since all of density/potential/ELF
+   3D plots share the exact same `plot3d`-family writer,
+   `src/plot3d.f90`) — potential (task 43) and ELF (task 53) are one `_run_resumed`
+   call away using the same parser but don't have named `get_*` methods yet;
+   deliberately scoped down given the size of this round, reachable via
+   `run_tasks()` today.
+5. **Phonons** — DONE, and simpler than expected: wrapping the DFPT method
+   (task 205) rather than the classical supercell method (task 200) makes
+   phonon dispersion/DOS single-shot within one `elk` invocation (confirmed
+   against `examples/phonons-superconductivity/*-DFPT`), so it fits the
+   existing `_run_resumed` pattern after all — the anticipated "needs its own
+   directory-management logic" was not needed. What *did* need fixing was the
+   stale-subdirectory bug noted under Tier 1 above, which phonons surfaced
+   because task 205 (unlike every other task wrapped so far) checks for prior
+   output files to decide what's already done. The classical supercell method
+   remains unwrapped (multi-run coordination across displacements/machines,
+   out of scope), reachable via `run_tasks()`.
 
-1. **`get_forces()`** — `tforce .true.` on an existing ground-state run
-   (cheap: modifies the task-0 run, not a new task), parses `FORCES.OUT`.
-   Do this before relaxation; relaxation needs it internally and it's
-   useful standalone.
-2. **`get_relaxed()`** — tasks 2/3, `GEOMETRY_OPT.OUT`, returns a new
-   `Structure` + `Calculation` per `docs/design.md` §3's "not in-place"
-   policy. **Concrete trap to resolve before implementing, not after**: the
-   relaxed `Structure` has different atomic positions, so the new
-   `Calculation`'s `_basis_signature()` will legitimately differ from the
-   old one — meaning a naive implementation throws away the just-relaxed
-   density and reconverges from atomic densities. Decide explicitly: seed
-   the new directory with the relaxation run's final `STATE.OUT` and record
-   its signature as pre-validated (faster, correct — density from the
-   relaxed geometry's last step is a good starting guess), or accept the
-   reconverge and document why. This is the same class of STATE.OUT-identity
-   bug fixed in the current codebase for `get_dos`/`get_bands` — name the
-   policy in the code, don't leave it implicit.
-3. **`get_effective_mass()`** — task 25, single k-point, cheap, no new
-   structural complexity.
-4. **Volumetric plot family** (density/potential/ELF, tasks 31-91) — these
-   share `plot1d`/`plot2d`/`plot3d` block conventions and output format
-   closely enough to warrant one general helper rather than one-off methods
-   per task family.
-5. **Phonons** (`get_phonon_dos()`/`get_phonon_dispersion()`, tasks 200s) —
-   the most structurally different addition: phonon tasks accumulate `DYN`
-   files across many partial/restarted runs per q-point rather than
-   producing one shot in one invocation (`docs/design.md` §4's
-   "task-specific file dependencies" warning). This does **not** fit the
-   existing `_run_resumed` one-fixed-subdirectory-per-name pattern —
-   budget for its own directory-management logic (per-q-point
-   subdirectories, restart bookkeeping) rather than trying to force-fit it.
+   Confirmed correct on Si (`ngridq=(2,2,2)`, 2 atoms): dispersion gives 6
+   branches, 3 acoustic branches at Γ within 1e-11 of zero as physically
+   required; DOS runs and parses cleanly. Also confirmed expensive even at
+   this minimal grid — dispersion took ~11 min, DOS ~13 min, dominated by
+   DFPT's per-perturbation-per-q-point cost rather than anything elkpy
+   controls. The regression tests
+   (`tests/test_calculation_si_phonons.py`) are consequently gated behind
+   `ELKPY_RUN_SLOW_TESTS=1`, not run by default.
 
 ## Tier 4 — Possible later direction (not the current goal)
 
