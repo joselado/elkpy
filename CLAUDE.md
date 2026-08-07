@@ -4,14 +4,36 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-No Python package exists yet — this is still pre-implementation. What does exist:
+An early but working v0 slice exists, per `docs/design.md` §10: `Structure` → `Calculation` with
+`get_energy()`, `get_bands()`, `get_dos()`, and a `run_tasks()` escape hatch, verified end-to-end
+against a real compiled Elk binary on bulk Si (`tests/test_calculation_si.py`). Also present:
 `vendor/elk/` (the vendored Elk 11.0.2 source, unmodified, tracked in git), `docs/elk_manual.pdf` /
-`docs/elk_manual.txt` (the official Elk manual, plain-text version pdftotext-extracted for grepping),
-and `docs/design.md` (the architecture strategy for the Python interface — read it before adding code;
-it covers the object model, task-coverage strategy, run-directory/caching semantics, the build/patch
-mechanism for the minimal-touch constraint, and the "additional implementations" strategy). Treat
-`docs/design.md` as intent, not fact once implementation starts — verify against actual code before
-relying on any path or API it describes, and keep it updated as decisions change.
+`docs/elk_manual.txt` (the official manual, plain-text version pdftotext-extracted for grepping), and
+`docs/design.md` (the full architecture strategy — read it before adding code; it covers the object
+model, `STATE.OUT` reuse semantics, the build/patch mechanism, and the Fortran-isolation policy). Much
+of the design (geometry relaxation, phonons, the `spec` module, scheduler-backed launchers, symbolic
+k-path resolution) is not implemented yet — check `src/elkpy/` directly rather than assuming
+`docs/design.md` describes current code; update both as they diverge.
+
+## Architecture
+
+- `src/elkpy/structure.py` — `Structure`: lattice vectors (`avec`, Bohr) + species with fractional
+  positions. `from_ase()`/`to_ase()` convert Angstrom/Cartesian ASE `Atoms` (optional dependency).
+- `src/elkpy/calculation.py` — `Calculation`: owns one run directory and the ground-state-defining
+  parameters (`xc`, `spinpol`, `rgkmax`, `ngridk`, ...). `get_*` methods block and can be
+  expensive — they run real Elk subprocesses, not in-memory work. `ensure_ground_state()` reuses a
+  prior task-0 run only if a JSON manifest (`.elkpy_manifest.json` in the run directory) shows the
+  basis/structure/functional-defining parameters and the Elk binary identity are unchanged; sampling
+  parameters (e.g. a denser `ngridk` passed to `get_dos()`) are free to differ and just trigger a
+  task-1 resume, not a full reconverge.
+- `src/elkpy/inputfile.py` — generic `elk.in` block writer (block name + value lines), not hardcoded
+  per block.
+- `src/elkpy/launcher.py` — `LocalLauncher`: blocking local subprocess execution of the `elk` binary.
+- `src/elkpy/parsers/` — one small module per output file (`info.py` for SCF convergence via the
+  literal strings Elk writes to `INFO.OUT`, `totenergy.py`, `band.py`, `dos.py`), each verified against
+  real output rather than assumed from the manual alone.
+- `src/elkpy/config.py` — locates the built `elk` binary (`build/elk/src/elk` by default, override via
+  `ELKPY_ELK_BIN`) and the species directory (`vendor/elk/species/` by default).
 
 ## Project purpose
 
@@ -44,11 +66,18 @@ vendored tree:
 
 ## Commands
 
-No Python package, lint, or test tooling exists yet for elkpy itself. Do not invent commands (e.g.
-`pytest`) — check for their actual presence (`pyproject.toml`, `setup.py`, CI config) before assuming
-any exist, and update this section once real tooling is added.
-
-Elk's own build (`vendor/elk/Makefile`, driven by `vendor/elk/make.inc`) and test suite
-(`vendor/elk/tests/test.sh`) exist and work standalone, but per `docs/design.md` §8, elkpy is not meant
-to build or run Elk directly out of `vendor/elk/` — the planned build/patch mechanism builds from a
-separate out-of-tree copy so the vendored source stays untouched.
+- Build Elk out-of-tree (copies `vendor/elk/` to `build/elk/`, applies `patches/*.patch` if any, drops
+  in `build-config/make.inc`, builds — never touches `vendor/elk/`):
+  `./scripts/build_elk.sh`. Must be run before any test/example that actually invokes Elk.
+  Serial by design — `make -j` races on an implicit ordering dependency in Elk's own `src/Makefile`
+  (stub files like `mpi_stub.f90`/`libxcifc_stub.f90` must compile before the modules that `use` them,
+  and that isn't expressed as an explicit prerequisite upstream); this is a pre-existing upstream
+  issue, not something to fix by editing `vendor/elk/`.
+- Install elkpy (editable): `python3 -m pip install -e .`
+- Run tests: `python3 -m pytest tests/`. Run a single test: `python3 -m pytest tests/test_calculation_si.py::test_get_bands`.
+  `tests/test_calculation_si.py` is an integration suite that runs the real `elk` binary on bulk Si —
+  it self-skips if `build/elk/src/elk` doesn't exist yet, so run `./scripts/build_elk.sh` first to
+  actually exercise it. `tests/test_structure.py`'s ASE round-trip test self-skips if `ase` isn't
+  installed (`pip install -e .[ase]`).
+- `build-config/make.inc` targets GNU Fortran + OpenBLAS/LAPACK + FFTW, serial (no MPI); edit it (not
+  `vendor/elk/make.inc`) to change compiler/library configuration.
