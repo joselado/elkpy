@@ -67,3 +67,15 @@ def test_get_dos(si_calculation):
     energies, dos = si_calculation.get_dos()
     assert energies.shape == dos.shape
     assert len(energies) > 0
+
+
+def test_get_dos_with_different_ngridk_does_not_corrupt_ground_state(si_calculation):
+    """Regression test: get_dos(ngridk=...) at a denser mesh than the ground
+    state must not mutate self.workdir's STATE.OUT/manifest -- a later
+    get_energy() call must still report the original ground state's energy,
+    not one silently recomputed at the denser mesh (see _run_resumed's
+    docstring in calculation.py)."""
+    e_before = si_calculation.get_energy()
+    si_calculation.get_dos(ngridk=(6, 6, 6))
+    e_after = si_calculation.get_energy()
+    assert e_before == e_after

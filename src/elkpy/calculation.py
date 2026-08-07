@@ -7,6 +7,7 @@ despite the familiar naming.
 """
 
 import json
+import shutil
 from pathlib import Path
 
 from . import config
@@ -132,6 +133,33 @@ class Calculation:
                 f"(hit maxscl) -- see INFO.OUT"
             )
 
+    def _run_resumed(self, subdir_name, tasks, extra_blocks=None, ngridk=None):
+        """Run task(s) resumed from the ground state's STATE.OUT, in an
+        isolated subdirectory rather than self.workdir.
+
+        This is deliberate, not just tidiness: task 1 rewrites STATE.OUT,
+        TOTENERGY.OUT and INFO.OUT wherever it runs (src/gndstate.f90). If it
+        ran directly in self.workdir, a get_dos(ngridk=...) call at a denser
+        sampling mesh than the ground state would silently overwrite the
+        ground state's own STATE.OUT/TOTENERGY.OUT while the manifest still
+        recorded the original ngridk -- a later get_energy() would then
+        report a cache hit and return the wrong (denser-mesh) energy. Running
+        in a copy avoids this: self.workdir's STATE.OUT and manifest are
+        never touched by anything other than ensure_ground_state().
+        """
+        self.ensure_ground_state()
+        subdir = self.workdir / subdir_name
+        subdir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(self.workdir / "STATE.OUT", subdir / "STATE.OUT")
+        f = InputFile()
+        f.add_block("tasks", [1] + list(tasks))
+        self._add_base_blocks(f, ngridk=ngridk)
+        for name, lines in (extra_blocks or {}).items():
+            f.add_block(name, lines)
+        f.write(subdir / "elk.in")
+        self.launcher.run(subdir)
+        return subdir
+
     def get_energy(self):
         """Total energy in Hartree (task 0/1, TOTENERGY.OUT)."""
         self.ensure_ground_state()
@@ -150,14 +178,9 @@ class Calculation:
         Returns (distances, energies) with energies shape (nbands, npoints),
         Hartree, Fermi energy already subtracted by Elk.
         """
-        self.ensure_ground_state()
-        f = InputFile()
-        f.add_block("tasks", [1, 20])
-        self._add_base_blocks(f)
-        f.add_block("plot1d", [(len(vertices), npoints)] + [tuple(v) for v in vertices])
-        f.write(self.workdir / "elk.in")
-        self.launcher.run(self.workdir)
-        return band.parse_bands(self.workdir / "BAND.OUT")
+        blocks = {"plot1d": [(len(vertices), npoints)] + [tuple(v) for v in vertices]}
+        subdir = self._run_resumed("bands", [20], blocks)
+        return band.parse_bands(subdir / "BAND.OUT")
 
     def get_dos(self, ngridk=None):
         """Total density of states (task 10, TDOS.OUT).
@@ -167,27 +190,30 @@ class Calculation:
         state's ngridk -- see docs/design.md #4). Returns (energies, dos),
         Hartree / states-per-Hartree-per-unit-cell.
         """
-        self.ensure_ground_state()
-        f = InputFile()
-        f.add_block("tasks", [1, 10])
-        self._add_base_blocks(f, ngridk=tuple(ngridk) if ngridk else None)
-        f.write(self.workdir / "elk.in")
-        self.launcher.run(self.workdir)
-        return dos.parse_dos(self.workdir / "TDOS.OUT")
+        subdir = self._run_resumed("dos", [10], ngridk=tuple(ngridk) if ngridk else None)
+        return dos.parse_dos(subdir / "TDOS.OUT")
 
-    def run_tasks(self, tasks, blocks=None, resume=True):
+    def run_tasks(self, tasks, blocks=None, resume=True, label=None):
         """Escape hatch for any Elk task not covered by a named get_*
-        method (docs/design.md #3). Writes and runs an elk.in with the given
-        raw task codes and extra input blocks; does not parse output -- the
-        caller reads whatever files the task(s) produced from self.workdir.
+        method (docs/design.md #3).
+
+        If `resume` (default), runs task(s) resumed from STATE.OUT in an
+        isolated subdirectory, same as get_bands/get_dos -- see
+        _run_resumed's docstring for why. If not `resume`, runs a fresh task
+        0 + `tasks` from atomic densities in its own subdirectory, also
+        never touching self.workdir's ground state. Does not parse output --
+        the caller reads whatever files the task(s) produced from the
+        returned directory.
         """
         if resume:
-            self.ensure_ground_state()
+            return self._run_resumed(label or f"tasks_{'_'.join(map(str, tasks))}", tasks, blocks)
+        subdir = self.workdir / (label or f"tasks_{'_'.join(map(str, tasks))}")
+        subdir.mkdir(parents=True, exist_ok=True)
         f = InputFile()
-        f.add_block("tasks", ([1] if resume else [0]) + list(tasks))
+        f.add_block("tasks", [0] + list(tasks))
         self._add_base_blocks(f)
         for name, lines in (blocks or {}).items():
             f.add_block(name, lines)
-        f.write(self.workdir / "elk.in")
-        self.launcher.run(self.workdir)
-        return self.workdir
+        f.write(subdir / "elk.in")
+        self.launcher.run(subdir)
+        return subdir

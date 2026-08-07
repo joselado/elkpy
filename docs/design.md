@@ -195,11 +195,16 @@ spawning unconfigured MPI would oversubscribe a shared machine.
   run, and is a good parse target *when a parser genuinely needs it*. Do not
   turn `wrtvars` on unconditionally by default; the file can get large and most
   calculations don't need it.
-- **Non-convergence and warnings are a first-class result state**, not an
-  exception-or-silently-wrong-data coin flip. `get_energy()`/status should expose
-  whether SCF converged (hit `maxscl` or not) and surface `WARNING.OUT` content,
-  so callers can decide how to handle it rather than trusting output that may be
-  garbage.
+- **Non-convergence is a first-class result state**, not an
+  exception-or-silently-wrong-data coin flip. There is no separate
+  `WARNING.OUT` file in Elk 11.0.2 (verified against `vendor/elk/src/`) --
+  `Warning(...)` messages go to stdout (captured in the run's own log file,
+  e.g. `elk.out`), not `INFO.OUT`. Convergence itself is readable from two
+  literal strings `INFO.OUT` writes (`src/gndstate.f90`): "Convergence
+  targets achieved" on success, "Reached self-consistent loops maximum" if
+  `maxscl` was hit (see `parsers/info.py`). `get_energy()`/status should
+  expose this rather than trusting output that may be from a non-converged
+  run.
 
 ## 8. Build, Fortran changes, and isolation
 

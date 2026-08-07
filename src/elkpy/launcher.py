@@ -16,6 +16,17 @@ class LocalLauncher:
 
     def __init__(self, elk_binary=None, nprocs=1, omp_threads=1):
         self.elk_binary = config.resolve_elk_binary(elk_binary)
+        if nprocs > 1:
+            # build-config/make.inc builds with mpi_stub.f90 (no real MPI) --
+            # `mpirun -np N` against that binary launches N independent
+            # serial copies into the same directory, all writing the same
+            # *.OUT files with no error. Fails loudly here instead of
+            # silently producing garbage output.
+            raise ValueError(
+                "nprocs > 1 requires an MPI-enabled elk build; the default "
+                "build-config/make.inc uses mpi_stub.f90 (serial). Build "
+                "with a real MPI compiler/make.inc before requesting nprocs > 1."
+            )
         self.nprocs = nprocs
         self.omp_threads = omp_threads
 
@@ -23,9 +34,10 @@ class LocalLauncher:
         """Run elk in `workdir`, writing stdout/stderr to `log_name`.
 
         Returns the path to the log file. Raises RuntimeError if the process
-        exits non-zero (Elk itself prints "Elk code stopped" and exits 0 even
-        on internal errors it detects, so callers should still check
-        INFO.OUT/WARNING.OUT for correctness, not just the return code).
+        exits non-zero. Elk itself prints "Elk code stopped" and exits 0 even
+        on some internal errors/non-convergence it detects, so callers should
+        still check INFO.OUT for correctness (see parsers/info.py), not just
+        the return code.
         """
         import os
 
@@ -33,8 +45,6 @@ class LocalLauncher:
         env["OMP_NUM_THREADS"] = str(self.omp_threads)
 
         command = [str(self.elk_binary)]
-        if self.nprocs > 1:
-            command = ["mpirun", "-np", str(self.nprocs)] + command
 
         log_path = workdir / log_name
         with open(log_path, "w") as log:
