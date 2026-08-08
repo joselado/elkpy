@@ -17,6 +17,15 @@ phonon method (task 200, DFPT/task 205 only), scheduler-backed launchers, MPI, n
 potential/ELF volumetric plots (reachable via `run_tasks()` + `parsers.volumetric`). Check `src/elkpy/`
 directly rather than assuming the docs describe current code; update both as they diverge.
 
+Also implemented, as the first real entry in the Fortran patch series described below:
+`Calculation(spinorb=, soc_scale={"Fe": 1.5, ...})` — per-species scaling of the spin-orbit coupling
+term, on top of upstream Elk's single global `socscf` scalar. `patches/0001-per-species-soc-scale.patch`
+adds a `socscfsp(maxspecies)` array (`modmain.f90`) and an `elkpy_socscale` input block (`readinput.f90`)
+overriding `socscf` per species inside `gensocfr.f90`'s existing per-atom loop — the smallest possible
+hook, verified against a real compiled binary to reproduce the global-`socscf` result exactly for a
+single-species cell and to scale independently per species in a two-species cell
+(`tests/test_calculation_soc.py`).
+
 ## Architecture
 
 - `src/elkpy/structure.py` — `Structure`: lattice vectors (`avec`, Bohr) + species, each atom either a
@@ -24,8 +33,11 @@ directly rather than assuming the docs describe current code; update both as the
   `species_files` optionally overrides the `{symbol}.in` species-filename convention. `from_ase()`/
   `to_ase()` convert Angstrom/Cartesian ASE `Atoms` (optional dependency).
 - `src/elkpy/calculation.py` — `Calculation`: owns one run directory and the ground-state-defining
-  parameters (`xc`, `spinpol`, `rgkmax`, `ngridk`, `extra_blocks` for anything else — e.g. `spinorb`,
-  `maxscl`). `get_*` methods block and can be expensive — real Elk subprocesses, not in-memory work.
+  parameters (`xc`, `spinpol`, `spinorb`, `soc_scale`, `rgkmax`, `ngridk`, `extra_blocks` for anything
+  else — e.g. `maxscl`). `soc_scale={"Fe": 1.5}` requires `spinorb=True` and needs the
+  `patches/0001-per-species-soc-scale.patch` Fortran extension applied (i.e. a binary built via
+  `scripts/build_elk.sh` after the patch was added — see git log for when). `get_*` methods block and
+  can be expensive — real Elk subprocesses, not in-memory work.
   `ensure_ground_state()` reuses a prior task-0 run only if a JSON manifest (`.elkpy_manifest.json`)
   shows the basis/structure/functional-defining parameters (including `extra_blocks`) and the Elk
   binary identity are unchanged; sampling parameters (e.g. a denser `ngridk` passed to `get_dos()`) are
@@ -55,6 +67,14 @@ directly rather than assuming the docs describe current code; update both as the
 A Python interface to Elk, an all-electron full-potential linearized augmented-plane-wave (LAPW)
 density-functional-theory (DFT) code written in Fortran. On top of the interface, this project adds
 extra functionality that Elk itself does not provide.
+
+## Development practices
+
+When implementing new physics (a new Fortran capability, a new formula, a new numerical scheme —
+not routine wrapping of an existing Elk task), checking arXiv for the relevant method/paper is
+encouraged where it fits the task, to ground the implementation in the actual published formalism
+(e.g. matching sign/normalization conventions, confirming which approximation a term corresponds
+to) rather than guessing from the code alone.
 
 ## Core constraint: isolate changes to vendored Elk source, don't avoid Fortran
 

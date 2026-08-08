@@ -125,7 +125,8 @@ speculative infrastructure for this ahead of a real use case.
 
 1. `README.md` quickstart (none exists yet).
 2. CI: run `scripts/build_elk.sh` + `pytest` on push. Add the "patch series
-   still applies cleanly" check from `docs/design.md` §8 once `patches/`
-   has real content (currently empty — nothing to check yet).
+   still applies cleanly" check from `docs/design.md` §8 -- `patches/` now
+   has real content (`0001-per-species-soc-scale.patch`), so a version bump
+   of `vendor/elk/` could silently break it without this check.
 3. Packaging polish (dependency version pins, a changelog) once the API
    surface is less likely to change week to week.

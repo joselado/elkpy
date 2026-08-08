@@ -1,0 +1,125 @@
+diff --git a/src/elk.f90 b/src/elk.f90
+index f5b8db0..88b4c05 100644
+--- a/src/elk.f90
++++ b/src/elk.f90
+@@ -1614,6 +1614,14 @@ end program
+ !   This can be used to enhance the effect of spin-orbit coupling in order to
+ !   accurately determine the magnetic anisotropy energy (MAE).
+ !
++!   \block{elkpy\_socscale}{
++!   {\tt is} & species number & integer & -\\
++!   {\tt t1} & per-species scaling factor for the spin-orbit coupling term &
++!    real & -}
++!   elkpy extension (not upstream Elk): overrides {\tt socscf} for species
++!   {\tt is} only, leaving every other species at {\tt socscf}. One line per
++!   overridden species, terminated by a blank line.
++!
+ !   \block{spincore}{
+ !   {\tt spincore} & set to {\tt .true.} if the core should be spin-polarised
+ !    & logical & {\tt .false.}}
+diff --git a/src/gensocfr.f90 b/src/gensocfr.f90
+index cd2303f..b74afad 100644
+--- a/src/gensocfr.f90
++++ b/src/gensocfr.f90
+@@ -32,22 +32,26 @@ implicit none
+ ! local variables
+ integer is,ias,nthd
+ integer nr,nri,ir,irc
+-real(8) cso,rm
++real(8) cso,rm,scso
+ ! automatic arrays
+ real(8) vr(nrmtmax),dvr(nrmtmax)
+ if (.not.spinorb) return
+-! coefficient of spin-orbit coupling
+-cso=y00*socscf/(4.d0*solsc**2)
+ call holdthd(natmtot,nthd)
+ !$OMP PARALLEL DO DEFAULT(SHARED) &
+ !$OMP PRIVATE(vr,dvr,is,nr,nri) &
+-!$OMP PRIVATE(ir,irc,rm) &
++!$OMP PRIVATE(ir,irc,rm,cso,scso) &
+ !$OMP SCHEDULE(DYNAMIC) &
+ !$OMP NUM_THREADS(nthd)
+ do ias=1,natmtot
+   is=idxis(ias)
+   nr=nrmt(is)
+   nri=nrmti(is)
++! elkpy: per-species override of the spin-orbit coupling scale factor
++! elkpy: (socscfsp(is) < 0 means "not overridden", fall back to socscf)
++  scso=socscf
++  if (socscfsp(is) >= 0.d0) scso=socscfsp(is)
++! coefficient of spin-orbit coupling
++  cso=y00*scso/(4.d0*solsc**2)
+ ! radial derivative of the spherical part of the Kohn-Sham potential
+   call rfmtlm(1,nr,nri,vsmt(:,ias),vr)
+   call splined(nr,wcrmt(:,:,is),vr,dvr)
+diff --git a/src/modmain.f90 b/src/modmain.f90
+index f3ebf74..4605cbd 100644
+--- a/src/modmain.f90
++++ b/src/modmain.f90
+@@ -230,6 +230,9 @@ logical spinpol,spinpol0
+ logical spinorb,spinorb0
+ ! scale factor of spin-orbit coupling term in Hamiltonian
+ real(8) socscf
++! elkpy: per-species override of socscf (sentinel < 0 means "not set, use
++! elkpy: socscf"); see elkpy_socscale in readinput.f90 and gensocfr.f90
++real(8) socscfsp(maxspecies)
+ ! bforb is .true. for external B-field-orbit coupling
+ logical bforb
+ ! bfdmag is .true. for external B-field diamagnetic coupling
+diff --git a/src/readinput.f90 b/src/readinput.f90
+index 4341ab3..dfd0794 100644
+--- a/src/readinput.f90
++++ b/src/readinput.f90
+@@ -150,6 +150,8 @@ lmirep=.true.
+ spinpol=.false.
+ spinorb=.false.
+ socscf=1.d0
++! elkpy: sentinel < 0 means "not overridden by elkpy_socscale"
++socscfsp(:)=-1.d0
+ bforb=.false.
+ bfdmag=.false.
+ atpopt=1
+@@ -615,6 +617,43 @@ case('socscf')
+     write(*,*)
+     stop
+   end if
++case('elkpy_socscale')
++! elkpy: per-species scale factor for spin-orbit coupling; one 'is value'
++! elkpy: pair per line, terminated by a blank line (same style as dft+u).
++! elkpy: bound is maxspecies+1, not maxspecies: a full maxspecies-line block
++! elkpy: still needs one more iteration to read its terminating blank line
++  do i=1,maxspecies+1
++    read(50,'(A)',err=20) str
++    if (trim(str) == '') goto 10
++    read(str,*,iostat=ios) is,t1
++    if (ios /= 0) then
++      write(*,*)
++      write(*,'("Error(readinput): error reading elkpy_socscale parameters")')
++      write(*,'("(blank line required after elkpy_socscale block)")')
++      write(*,*)
++      stop
++    end if
++    if ((is < 1).or.(is > maxspecies)) then
++      write(*,*)
++      write(*,'("Error(readinput): invalid species number in elkpy_socscale &
++       &block : ",I0)') is
++      write(*,*)
++      stop
++    end if
++    if (t1 < 0.d0) then
++      write(*,*)
++      write(*,'("Error(readinput): elkpy_socscale < 0 for species ",I0," : ", &
++       &G18.10)') is,t1
++      write(*,*)
++      stop
++    end if
++    socscfsp(is)=t1
++  end do
++  write(*,*)
++  write(*,'("Error(readinput): too many elkpy_socscale entries")')
++  write(*,'("Adjust maxspecies in modmain and recompile code")')
++  write(*,*)
++  stop
+ case('bforb')
+   read(50,*,err=20) bforb
+ case('bfdmag')

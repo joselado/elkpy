@@ -26,6 +26,8 @@ class Calculation:
         workdir,
         xc="PW",
         spinpol=False,
+        spinorb=False,
+        soc_scale=None,
         rgkmax=7.0,
         ngridk=(4, 4, 4),
         vkloff=(0.0, 0.0, 0.0),
@@ -36,10 +38,26 @@ class Calculation:
     ):
         """
         extra_blocks: any elk.in block not covered by a named parameter above
-        (e.g. {"spinorb": [True], "maxscl": [200], "dft+u": [...]})  --
-        applied to every task this Calculation runs (ground state and every
-        get_*/run_tasks call), and included in the ground-state cache
-        signature (docs/roadmap.md Tier 1 #1).
+        (e.g. {"maxscl": [200], "dft+u": [...]})  -- applied to every task
+        this Calculation runs (ground state and every get_*/run_tasks call),
+        and included in the ground-state cache signature (docs/roadmap.md
+        Tier 1 #1).
+
+        spinorb: enable spin-orbit coupling (elk.in `spinorb`, manual
+        sec. 5.129) -- adds a sigma.L term to the second-variational
+        Hamiltonian.
+
+        soc_scale: optional {symbol: factor} overriding the strength of the
+        spin-orbit coupling term for specific species (elkpy Fortran
+        extension, `elkpy_socscale` block -- vendor/elk carries no per-
+        species SOC control upstream, only the single global `socscf`
+        scalar; see patches/0001-per-species-soc-scale.patch, which patches
+        vendor/elk/src/gensocfr.f90 to look up a per-species scale before
+        falling back to the global one). Species not listed keep Elk's
+        default global scale (`socscf`, 1.0 unless overridden via
+        extra_blocks). Requires spinorb=True -- otherwise SOC is off
+        entirely and a scale has nothing to act on. Every key must be a
+        species symbol present in `structure`.
 
         raise_on_nonconvergence: if True (default), ensure_ground_state()
         raises RuntimeError on non-convergence -- the safe default, since a
@@ -54,6 +72,22 @@ class Calculation:
         self.workdir.mkdir(parents=True, exist_ok=True)
         self.xc = xc
         self.spinpol = spinpol
+        self.spinorb = spinorb
+        self.soc_scale = dict(soc_scale or {})
+        if self.soc_scale and not self.spinorb:
+            raise ValueError(
+                "soc_scale given but spinorb=False -- spin-orbit coupling is off, so a "
+                "per-species scale has no effect; pass spinorb=True"
+            )
+        unknown = set(self.soc_scale) - set(structure.species)
+        if unknown:
+            raise ValueError(
+                f"soc_scale species {sorted(unknown)} not in structure "
+                f"(known species: {sorted(structure.species)})"
+            )
+        negative = {k: v for k, v in self.soc_scale.items() if v < 0}
+        if negative:
+            raise ValueError(f"soc_scale must be >= 0, got {negative}")
         self.rgkmax = rgkmax
         self.ngridk = tuple(ngridk)
         self.vkloff = tuple(vkloff)
@@ -94,6 +128,13 @@ class Calculation:
 
         input_file.add_block("xctype", [self._xctype_code()])
         input_file.add_block("spinpol", [self.spinpol])
+        input_file.add_block("spinorb", [self.spinorb])
+        if self.soc_scale:
+            species_index = {symbol: i + 1 for i, symbol in enumerate(self.structure.species)}
+            input_file.add_block(
+                "elkpy_socscale",
+                [(species_index[symbol], scale) for symbol, scale in self.soc_scale.items()],
+            )
         input_file.add_block("rgkmax", [self.rgkmax])
         input_file.add_block("ngridk", [ngridk or self.ngridk])
         input_file.add_block("vkloff", [self.vkloff])
@@ -109,6 +150,8 @@ class Calculation:
             "scale": self.structure.scale,
             "xctype": self._xctype_code(),
             "spinpol": self.spinpol,
+            "spinorb": self.spinorb,
+            "soc_scale": self.soc_scale,
             "rgkmax": self.rgkmax,
             "sppath": str(self.sppath),
             "ngridk": list(self.ngridk),
@@ -363,6 +406,8 @@ class Calculation:
             new_workdir,
             xc=self.xc,
             spinpol=self.spinpol,
+            spinorb=self.spinorb,
+            soc_scale=self.soc_scale,
             rgkmax=self.rgkmax,
             ngridk=self.ngridk,
             vkloff=self.vkloff,
