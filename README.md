@@ -28,49 +28,59 @@ python3 -m pip install -e .        # add .[ase] for Structure.from_ase()/to_ase(
 ```
 
 # FUNCTIONALITIES #
+elkpy's own contribution is physics **beyond** what Elk provides upstream, added as a
+small, additive Fortran patch series (`patches/`) plus Python arithmetic on top --
+never a modification of `vendor/elk/` itself. The three capabilities below don't
+exist in stock Elk at all.
 
-## Ground-state electronic structure ##
-- Self-consistent Kohn-Sham total energy $E[n]$, in Elk's FP-LAPW basis
-- Band structure $\epsilon_i(\mathbf k)$ and density of states $g(\epsilon)$
-- Hellmann-Feynman forces $\mathbf F_I=-\partial E/\partial\mathbf R_I$ and structural relaxation
-- Effective mass tensor $(1/m^*)_{ab}=\hbar^{-2}\partial^2\epsilon/\partial k_a\partial k_b$
-- Real-space charge density $n(\mathbf r)$
-- Escape hatch (`run_tasks()`) to any other standard Elk task (e.g. $\langle\hat L\rangle,\langle\hat S\rangle,\langle\hat J\rangle$ expectation values, potential/ELF volumetric plots)
+## Per-species spin-orbit coupling scaling ##
+Elk's spin-orbit term (Koelling-Harmon approximation) is
+$$ \hat H_{\rm soc}(r)=f_{\rm soc}(r)\,\hat{\mathbf L}\cdot\boldsymbol\sigma $$
+scaled upstream by one single global number, `socscf`, applied identically to every
+atom regardless of species. elkpy promotes that to an independent scale per chemical
+species, $\texttt{socscf}\to s_{is}$, so a correction fitted for one (typically heavy)
+element doesn't leak onto a lighter one sharing the cell.
 
-## Lattice dynamics ##
-- Phonon dispersion $\omega_\nu(\mathbf q)$ and density of states via density functional perturbation theory (DFPT), from the dynamical matrix $D_{\kappa\alpha,\kappa'\beta}(\mathbf q)=(M_\kappa M_{\kappa'})^{-1/2}\,\partial^2E/\partial u^*_{\kappa\alpha}(\mathbf q)\partial u_{\kappa'\beta}(\mathbf q)$
+## Topological characterization: Berry curvature and Chern numbers ##
+Elk has no Berry-curvature capability at all. elkpy adds the gauge-invariant
+Wilson-loop (Fukui-Hatsugai-Suzuki) discretization of
+$$ F_{12}(\mathbf k)=\partial_1A_2(\mathbf k)-\partial_2A_1(\mathbf k), \qquad c_n=\frac1{2\pi i}\int_{T^2}\!d^2k\;F_{12}(\mathbf k)\in\mathbb Z, $$
+in two modes: over Elk's full periodic k-mesh (a genuine, topologically quantized
+Chern number), or at an arbitrary, explicit k-point via fresh on-the-fly
+diagonalization (no periodic mesh required at all) -- e.g. to resolve the curvature
+of one valley of a 2D material without a mesh covering the whole zone.
 
-## Per-species spin-orbit coupling scaling (elkpy Fortran extension) ##
-- Independent scaling of the Koelling-Harmon spin-orbit term $\hat H_{\rm soc}=f_{\rm soc}(r)\hat{\mathbf L}\cdot\boldsymbol\sigma$ per chemical species, generalizing Elk's single global `socscf` scalar
+## Eigenstates and wavefunction overlaps at arbitrary k-points ##
+Elk can diagonalize at an arbitrary off-mesh k-point internally (e.g. along a band
+path), but exposes no way to retrieve `evecsv` or a cross-k wavefunction overlap
+programmatically, nor to amortize the ground-state-dependent setup cost across many
+such queries. elkpy adds a persistent, interactive Elk session that returns
+second-variational energies/eigenvectors and the wavefunction overlap
+$$ O_{ab}(\mathbf k_a,\mathbf k_b)=\langle\psi_a(\mathbf k_a)|\psi_b(\mathbf k_b)\rangle $$
+between two arbitrary k-points, on demand, staying warm across repeated queries.
 
-## Topological characterization (elkpy Fortran extension) ##
-- Berry curvature $F_{12}(\mathbf k)=\partial_1A_2-\partial_2A_1$ and Chern number $c_n=(2\pi i)^{-1}\int_{T^2}d^2k\,F_{12}$, via the gauge-invariant Wilson-loop (Fukui-Hatsugai-Suzuki) discretization on Elk's periodic k-mesh
-- The same construction at an arbitrary, explicit k-point (no periodic mesh required), e.g. to resolve individual valleys of a 2D material
-
-## Eigenstates and wavefunction overlaps (elkpy Fortran extension) ##
-- Second-variational energies/eigenvectors at an arbitrary k-point
-- Wavefunction overlaps $O_{ab}(\mathbf k_a,\mathbf k_b)=\langle\psi_a(\mathbf k_a)|\psi_b(\mathbf k_b)\rangle$ between two arbitrary k-points, kept fast over many repeated queries via a persistent interactive session
+## Also wraps Elk's standard DFT workflow ##
+Total energy $E[n]$, band structure $\epsilon_i(\mathbf k)$, density of states,
+Hellmann-Feynman forces and structural relaxation, effective mass tensor, real-space
+charge density $n(\mathbf r)$, phonon dispersion/DOS via DFPT, and a `run_tasks()`
+escape hatch to any other standard Elk task -- all through the same `Structure`/
+`Calculation` object model as the capabilities above (see notebooks 01-03).
 
 # EXAMPLES #
-Full worked notebooks (formulas + code + real Elk output) are in [`notebooks/`](notebooks); short examples below.
+Full worked notebooks (formulas + code + real Elk output) are in [`notebooks/`](notebooks); short examples below, in the same order as FUNCTIONALITIES.
 
-## Band structure and density of states of bulk silicon ##
+## Per-species spin-orbit coupling scaling ##
 ```python
 from elkpy.structure import Structure
 
-avec = [(5.13, 5.13, 0.00), (5.13, 0.00, 5.13), (0.00, 5.13, 5.13)]
-species = {"Si": [(0.0, 0.0, 0.0), (0.25, 0.25, 0.25)]}
-calc = Structure(avec, species).get_calculation("run/si", xc="PW", ngridk=(2, 2, 2))
-(k, e) = calc.get_bands(kpath="GXWLGK")   # epsilon_i(k), Bloch's theorem
+avec = [(10.0, 0.0, 0.0), (0.0, 10.0, 0.0), (0.0, 0.0, 10.0)]
+species = {"Bi": [(0.0, 0.0, 0.0)], "Si": [(0.5, 0.5, 0.5)]}
+calc = Structure(avec, species).get_calculation(
+    "run/bisi", xc="PW", spinorb=True, ngridk=(1, 1, 1),
+    soc_scale={"Bi": 0.0},   # scale only Bi's spin-orbit term; Si unaffected
+)
+energy = calc.get_energy()
 ```
-![Alt text](images/si_bands.png?raw=true "Band structure of bulk silicon")
-![Alt text](images/si_dos.png?raw=true "Density of states of bulk silicon")
-
-## Real-space charge density ##
-```python
-points, density = calc.get_density(grid=(24, 24, 24))   # n(r) = sum_i^occ |psi_i(r)|^2
-```
-![Alt text](images/si_density.png?raw=true "Charge density slice of bulk silicon")
 
 ## K/K' valley Berry curvature of monolayer h-BN ##
 Broken B/N sublattice inversion symmetry makes the K and $K'=-K$ valleys physically
@@ -88,19 +98,6 @@ omega_K = hbn.get_berry_curvature_path([(1/3, 1/3, 0)], 1, 4, dk=0.01)[0]["curva
 ```
 ![Alt text](images/hbn_berry_curvature.png?raw=true "Berry curvature of monolayer h-BN along Gamma-K-M-Gamma")
 
-## Per-species spin-orbit coupling scaling ##
-```python
-from elkpy.structure import Structure
-
-avec = [(10.0, 0.0, 0.0), (0.0, 10.0, 0.0), (0.0, 0.0, 10.0)]
-species = {"Bi": [(0.0, 0.0, 0.0)], "Si": [(0.5, 0.5, 0.5)]}
-calc = Structure(avec, species).get_calculation(
-    "run/bisi", xc="PW", spinorb=True, ngridk=(1, 1, 1),
-    soc_scale={"Bi": 0.0},   # scale only Bi's spin-orbit term; Si unaffected
-)
-e = calc.get_energy()
-```
-
 ## Eigenstates and wavefunction overlaps at arbitrary k-points ##
 ```python
 with calc.eigenstate_session() as session:              # one warm Elk process
@@ -108,20 +105,37 @@ with calc.eigenstate_session() as session:              # one warm Elk process
     m = session.overlap((0, 0, 0), (0.1, 0, 0), ist0=1, ist1=4)  # <psi_a(k_a)|psi_b(k_b)>
 ```
 
+## Also: Elk's standard DFT workflow (band structure, DOS, charge density) ##
+```python
+from elkpy.structure import Structure
+
+avec = [(5.13, 5.13, 0.00), (5.13, 0.00, 5.13), (0.00, 5.13, 5.13)]
+species = {"Si": [(0.0, 0.0, 0.0), (0.25, 0.25, 0.25)]}
+calc = Structure(avec, species).get_calculation("run/si", xc="PW", ngridk=(2, 2, 2))
+
+(k, e) = calc.get_bands(kpath="GXWLGK")                # epsilon_i(k), Bloch's theorem
+points, density = calc.get_density(grid=(24, 24, 24))  # n(r) = sum_i^occ |psi_i(r)|^2
+```
+![Alt text](images/si_bands.png?raw=true "Band structure of bulk silicon")
+![Alt text](images/si_dos.png?raw=true "Density of states of bulk silicon")
+![Alt text](images/si_density.png?raw=true "Charge density slice of bulk silicon")
+
 # Notebooks #
 Six notebooks under [`notebooks/`](notebooks), one per feature area above, each
 executed end-to-end against a real compiled Elk binary and checked in with its actual
 output (the DFPT phonon notebook is the exception -- left unexecuted with a note,
-since a single call takes ~11-13 minutes):
+since a single call takes ~11-13 minutes). Listed new-physics-first, matching
+FUNCTIONALITIES/EXAMPLES above; if you're new to elkpy, `01_getting_started.ipynb`
+is the place to actually start:
 
-| Notebook | Feature |
-| --- | --- |
-| [`01_getting_started.ipynb`](notebooks/01_getting_started.ipynb) | Ground state, band structure, density of states |
-| [`02_relaxation_forces_and_properties.ipynb`](notebooks/02_relaxation_forces_and_properties.ipynb) | Forces, relaxation, effective mass, density, `run_tasks()` |
-| [`03_phonon_dispersion_and_dos.ipynb`](notebooks/03_phonon_dispersion_and_dos.ipynb) | Phonon dispersion/DOS via DFPT |
-| [`04_per_species_soc_scaling.ipynb`](notebooks/04_per_species_soc_scaling.ipynb) | Per-species spin-orbit coupling scaling |
-| [`05_berry_curvature.ipynb`](notebooks/05_berry_curvature.ipynb) | Berry curvature/Chern number, K/K' valleys of monolayer h-BN |
-| [`06_eigenstate_session.ipynb`](notebooks/06_eigenstate_session.ipynb) | Eigenstates and wavefunction overlaps |
+| Notebook | Feature | Beyond Elk? |
+| --- | --- | --- |
+| [`04_per_species_soc_scaling.ipynb`](notebooks/04_per_species_soc_scaling.ipynb) | Per-species spin-orbit coupling scaling | yes |
+| [`05_berry_curvature.ipynb`](notebooks/05_berry_curvature.ipynb) | Berry curvature/Chern number, K/K' valleys of monolayer h-BN | yes |
+| [`06_eigenstate_session.ipynb`](notebooks/06_eigenstate_session.ipynb) | Eigenstates and wavefunction overlaps | yes |
+| [`01_getting_started.ipynb`](notebooks/01_getting_started.ipynb) | Ground state, band structure, density of states | -- |
+| [`02_relaxation_forces_and_properties.ipynb`](notebooks/02_relaxation_forces_and_properties.ipynb) | Forces, relaxation, effective mass, density, `run_tasks()` | -- |
+| [`03_phonon_dispersion_and_dos.ipynb`](notebooks/03_phonon_dispersion_and_dos.ipynb) | Phonon dispersion/DOS via DFPT | -- |
 
 New notebooks should be added here alongside any new physics capability.
 
