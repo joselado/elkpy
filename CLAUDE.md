@@ -174,6 +174,48 @@ also include a "how to use in code" part showing the actual elkpy call(s) (e.g. 
 relevant `get_*()`) that exercise the formalism, so the physics and the API surface stay tied together.
 Keep both in sync with the code in the same change — don't defer either to a follow-up.
 
+## README and notebook style
+
+`README.md` and `notebooks/` follow [`pyqula`](https://github.com/joselado/pyqula)'s style
+(the same physics-code-lineage project this one borrows its `Structure`/`Calculation`
+object-model naming from) — physics-first, not an API/engineering writeup:
+
+- **README**: pyqula's `SUMMARY`/`INSTALLATION`/`FUNCTIONALITIES`/`EXAMPLES` section
+  structure (all-caps `#`-level headers). `FUNCTIONALITIES` is a short bullet list per
+  category, each bullet a physics statement with its defining formula where one is
+  illuminating — not a paragraph explaining how it's implemented (patch series, Fortran
+  file names, caching, subprocess architecture; that belongs in `docs/design.md`, not
+  the README). List elkpy's own physics — the capabilities genuinely beyond stock Elk
+  (currently: per-species spin-orbit scaling, Berry curvature/Chern numbers, arbitrary-k
+  eigenstates/overlaps) — before the routine wrapping of Elk's standard DFT workflow
+  (energy/bands/DOS/forces/relaxation/phonons/...), which gets one condensed "also
+  wraps" mention, not equal billing. `EXAMPLES` pairs a short code snippet with a real
+  PNG generated from an executed notebook cell (`images/`, extracted via
+  `nbformat`+`base64`, same pattern as pyqula's own `images/*.png` gallery) — never a
+  hand-drawn or synthetic figure. No "Project layout"/directory-tour section — that
+  reads as internal engineering documentation, not user-facing README material.
+- **Notebooks** (`notebooks/`, one per feature area, table linked from the README):
+  pyqula's `jupyter-notebooks/*/main.ipynb` rhythm — a one-line "This notebook shows
+  how to compute X" title cell, minimal imports, then repeating
+  `[markdown: formula + one clause defining symbols] → [code: 2-6 terse lines, one #
+  comment per line] → [plot]`. Cut engineering context rather than compress it into
+  shorter prose; where a mechanism genuinely matters to a result (e.g. a value that's
+  silently wrong if you get it from the wrong place), it becomes a `#` comment on the
+  line it affects, not a markdown paragraph. Every notebook runs against a real
+  compiled Elk binary and is checked in with its actual output cells — the one
+  exception is DFPT phonons, left unexecuted with a note on why (~11-13 min/call) and
+  the command to run it yourself. Add a new notebook (and a README table row) alongside
+  any new physics capability, same trigger as the `docs/physics.tex` writeup rule above.
+- **LaTeX gotchas hit in practice**: matplotlib's mathtext needs braced arguments
+  (`\mathbf{r}`, not `\mathbf r` — the latter raises `ParseFatalException` at render
+  time, not at notebook-generation time, so it only surfaces when a cell actually
+  executes); keep every inline math span's `$...$` balanced without splitting a token
+  across delimiters (`$K'=-K$`, not `K$'=-$K`, which opens/closes math mid-token and
+  renders garbled on both GitHub and in Jupyter); don't cram two separate relations
+  into one display equation ending in a trailing comma that runs into unrelated prose
+  on the next line — end a display equation cleanly and give the second relation its
+  own sentence.
+
 ## Core constraint: isolate changes to vendored Elk source, don't avoid Fortran
 
 Elk's own Fortran source will be vendored into this repository (not treated as an installed system
