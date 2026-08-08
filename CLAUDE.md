@@ -24,7 +24,8 @@ adds a `socscfsp(maxspecies)` array (`modmain.f90`) and an `elkpy_socscale` inpu
 overriding `socscf` per species inside `gensocfr.f90`'s existing per-atom loop — the smallest possible
 hook, verified against a real compiled binary to reproduce the global-`socscf` result exactly for a
 single-species cell and to scale independently per species in a two-species cell
-(`tests/test_calculation_soc.py`).
+(`tests/test_calculation_soc.py`). Physics writeup (Koelling-Harmon SOC term, why a global scale is
+the wrong shape for multi-species cells): `docs/design.md` §12 and `docs/soc_scaling.tex`.
 
 ## Architecture
 
@@ -75,6 +76,18 @@ not routine wrapping of an existing Elk task), checking arXiv for the relevant m
 encouraged where it fits the task, to ground the implementation in the actual published formalism
 (e.g. matching sign/normalization conventions, confirming which approximation a term corresponds
 to) rather than guessing from the code alone.
+
+Whenever a new formalism is added or an existing one is modified (new physics, a changed formula, a
+different numerical scheme — not routine wrapping of an existing Elk task), update the documentation
+describing it in both forms: the Markdown docs (`docs/design.md`/`docs/roadmap.md` or wherever the
+capability is described) and the corresponding LaTeX writeup (formalism/derivation, kept alongside the
+Markdown docs, e.g. under `docs/`). Both must be physics-focused, not just an API description: state
+the relevant formula(e), define each symbol, and explain the physical meaning/approximation being made
+(what it captures, what it neglects, how it relates to the underlying published method) — not merely
+"this function computes X". Each writeup must also include a "how to use in code" part showing the
+actual elkpy call(s) (e.g. `Calculation(...)`, the relevant `get_*()`) that exercise the formalism, so
+the physics and the API surface stay tied together. Keep both in sync with the code in the same change
+— don't defer either to a follow-up.
 
 ## Core constraint: isolate changes to vendored Elk source, don't avoid Fortran
 

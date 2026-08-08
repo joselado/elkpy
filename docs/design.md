@@ -288,3 +288,58 @@ runs.
   `Structure`/parser level, not inheritance).
 - A scheduler-backed launcher (SLURM/PBS) — design the seam now (§6), implement
   later.
+
+## 12. Per-species spin-orbit coupling scaling
+
+The first real entry in the §8 patch series. Elk's second-variational scheme adds a
+scalar-relativistic spin-orbit term to the Hamiltonian inside each muffin-tin,
+
+$$\hat H_{\rm soc}(r) = f_{\rm soc}(r)\,\hat{\mathbf L}\cdot\boldsymbol\sigma, \qquad
+f_{\rm soc}(r) = \frac{1}{(2Mc)^2}\,\frac1r\,\frac{\partial V_s}{\partial r}, \qquad
+M(r) = 1 + \frac{1}{2c^2}\bigl(E - V_s(r)\bigr)\Big|_{E=0},$$
+
+with $V_s$ the spherical part of the Kohn-Sham potential and $c$ the speed of light
+(`solsc` in Elk's atomic units) — the Koelling-Harmon (1977) approximation to the
+spin-orbit term of the Dirac equation, computed per-atom in `gensocfr.f90` (see the
+docstring there, verified against `vendor/elk/src/gensocfr.f90`). Elk exposes a single
+global multiplicative knob on top of this, `socscf` (default 1.0): the coefficient is
+literally `cso = y00*socscf/(4*solsc**2)`, the same scalar for every atom in the cell.
+The manual is explicit that this knob is phenomenological, not first-principles — it
+exists "to enhance the effect of spin-orbit coupling in order to accurately determine
+the magnetic anisotropy energy (MAE)", i.e. to compensate for whatever the
+scalar-relativistic/second-variational treatment gets wrong relative to a full
+four-component Dirac solve or experiment, on a per-material, fitted basis.
+
+That compensation is not uniform across species. $f_{\rm soc}(r)$ is dominated by the
+steep near-nuclear gradient of $V_s$, and the resulting SOC strength grows strongly
+with atomic number (heuristically $\sim Z^4$ near the nucleus, the same scaling behind
+atomic fine-structure splitting) — so a global `socscf` fitted to correct a heavy
+species's MAE (e.g. a 5d transition metal) gets silently applied to every light species
+in the same cell (e.g. O, N ligands) where no such correction was intended or
+justified. `soc_scale={"Fe": 1.5}` generalizes `socscf` from one number to a per-species
+override, so the fitted correction can be scoped to the species it was actually fitted
+for.
+
+The Fortran side changes nothing about $f_{\rm soc}(r)$ itself — `gensocfr.f90` already
+loops per-atom (`do ias=1,natmtot`) to evaluate it, so
+`patches/0001-per-species-soc-scale.patch` only moves the *scale* lookup inside that
+existing loop: a new `socscfsp(maxspecies)` array (`modmain.f90`, sentinel `< 0` meaning
+"not overridden, fall back to `socscf`") populated from a new `elkpy_socscale` input
+block (`readinput.f90`), read per-species inside the loop that already computes
+`cso`/`dvr` for that atom. Verified against a real compiled binary: reproduces the
+global-`socscf` result exactly when a single species is present, and scales
+independently per species in a two-species cell (`tests/test_calculation_soc.py`).
+
+**How to use in code**:
+
+```python
+from elkpy import Calculation
+
+calc = Calculation(structure, spinpol=True, spinorb=True, soc_scale={"Fe": 1.5})
+e = calc.get_energy()
+```
+
+`soc_scale` requires `spinorb=True` (raises otherwise — a scale on a disabled term has
+no effect), keys must be species present in `structure`, and values must be `>= 0`.
+Species omitted from `soc_scale` keep Elk's default global `socscf` (1.0 unless
+overridden separately via `extra_blocks`).
