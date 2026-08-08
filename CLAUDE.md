@@ -25,7 +25,7 @@ overriding `socscf` per species inside `gensocfr.f90`'s existing per-atom loop �
 hook, verified against a real compiled binary to reproduce the global-`socscf` result exactly for a
 single-species cell and to scale independently per species in a two-species cell
 (`tests/test_calculation_soc.py`). Physics writeup (Koelling-Harmon SOC term, why a global scale is
-the wrong shape for multi-species cells): `docs/design.md` §12 and `docs/soc_scaling.tex`.
+the wrong shape for multi-species cells): `docs/design.md` §12 and `docs/physics.tex` (Part I).
 
 Also implemented, as the second entry in the Fortran patch series:
 `Calculation.get_berry_curvature(ist0, ist1, directions=(1, 2))` — Berry curvature and Chern number via
@@ -73,7 +73,7 @@ and a single band's curvature can diverge near a point where it's degenerate wit
 occupied* band, not just the first unoccupied one, even when the requested window's own outer boundary
 stays gapped -- the fix is windowing the full degenerate group together, not picking a different single
 band. Physics writeup (both modes, the FHS link-variable/plaquette-flux construction, and exactly what
-is/isn't verified): `docs/design.md` §13 and `docs/berry_curvature.tex`.
+is/isn't verified): `docs/design.md` §13 and `docs/physics.tex` (Part II).
 
 ## Architecture
 
@@ -131,14 +131,14 @@ to) rather than guessing from the code alone.
 Whenever a new formalism is added or an existing one is modified (new physics, a changed formula, a
 different numerical scheme — not routine wrapping of an existing Elk task), update the documentation
 describing it in both forms: the Markdown docs (`docs/design.md`/`docs/roadmap.md` or wherever the
-capability is described) and the corresponding LaTeX writeup (formalism/derivation, kept alongside the
-Markdown docs, e.g. under `docs/`). Both must be physics-focused, not just an API description: state
-the relevant formula(e), define each symbol, and explain the physical meaning/approximation being made
-(what it captures, what it neglects, how it relates to the underlying published method) — not merely
-"this function computes X". Each writeup must also include a "how to use in code" part showing the
-actual elkpy call(s) (e.g. `Calculation(...)`, the relevant `get_*()`) that exercise the formalism, so
-the physics and the API surface stay tied together. Keep both in sync with the code in the same change
-— don't defer either to a follow-up.
+capability is described) and the corresponding LaTeX writeup, added as a new `\part{}` (with a `\label`)
+inside the single shared file `docs/physics.tex` — not a new `.tex` file per addition. Both must be
+physics-focused, not just an API description: state the relevant formula(e), define each symbol, and
+explain the physical meaning/approximation being made (what it captures, what it neglects, how it
+relates to the underlying published method) — not merely "this function computes X". Each writeup must
+also include a "how to use in code" part showing the actual elkpy call(s) (e.g. `Calculation(...)`, the
+relevant `get_*()`) that exercise the formalism, so the physics and the API surface stay tied together.
+Keep both in sync with the code in the same change — don't defer either to a follow-up.
 
 ## Core constraint: isolate changes to vendored Elk source, don't avoid Fortran
 

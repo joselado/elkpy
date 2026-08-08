@@ -120,7 +120,7 @@ def test_flux_sign_matches_fhs_eq8_numerator_role():
     in the M(a,b) = <psi_a(k)|psi_b(k+e)> convention -- it does not by
     itself verify that the Fortran side (elkpy_berry.f90) produces matrices
     in that convention; that rests on the zgemv derivation documented in
-    docs/berry_curvature.tex section 3."""
+    docs/physics.tex Part II, section 7 (elkpy's implementation)."""
     ngridk = (2, 2, 1)
     directions = (1, 2)
     theta0 = 0.7
@@ -206,7 +206,7 @@ def test_path_flux_matches_product_of_link_variables():
     formula (eq. 8, two numerator/two denominator terms), the path formula
     is a plain product of all four edge link variables around the loop, so
     every edge enters with the same (positive) sign; verified independently
-    by direct derivation against eq. 8 in docs/berry_curvature.tex."""
+    by direct derivation against eq. 8 in docs/physics.tex Part II."""
     theta0 = 0.6
     identity = np.array([[1.0 + 0j]])
     phased = np.array([[np.exp(1j * theta0)]])

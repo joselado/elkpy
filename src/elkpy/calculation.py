@@ -520,7 +520,7 @@ class Calculation:
         """Berry curvature via the Wilson-loop / Fukui-Hatsugai-Suzuki (FHS)
         method (task 9000, elkpy Fortran extension --
         patches/0002-berry-curvature-wilson-loop.patch, src/elkpy_berry.f90;
-        not upstream Elk). See docs/design.md #13 / docs/berry_curvature.tex
+        not upstream Elk). See docs/design.md #13 / docs/physics.tex Part II
         for the physics (link variables, plaquette flux, admissibility) this
         implements, and cond-mat/0503172 for the original method.
 

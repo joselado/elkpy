@@ -106,7 +106,7 @@ speculative infrastructure for this ahead of a real use case.
 
 **One such direction landed for real**: `get_berry_curvature()` (Wilson-loop /
 Fukui-Hatsugai-Suzuki Berry curvature, task 9000) — see `docs/design.md` §13 /
-`docs/berry_curvature.tex`. Task 550's own overlap machinery
+`docs/physics.tex` (Part II). Task 550's own overlap machinery
 (`genwfsvp`/`genolpq`) turned out to be reusable, but task 550 itself wasn't
 (its neighbour-shell search calls the external Wannier90 library, only a stub
 in this build) — needed a small new Fortran task

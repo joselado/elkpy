@@ -354,7 +354,7 @@ arXiv:cond-mat/0503172) — the same lattice-gauge-theory construction used for 
 curvature in tight-binding codes (e.g. `pyqula`'s `berry_curvature`, cross-checked for
 convention per this project's development-practices policy). Full physics writeup
 (Berry connection/curvature/Chern number, the FHS link-variable/plaquette-flux
-construction, admissibility): `docs/berry_curvature.tex`.
+construction, admissibility): `docs/physics.tex` (Part II).
 
 For a mesh point $k_\ell$ and mesh directions $\hat\mu=1,2$, FHS build a gauge-invariant
 plaquette flux entirely from wavefunction overlaps — never a bare derivative of a

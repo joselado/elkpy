@@ -5,7 +5,7 @@ mesh-neighbour wavefunction overlap matrices it contains.
 FHS: T. Fukui, Y. Hatsugai, H. Suzuki, "Chern Numbers in Discretized
 Brillouin Zone: Efficient Method of Computing (Spin) Hall Conductances",
 J. Phys. Soc. Jpn. 74, 1674 (2005) (arXiv:cond-mat/0503172). See
-docs/design.md #13 / docs/berry_curvature.tex for the physics writeup this
+docs/design.md #13 / docs/physics.tex Part II for the physics writeup this
 implements (link variables, plaquette field strength, admissibility).
 
 The Fortran side (src/elkpy_berry.f90) only exports raw overlap matrices
