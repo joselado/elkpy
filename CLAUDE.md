@@ -176,6 +176,13 @@ Keep both in sync with the code in the same change — don't defer either to a f
 
 ## README and notebook style
 
+Whenever the user gives style feedback on `README.md`/`notebooks/` (or documentation
+style generally) — a correction, a preference, a "make it more like X" — record it
+durably in this section (or add a new section here) as part of that same change, not
+just apply it to the current diff and let it lapse next time. This section is itself
+the product of that process (see git log) and is the standing reference to keep
+current, not a one-time writeup.
+
 `README.md` and `notebooks/` follow [`pyqula`](https://github.com/joselado/pyqula)'s style
 (the same physics-code-lineage project this one borrows its `Structure`/`Calculation`
 object-model naming from) — physics-first, not an API/engineering writeup:
