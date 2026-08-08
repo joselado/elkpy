@@ -41,6 +41,9 @@ TASKS = {
                               # high task number per docs/design.md #8
     "berry_curvature_path": 9001,  # elkpy extension: small Wilson loop at an arbitrary
                                     # list of k-points (pyqula-style), src/elkpy_berry.f90
+    "eigenstate_session": 9002,  # elkpy extension: interactive eigenstate/overlap query
+                                  # session (stdin/stdout loop), src/elkpy_eigenstates.f90 --
+                                  # patches/0003-eigenstate-session.patch
 }
 
 # output filenames, per the `open(unit, file=...)` calls in the cited source

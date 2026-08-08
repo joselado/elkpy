@@ -15,6 +15,7 @@ from . import config, spec
 from .inputfile import InputFile
 from .launcher import LocalLauncher
 from .parsers import band, berry, dos, effmass, forces, geometry, info, totenergy, volumetric
+from .session import EigenstateSession
 
 MANIFEST_NAME = ".elkpy_manifest.json"
 
@@ -644,6 +645,71 @@ class Calculation:
             for point, distance in zip(result, distances):
                 point["distance"] = float(distance)
         return result
+
+    def eigenstate_session(self, label="eigenstates"):
+        """Start an interactive eigenstate/overlap query session (task
+        9002, elkpy Fortran extension -- patches/0003-eigenstate-session.patch,
+        src/elkpy_eigenstates.f90; not upstream Elk). See docs/design.md
+        #14 for the physics (why evecfv isn't a valid raw-overlap basis but
+        evecsv is, only within one diagonalisation; why cross-k overlaps
+        need the genwfsvp/genolpq route) and design (why this is a
+        persistent worker process rather than an f2py in-memory bridge)
+        this implements.
+
+        Returns an EigenstateSession kept alive across many queries,
+        avoiding Elk's ground-state-dependent setup cost (readstate,
+        genvsig, linengy, genapwlofr, gensocfr) being repeated per query --
+        see EigenstateSession's docstring. Use as a context manager:
+
+            with calc.eigenstate_session() as session:
+                e = session.get_eigenstates((0, 0, 0))
+                m = session.overlap((0, 0, 0), (0.1, 0, 0), ist0=1, ist1=4)
+
+        For a single one-off query, get_eigenstates()/get_overlap() are
+        thinner wrappers around a short-lived session.
+        """
+        self.ensure_ground_state()
+        subdir = self.workdir / label
+        shutil.rmtree(subdir, ignore_errors=True)
+        subdir.mkdir(parents=True)
+        shutil.copyfile(
+            self.workdir / spec.OUTPUT_FILES["state"], subdir / spec.OUTPUT_FILES["state"]
+        )
+        f = InputFile()
+        f.add_block(
+            "tasks", [spec.TASKS["ground_state_resume"], spec.TASKS["eigenstate_session"]]
+        )
+        self._add_base_blocks(f)
+        f.write(subdir / "elk.in")
+        proc = self.launcher.start_session(subdir)
+        return EigenstateSession(proc, subdir)
+
+    def get_eigenstates(self, k):
+        """Second-variational energies (Hartree) and eigenvectors (evecsv)
+        at a single k-point (fractional lattice coordinates), via fresh
+        on-the-fly diagonalisation. A one-off convenience wrapper around
+        eigenstate_session() -- opens and closes its own session, so prefer
+        calling eigenstate_session() directly and reusing it for
+        repeated/adaptive queries (each call here re-pays the
+        ground-state-dependent setup cost eigenstate_session() is designed
+        to amortize).
+
+        Returns an Eigenstates(k, energies, evecsv) namedtuple -- see
+        EigenstateSession.get_eigenstates().
+        """
+        with self.eigenstate_session() as session:
+            return session.get_eigenstates(k)
+
+    def get_overlap(self, k_a, k_b, ist0, ist1):
+        """<psi_a(k_a)|psi_b(k_b)> for the contiguous band window
+        [ist0, ist1]. A one-off convenience wrapper around
+        eigenstate_session() -- see get_eigenstates()'s docstring about
+        preferring eigenstate_session() directly for repeated queries, and
+        EigenstateSession.overlap() for what this computes and why it's the
+        only valid way to compare eigenstates across k-points.
+        """
+        with self.eigenstate_session() as session:
+            return session.overlap(k_a, k_b, ist0, ist1)
 
     def run_tasks(self, tasks, blocks=None, resume=True, label=None):
         """Escape hatch for any Elk task not covered by a named get_*

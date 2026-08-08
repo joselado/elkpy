@@ -75,6 +75,32 @@ stays gapped -- the fix is windowing the full degenerate group together, not pic
 band. Physics writeup (both modes, the FHS link-variable/plaquette-flux construction, and exactly what
 is/isn't verified): `docs/design.md` §13 and `docs/physics.tex` (Part II).
 
+Also implemented, as the third entry in the Fortran patch series:
+`Calculation.eigenstate_session()` (task 9002, `patches/0003-eigenstate-session.patch`,
+`src/elkpy_eigenstates.f90`) — an interactive, long-lived `elk` subprocess for fast repeated
+eigenstate/overlap queries, plus one-off convenience wrappers `get_eigenstates(k)` and
+`get_overlap(k_a, k_b, ist0, ist1)`. Initially proposed as an f2py in-memory bridge; rejected
+because the dominant per-query cost is Elk's ground-state-dependent setup, not process-spawn
+overhead, and making an f2py bridge robust would mean converting Elk's pervasive bare `stop`
+calls into catchable errors across most of `vendor/elk/src/` — not achievable additively. The
+persistent-subprocess design gets the same "stay warm" benefit through a stdin/stdout query
+loop instead, with no new build machinery. `EIGENSTATES`/`OVERLAP` queries reuse
+`elkpy_wfcorner` (task 9001's fresh on-the-fly diagonalisation) and a new
+`elkpy_diagonalize` (the diagonalisation-only half of the same code, kept separate rather
+than extending `elkpy_wfcorner` with optional arguments, since a Fortran `optional` dummy
+argument needs an explicit interface at every call site, which task 9001's existing call
+site doesn't have). Verified against a real compiled binary: `evecsv` is unitary at an
+arbitrary k-point; `overlap(k, k, ...)` is the identity matrix to the ~1e-3 tolerance set by
+`genwfsvp`/`genolpq`'s own real-space truncation error (not a bug — observed at the same
+order for a single non-degenerate band too); a session survives many repeated queries; and
+`overlap(Γ, Γ+e₁, ...)` matches task 9000's mesh-exported overlap for the same pair, checked
+for one non-degenerate band only, since Si's bands 2-4 are degenerate at Γ and two
+independent diagonalisations are free to (and empirically do) pick different bases within
+that degenerate subspace (`tests/test_calculation_eigenstates.py`). Physics writeup (the
+LAPW generalized eigenproblem, why `evecfv` isn't a valid raw-overlap basis but `evecsv` is
+— only within one diagonalisation — and the cross-k overlap integral): `docs/design.md` §14
+and `docs/physics.tex` (Part III).
+
 ## Architecture
 
 - `src/elkpy/structure.py` — `Structure`: lattice vectors (`avec`, Bohr) + species, each atom either a
@@ -101,16 +127,24 @@ is/isn't verified): `docs/design.md` §13 and `docs/physics.tex` (Part II).
   should mean editing this one file.
 - `src/elkpy/inputfile.py` — generic `elk.in` block writer (block name + value lines) and `read_blocks()`
   reader (used to parse `GEOMETRY_OPT.OUT`, which Elk writes in the same block syntax).
-- `src/elkpy/launcher.py` — `LocalLauncher`: blocking local subprocess execution; refuses `nprocs > 1`
-  since `build-config/make.inc` builds serial (`mpi_stub.f90`) — that combination would silently launch
-  N racing copies into one directory, not parallelize.
+- `src/elkpy/launcher.py` — `LocalLauncher`: `run()` is blocking local subprocess execution, used by
+  every task except the eigenstate session; `start_session()` instead returns a non-blocking `Popen`
+  with stdin/stdout pipes, for `Calculation.eigenstate_session()` (task 9002) to drive interactively.
+  Refuses `nprocs > 1` since `build-config/make.inc` builds serial (`mpi_stub.f90`) — that combination
+  would silently launch N racing copies into one directory, not parallelize.
+- `src/elkpy/session.py` — `EigenstateSession`: owns the interactive task-9002 subprocess started by
+  `eigenstate_session()`, sending `EIGENSTATES`/`OVERLAP` queries over stdin and parsing responses off
+  stdout until closed (context manager) or told to `QUIT`. See `docs/design.md` §14 for why this is a
+  persistent worker process rather than an f2py in-memory bridge.
 - `src/elkpy/parsers/` — one small module per output file family (`info`, `totenergy`, `band` — reused
   for phonon dispersion, since `PHDISP.OUT` shares `BAND.OUT`'s exact layout — `dos`, reused for phonon
   DOS, `forces`, `geometry`, `effmass`, `volumetric`), each verified against real Elk output, not
   assumed from the manual. `berry` is the exception to "just a parser": it also does all of the
   Wilson-loop/Chern-number arithmetic in Python (`compute_berry_curvature()`), deliberately kept out of
   Fortran so it's unit-testable against synthetic overlap matrices (`tests/test_berry_gauge_invariance.py`)
-  without an Elk run.
+  without an Elk run. `eigenstates` parses `EigenstateSession`'s stdout token stream (not a file) into
+  energies/`evecsv`/overlap arrays, independently unit-testable the same way
+  (`tests/test_parsers_eigenstates.py`).
 - `src/elkpy/config.py` — locates the built `elk` binary (`build/elk/src/elk` by default, override via
   `ELKPY_ELK_BIN`) and the species directory (`vendor/elk/species/` by default).
 

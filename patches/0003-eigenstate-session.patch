@@ -1,0 +1,283 @@
+diff -ruN a/src/elk.f90 b/src/elk.f90
+--- a/src/elk.f90	2026-08-08 19:27:29.374106688 +0300
++++ b/src/elk.f90	2026-08-08 19:27:46.669120491 +0300
+@@ -288,6 +288,9 @@
+ ! elkpy: Berry curvature at an arbitrary list of k-points (small Wilson
+ ! elkpy: loop per point, pyqula-style)
+     call elkpy_berrycurv_path
++  case(9002)
++! elkpy: interactive eigenstate/overlap session (stdin/stdout query loop)
++    call elkpy_eigenstate_session
+   case default
+     write(*,*)
+     write(*,'("Error(elk): task not defined : ",I0)') task
+diff -ruN a/src/elkpy_eigenstates.f90 b/src/elkpy_eigenstates.f90
+--- a/src/elkpy_eigenstates.f90	1970-01-01 02:00:00.000000000 +0200
++++ b/src/elkpy_eigenstates.f90	2026-08-08 19:28:41.767612379 +0300
+@@ -0,0 +1,254 @@
++
++! elkpy extension (not upstream Elk). This file is distributed under the
++! terms of the GNU General Public License, consistent with the rest of Elk.
++
++!BOP
++! !ROUTINE: elkpy_diagonalize
++! !INTERFACE:
++subroutine elkpy_diagonalize(vpl,evalsv_out,evecsv_out)
++! !USES:
++use modmain
++! !DESCRIPTION:
++!   Second-variational eigenvalues and eigenvectors at an arbitrary
++!   $k$-point {\tt vpl}, via fresh on-the-fly diagonalisation of the
++!   converged Kohn-Sham Hamiltonian ({\tt eveqnfv}/{\tt eveqnsv}) rather
++!   than reading a previously stored eigenvector ({\tt getevecfv}/
++!   {\tt getevecsv}). This is exactly the diagonalisation half of
++!   {\tt elkpy\_wfcorner} ({\tt elkpy\_berry.f90}, patch 0002) -- kept as a
++!   separate, smaller subroutine here (rather than extending
++!   {\tt elkpy\_wfcorner} with extra output arguments) so that
++!   {\tt elkpy\_eigenstate\_session}'s {\tt EIGENSTATES} query does not need
++!   to also expand a (then-discarded) real-space wavefunction, and so that
++!   {\tt elkpy\_wfcorner}'s existing call sites need no changes: a Fortran
++!   {\tt optional} dummy argument requires an explicit interface at every
++!   call site, which {\tt elkpy\_berrycurv\_path}'s existing implicit-interface
++!   call does not have.
++!
++! !REVISION HISTORY:
++!   Created 2026 (elkpy)
++!EOP
++!BOC
++implicit none
++! arguments
++real(8), intent(in) :: vpl(3)
++real(8), intent(out) :: evalsv_out(nstsv)
++complex(8), intent(out) :: evecsv_out(nstsv,nstsv)
++! local variables
++integer ispn,nmatp
++real(8) vl(3),vc(3)
++! automatic arrays
++integer ngp(nspnfv),igpig(ngkmax,nspnfv)
++real(8) vgpl(3,ngkmax,nspnfv),vgpc(3,ngkmax),gpc(ngkmax)
++real(8) evalfv(nstfv,nspnfv)
++! allocatable arrays
++complex(8), allocatable :: sfacgp(:,:),apwalm(:,:,:,:,:)
++complex(8), allocatable :: evecfv(:,:,:)
++if (spinsprl) then
++  write(*,*)
++  write(*,'("Error(elkpy_diagonalize): spin-spirals not supported by the &
++   &elkpy eigenstate session task")')
++  write(*,*)
++  stop
++end if
++allocate(sfacgp(ngkmax,natmtot))
++allocate(apwalm(ngkmax,apwordmax,lmmaxapw,natmtot,nspnfv))
++allocate(evecfv(nmatmax,nstfv,nspnfv))
++! loop over first-variational spins (nspnfv = 2 for spin-spirals only, which
++! are rejected above, so this is a single pass in practice -- same as
++! elkpy_wfcorner)
++do ispn=1,nspnfv
++  vl(1:3)=vpl(1:3)
++  vc(1:3)=bvec(1:3,1)*vpl(1)+bvec(1:3,2)*vpl(2)+bvec(1:3,3)*vpl(3)
++  call gengkvec(ngvc,ivg,vgc,vl,vc,gkmax,ngkmax,ngp(ispn),igpig(:,ispn), &
++   vgpl(:,:,ispn),vgpc,gpc)
++  call gensfacgp(ngp(ispn),vgpc,ngkmax,sfacgp)
++  call match(ngp(ispn),vgpc,gpc,sfacgp,apwalm(:,:,:,:,ispn))
++  nmatp=ngp(ispn)+nlotot
++  call eveqnfv(nmatp,ngp(ispn),igpig(:,ispn),vc,vgpc,apwalm(:,:,:,:,ispn), &
++   evalfv(:,ispn),evecfv(:,:,ispn))
++end do
++deallocate(sfacgp)
++call eveqnsv(ngp(1),igpig(:,1),vgpc,apwalm,evalfv,evecfv,evalsv_out,evecsv_out)
++deallocate(apwalm,evecfv)
++end subroutine
++!EOC
++
++!BOP
++! !ROUTINE: elkpy_eigenstate_session
++! !INTERFACE:
++subroutine elkpy_eigenstate_session
++! !USES:
++use modmain
++! !DESCRIPTION:
++!   Interactive eigenstate/overlap query session (task 9002, elkpy
++!   extension). Unlike every other elkpy task, this one takes no
++!   {\tt elk.in} configuration of its own: after the usual
++!   ground-state-resume setup (task 1, ahead of this task in the
++!   {\tt tasks} list) it prints a single sentinel line,
++!   {\tt ELKPY\_SESSION\_READY}, then loops reading one query per line from
++!   standard input until a {\tt QUIT} command (or end-of-file) is seen:
++!
++!   \begin{itemize}
++!   \item {\tt EIGENSTATES k1 k2 k3} -- all second-variational eigenvalues
++!    and eigenvectors ({\tt evecsv}, in the orthonormal spinor basis of that
++!    diagonalisation -- valid for dot-product-style comparisons only among
++!    columns of this one response, not against a different query's
++!    {\tt evecsv}, see docs/design.md \S14) at an arbitrary $k$-point, via
++!    {\tt elkpy\_diagonalize} (fresh on-the-fly diagonalisation, the same
++!    method {\tt elkpy\_wfcorner}, added by patch 0002, uses).
++!   \item {\tt OVERLAP k1a k2a k3a k1b k2b k3b ist0 ist1} -- the
++!    $\langle\psi_a(k_a)|\psi_b(k_b)\rangle$ overlap matrix for the
++!    contiguous band window $[ist0,ist1]$, via {\tt elkpy\_wfcorner} at both
++!    points plus {\tt genolpq} -- the same construction
++!    {\tt elkpy\_berrycurv\_path} (task 9001) already uses per Wilson-loop
++!    edge, generalised to an arbitrary pair of $k$-points instead of a small
++!    fixed loop.
++!   \end{itemize}
++!
++!   Kept alive across many queries rather than one query per subprocess (as
++!   every other elkpy task does) because the ground-state-dependent setup
++!   this task's prerequisite (task 1) performs is the dominant per-query
++!   cost for interactive/adaptive use -- docs/design.md \S14 discusses the
++!   alternatives considered, in particular why an f2py in-memory bridge was
++!   rejected in favour of this subprocess-based design.
++!
++!   Every response (including the initial {\tt ELKPY\_SESSION\_READY}) ends
++!   with an explicit {\tt flush(6)}: gfortran fully buffers standard output
++!   when it is not a tty, as is the case here (piped from Python) -- without
++!   an explicit flush the elkpy side would block forever waiting for output
++!   sitting in an unflushed buffer.
++!
++!   Malformed input or an invalid band window writes
++!   {\tt ELKPY\_SESSION\_ERROR <message>} and continues the loop -- this is
++!   new code, free to avoid Fortran's usual bare {\tt stop} on bad input. A
++!   query that reaches a {\tt stop} inside code this task reuses (e.g. a
++!   pathological/near-singular {\tt genolpq} call) still terminates the
++!   whole session, exactly as it already would for a one-shot task 9001
++!   query -- an accepted, documented limitation, not solved here.
++!
++! !REVISION HISTORY:
++!   Created 2026 (elkpy)
++!EOP
++!BOC
++implicit none
++! local variables
++integer ios,ist0,ist1,nst,a,b
++character(16) cmd
++character(1024) line
++real(8) vpl(3),vpla(3),vplb(3),vl(3),vc(3),q
++! automatic arrays
++integer, parameter :: idx1(1)=(/1/)
++real(8) evalsv_q(nstsv)
++complex(8) evecsv_q(nstsv,nstsv)
++real(8) jlqr(njcmax,nspecies)
++complex(8) ylmq(lmmaxo),sfacq(natmtot)
++integer ngp_c(nspnfv,2),igpig_c(ngkmax,nspnfv,2)
++! allocatable arrays
++integer, allocatable :: idx(:)
++complex(8), allocatable :: wfmt1(:,:,:,:),wfir1(:,:,:),wfgp1(:,:,:)
++complex(8), allocatable :: wfmt2(:,:,:,:),wfir2(:,:,:),wfgp2(:,:,:)
++complex(8), allocatable :: expqmt(:,:),oq(:,:),moverlap(:,:)
++if (spinsprl) then
++  write(*,*)
++  write(*,'("Error(elkpy_eigenstate_session): spin-spirals not supported by &
++   &the elkpy eigenstate session task")')
++  write(*,*)
++  stop
++end if
++write(*,'("ELKPY_SESSION_READY")')
++call flush(6)
++do
++  read(*,'(A)',iostat=ios) line
++  if (ios /= 0) exit
++  read(line,*,iostat=ios) cmd
++  if (ios /= 0) cycle
++  select case(trim(cmd))
++
++  case('QUIT')
++    exit
++
++  case('EIGENSTATES')
++    read(line,*,iostat=ios) cmd,vpl(1),vpl(2),vpl(3)
++    if (ios /= 0) then
++      write(*,'("ELKPY_SESSION_ERROR malformed EIGENSTATES command")')
++      call flush(6)
++      cycle
++    end if
++    call elkpy_diagonalize(vpl,evalsv_q,evecsv_q)
++    write(*,*) nstsv
++    do a=1,nstsv
++      write(*,*) evalsv_q(a)
++    end do
++    do b=1,nstsv
++      do a=1,nstsv
++        write(*,*) dble(evecsv_q(a,b)),aimag(evecsv_q(a,b))
++      end do
++    end do
++    write(*,'("ELKPY_SESSION_END")')
++    call flush(6)
++
++  case('OVERLAP')
++    read(line,*,iostat=ios) cmd,vpla(1),vpla(2),vpla(3),vplb(1),vplb(2), &
++     vplb(3),ist0,ist1
++    if (ios /= 0) then
++      write(*,'("ELKPY_SESSION_ERROR malformed OVERLAP command")')
++      call flush(6)
++      cycle
++    end if
++    if ((ist0 < 1).or.(ist1 > nstsv).or.(ist1 < ist0)) then
++      write(*,'("ELKPY_SESSION_ERROR invalid band window (ist0,ist1,nstsv) : ", &
++       &3I8)') ist0,ist1,nstsv
++      call flush(6)
++      cycle
++    end if
++    nst=ist1-ist0+1
++    allocate(idx(nst))
++    do a=1,nst
++      idx(a)=ist0+a-1
++    end do
++    allocate(wfmt1(npcmtmax,natmtot,nspinor,nst),wfir1(ngtc,nspinor,nst))
++    allocate(wfgp1(ngkmax,nspinor,nst))
++    allocate(wfmt2(npcmtmax,natmtot,nspinor,nst),wfir2(ngtc,nspinor,nst))
++    allocate(wfgp2(ngkmax,nspinor,nst))
++    call elkpy_wfcorner(vpla,nst,idx,wfmt1,wfir1,wfgp1,ngp_c(:,1),igpig_c(:,:,1))
++    call elkpy_wfcorner(vplb,nst,idx,wfmt2,wfir2,wfgp2,ngp_c(:,2),igpig_c(:,:,2))
++    allocate(expqmt(npcmtmax,natmtot),oq(nst,nst),moverlap(nst,nst))
++! q = k_b - k_a, same construction elkpy_berrycurv/elkpy_berrycurv_path use
++! for the exp(iq.r) muffin-tin phase factor
++    vl(1:3)=vplb(1:3)-vpla(1:3)
++    call r3mv(bvec,vl,vc)
++    q=sqrt(vc(1)**2+vc(2)**2+vc(3)**2)
++    call genjlgpr(1,q,jlqr)
++    call genylmv(.true.,lmaxo,vc,ylmq)
++    call gensfacgp(1,vc,1,sfacq)
++    call genexpmt(1,jlqr,ylmq,1,sfacq,expqmt)
++! overlap: oq(m,n) = <psi_m(k_b)|psi_n(k_a)> (genolpq's own convention, same
++! as elkpy_berrycurv/elkpy_berrycurv_path/writew90mmn.f90)
++    call genolpq(nst,expqmt,ngp_c(:,2),igpig_c(:,:,2),wfmt1,wfir1,wfmt2,wfgp2,oq)
++! store in the <k_a|k_b> convention: moverlap(a,b) = <psi_a(k_a)|psi_b(k_b)>
++!                                                   = conjg(oq(b,a))
++    do b=1,nst
++      do a=1,nst
++        moverlap(a,b)=conjg(oq(b,a))
++      end do
++    end do
++    write(*,*) nst
++    do b=1,nst
++      do a=1,nst
++        write(*,*) dble(moverlap(a,b)),aimag(moverlap(a,b))
++      end do
++    end do
++    write(*,'("ELKPY_SESSION_END")')
++    call flush(6)
++    deallocate(idx,wfmt1,wfir1,wfgp1,wfmt2,wfir2,wfgp2,expqmt,oq,moverlap)
++
++  case default
++    write(*,'("ELKPY_SESSION_ERROR unknown command: ",A)') trim(cmd)
++    call flush(6)
++
++  end select
++end do
++write(*,*)
++write(*,'("Info(elkpy_eigenstate_session): session ended")')
++end subroutine
++!EOC
+diff -ruN a/src/Makefile b/src/Makefile
+--- a/src/Makefile	2026-08-08 19:27:29.374586907 +0300
++++ b/src/Makefile	2026-08-08 19:27:49.660092897 +0300
+@@ -224,7 +224,7 @@
+ 
+ # elkpy extension (not upstream Elk): Wilson-loop / Fukui-Hatsugai-Suzuki
+ # Berry curvature (task 9000, see elkpy_berry.f90)
+-SRC_ELKPY = elkpy_berry.f90
++SRC_ELKPY = elkpy_berry.f90 elkpy_eigenstates.f90
+ 
+ SRC = $(SRC_modules) $(SRC_FFT) $(SRC_elk) $(SRC_main) $(SRC_LAPACK) \
+  $(SRC_phonon) $(SRC_XC) $(SRC_DFTU) $(SRC_RDMFT) $(SRC_GW) $(SRC_TDDFT) \

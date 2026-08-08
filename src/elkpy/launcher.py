@@ -56,3 +56,36 @@ class LocalLauncher:
                 f"elk exited with code {result.returncode} in {workdir}; see {log_path}"
             )
         return log_path
+
+    def start_session(self, workdir):
+        """Start elk in `workdir` as a non-blocking, interactive subprocess
+        (stdin/stdout pipes), for tasks that stay alive across many queries
+        instead of running once to completion -- currently only the
+        eigenstate/overlap session (task 9002, see src/elkpy/session.py).
+
+        Unlike run(), this does not block until the process exits, does not
+        write a log file (stdout is a pipe the caller reads directly), and
+        does not raise on a bad exit code -- the caller (EigenstateSession)
+        owns the process lifecycle and must detect an unexpected exit itself
+        (e.g. a query that hits a Fortran `stop` deep in reused code; see
+        docs/design.md #14).
+
+        Returns the `subprocess.Popen` object.
+        """
+        import os
+
+        env = dict(os.environ)
+        env["OMP_NUM_THREADS"] = str(self.omp_threads)
+
+        command = [str(self.elk_binary)]
+
+        return subprocess.Popen(
+            command,
+            cwd=str(workdir),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=env,
+            text=True,
+            bufsize=1,
+        )

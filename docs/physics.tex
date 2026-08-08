@@ -526,6 +526,134 @@ result = calc.get_berry_curvature_path(
 result[-1]["distance"]  # cumulative distance along the path, for plotting
 \end{verbatim}
 
+\part{Eigenstates and wavefunction overlaps}
+\label{part:eigenstates}
+
+\section{Setting: the LAPW/APW+lo generalized eigenvalue problem}
+
+Elk represents each first-variational (scalar-relativistic) Bloch state at a
+$\mathbf k$-point in an augmented-plane-wave-plus-local-orbital (APW+lo) basis
+$\{\phi_i(\mathbf k,\mathbf r)\}$ that is \emph{not} orthogonal: the basis functions overlap
+inside the muffin-tin spheres by construction, so $S_{ij}(\mathbf k) = \langle
+\phi_i(\mathbf k)|\phi_j(\mathbf k)\rangle \neq \delta_{ij}$. Diagonalizing the Hamiltonian
+therefore means solving the \emph{generalized} eigenvalue problem
+\begin{equation}
+  H(\mathbf k)\,\mathbf c_n = E_n\, S(\mathbf k)\,\mathbf c_n,
+  \label{eq:genevp}
+\end{equation}
+which is exactly what Elk's \texttt{eveqnfv.f90} does (a generalized Hermitian eigensolver).
+The solver normalizes eigenvectors so that $\mathbf c_m^\dagger S(\mathbf k)\, \mathbf c_n =
+\delta_{mn}$ -- i.e.\ the physical states $|\psi_m^{\rm fv}(\mathbf k)\rangle = \sum_i
+c_{im}\,\phi_i(\mathbf k,\mathbf r)$ \emph{are} orthonormal in the physical sense required of
+quantum-mechanical eigenstates, but a \emph{raw} dot product of two coefficient vectors,
+$\mathbf c_m^\dagger \mathbf c_n$, is \emph{not} $\delta_{mn}$ in general, since it omits
+$S(\mathbf k)$. This is Elk's \texttt{evecfv} -- coefficients in a basis whose own overlap
+matrix a caller does not have direct access to, so \texttt{evecfv} alone is not usable for
+computing overlaps between states.
+
+\section{Second-variational states: orthonormal, but only within one diagonalization}
+
+The second-variational step builds the spin-dependent Hamiltonian (spin polarization,
+spin-orbit coupling, Part~\ref{part:soc}) in the basis of the already-$S$-orthonormal
+first-variational eigenstates, $\{|\psi_m^{\rm fv}(\mathbf k)\rangle\}\otimes\{|{\uparrow}
+\rangle,|{\downarrow}\rangle\}$ -- itself an ordinary orthonormal basis, with no
+non-orthogonal-basis subtlety at this stage (\texttt{eveqnsv.f90} is a standard Hermitian
+eigenproblem, not a generalized one). Its eigenvectors, \texttt{evecsv}, therefore do satisfy
+plain unitarity,
+\begin{equation}
+  \texttt{evecsv}^\dagger\,\texttt{evecsv} = \mathbb{1},
+  \label{eq:evecsv-unitary}
+\end{equation}
+verified directly against a real compiled binary
+(\texttt{tests/test\_calculation\_eigenstates.py::test\_evecsv\_is\_orthonormal}).
+
+This orthonormality is basis-relative, though, and the basis itself -- the first-variational
+eigenstates $\{|\psi_m^{\rm fv}(\mathbf k)\rangle\}$ -- is different at every $\mathbf k$
+(different $\mathbf G+\mathbf k$ vectors enter its construction in the first place). So the
+\texttt{evecsv} columns returned by two different eigenstate queries -- whether at two
+different $\mathbf k$-points, or two independent diagonalizations at literally the same
+$\mathbf k$ -- are coefficients in two \emph{different} underlying bases; a raw dot product
+between them carries no physical meaning. \texttt{get\_eigenstates()} is documented
+accordingly: valid for inspecting a single query's own result (energies, spin/orbital
+character via \texttt{evecsv}), not for comparing eigenstates across queries.
+
+\section{Wavefunction overlaps across k-points}
+
+The overlap that \emph{is} meaningful regardless of whether the two $\mathbf k$-points
+coincide is the direct overlap integral of the full Bloch wavefunctions themselves,
+\begin{equation}
+  O_{ab}(\mathbf k_a,\mathbf k_b) = \langle \psi_a(\mathbf k_a) | \psi_b(\mathbf k_b) \rangle
+  = \int_{\rm cell} \psi_a^*(\mathbf k_a,\mathbf r)\,\psi_b(\mathbf k_b,\mathbf r)\,d^3r,
+  \label{eq:overlap-integral}
+\end{equation}
+exactly the same quantity as the mesh-neighbour overlap matrix underlying the link variable
+of Eq.~\eqref{eq:link} in Part~\ref{part:berry}, generalized from a fixed mesh-step
+neighbour $\mathbf k+\hat\mu$ (task 9000) or a small loop's four fixed corners (task 9001) to
+an \emph{arbitrary} explicit pair $(\mathbf k_a,\mathbf k_b)$. Computationally it is the same
+two-step construction used there: expand each side's second-variational wavefunction into its
+muffin-tin-plus-interstitial real-space representation (\texttt{genwfsvp}, or here
+\texttt{elkpy\_wfcorner}'s fresh on-the-fly version of it, since $\mathbf k_a$/$\mathbf k_b$
+need not lie on any mesh or previously-diagonalized point), then evaluate
+Eq.~\eqref{eq:overlap-integral} via \texttt{genolpq}, which folds in the cell-periodic phase
+factor $e^{i\mathbf q\cdot\mathbf r}$ ($\mathbf q = \mathbf k_b-\mathbf k_a$) needed inside the
+muffin-tins.
+
+\section{elkpy's implementation: an interactive session (task 9002)}
+
+Unlike every other elkpy task, \texttt{get\_eigenstates()}/\texttt{get\_overlap()} are backed
+by an \emph{interactive} task, \texttt{elkpy\_eigenstate\_session} (task 9002,
+\texttt{patches/0003-eigenstate-session.patch}, new file \texttt{elkpy\_eigenstates.f90}):
+after the usual ground-state-resume setup, it loops reading one query per line from standard
+input -- \texttt{EIGENSTATES $k_1\,k_2\,k_3$} (Eq.~\eqref{eq:genevp}--\eqref{eq:evecsv-unitary}:
+full \texttt{evalsv}/\texttt{evecsv} at an arbitrary point) or \texttt{OVERLAP $k_{1a}\,k_{2a}\,
+k_{3a}\,k_{1b}\,k_{2b}\,k_{3b}\,ist_0\,ist_1$} (Eq.~\eqref{eq:overlap-integral} for a
+contiguous band window) -- writing each response back to standard output, until a
+\texttt{QUIT} command. Both queries reuse \texttt{elkpy\_wfcorner} (Part~\ref{part:berry}),
+extended here with optional \texttt{evalsv\_out}/\texttt{evecsv\_out} arguments so an
+\texttt{EIGENSTATES} query can retrieve the diagonalization's own eigenvalues/eigenvectors
+directly, not only its real-space expansion.
+
+This design -- one long-lived process kept alive across many queries, rather than one process
+per query like every other elkpy task -- is an engineering choice, not a physics one; the
+rationale (why a persistent worker process rather than an f2py in-memory bridge) is covered in
+\texttt{docs/design.md}~\S14, not repeated here.
+
+\subsection{Verified}
+
+Against a real compiled binary (bulk Si): Eq.~\eqref{eq:evecsv-unitary} holds at an arbitrary
+$\mathbf k$-point; $O_{ab}(\mathbf k,\mathbf k)$ is the identity matrix, to a tolerance
+($\sim 10^{-3}$) set by the \texttt{genwfsvp}/\texttt{genolpq} real-space expansion's own
+inherent truncation error (angular-momentum and interstitial $\mathbf G$-vector cutoffs), not
+machine precision -- observed at this order even for a single, non-degenerate band at a
+generic $\mathbf k$-point, so it is a property of the numerical scheme, not a bug; a session
+issuing the same queries twice returns identical results (the session actually stays usable
+across many queries); and, cross-checking two independent Fortran code paths the same way
+Part~\ref{part:berry}'s path/mesh agreement test does, $O_{ab}(\Gamma,\Gamma+\hat e_1)$ from
+this task's fresh diagonalization matches the corresponding mesh-neighbour overlap task 9000
+already exports for the same pair, checked for band 1 specifically -- not the full occupied
+window, since bands 2--4 are triply degenerate at $\Gamma$ (Part~\ref{part:berry}) and two
+\emph{independent} diagonalizations are free to pick different, equally valid bases within
+that degenerate subspace; comparing raw overlap-matrix elements of a degenerate window
+between two independent diagonalizations is not meaningful (confirmed empirically: bands 1--2
+agree to the same $\sim 10^{-3}$ floor between the two methods, bands 3--4 do not, consistent
+with an arbitrary within-subspace unitary mixing rather than a convention bug). Only
+gauge-invariant quantities built from a whole degenerate window (e.g.\ Part~\ref{part:berry}'s
+FHS flux) are safe to compare that way (\texttt{tests/test\_calculation\_eigenstates.py}).
+
+\subsection{How to use in code}
+
+\begin{verbatim}
+with calc.eigenstate_session() as session:
+    state = session.get_eigenstates((0.1, 0.2, 0.05))
+    state.energies  # (nstsv,) Hartree
+    state.evecsv    # (nstsv, nstsv) complex, evecsv[:, i] the i-th eigenvector
+
+    m = session.overlap((0.0, 0.0, 0.0), (0.1, 0.0, 0.0), ist0=1, ist1=4)
+    # m[a, b] = <psi_{1+a}(k_a)|psi_{1+b}(k_b)>
+\end{verbatim}
+\texttt{get\_eigenstates(k)}/\texttt{get\_overlap(k\_a, k\_b, ist0, ist1)} are one-off
+convenience wrappers around a short-lived session, for a single query.
+
 \begin{thebibliography}{9}
 \bibitem{koelling1977}
 D.~D.~Koelling and B.~N.~Harmon,

@@ -516,3 +516,126 @@ disconnected `,` path (e.g. `"GKM,K'G"`, to continue past M into a specific K′
 image rather than the nearest image `plot1d`-style interpolation would pick) is fully
 supported here — task 9001 evaluates every point's Wilson loop independently via fresh
 diagonalisation, so there's no interpolation across the break to get wrong.
+
+## 14. Interactive eigenstate/overlap session
+
+`Calculation.eigenstate_session()` (task 9002, `patches/0003-eigenstate-session.patch`,
+`src/elkpy_eigenstates.f90`) gives direct access to Elk's eigenstates — second-variational
+energies and eigenvectors at an arbitrary k-point, and overlaps between eigenstates —
+alongside two one-off convenience wrappers, `get_eigenstates(k)` and
+`get_overlap(k_a, k_b, ist0, ist1)`.
+
+**Same-k vs. cross-k overlaps.** `evecfv`, Elk's first-variational coefficients, live in
+a k-specific, non-orthogonal APW+lo basis — a raw dot product between two `evecfv`
+arrays isn't a valid overlap without the basis's own overlap (S) matrix. `evecsv`, the
+second-variational (spinor) coefficients, *is* built from an already-orthonormalized
+first-variational basis, so `evecsv^H @ evecsv = I` for any single diagonalisation — but
+that orthonormality is trivial (eigenvectors of one Hermitian matrix are automatically
+orthogonal to each other) and basis-specific: the first-variational basis itself is
+k-dependent (different G+k vectors at different k), so `evecsv` from two *different*
+diagonalisations — whether at different k, or a second diagonalisation at the same k —
+cannot be compared by a raw dot product either. `get_eigenstates()`/
+`EigenstateSession.get_eigenstates()` therefore only returns one diagonalisation's own
+energies and `evecsv`, documented as valid only for inspecting that one result (e.g.
+degeneracies, spin character), not for computing overlaps directly. Any physically
+meaningful overlap between independently-obtained eigenstates goes through
+`get_overlap()`/`EigenstateSession.overlap()` instead, which reuses the same real-space
+expansion (`elkpy_wfcorner`) plus overlap integral (`genolpq`) construction
+`get_berry_curvature()`/`get_berry_curvature_path()` (§13) already use — the only route
+that's valid regardless of whether the two k-points coincide.
+
+**Why a persistent worker process, not an f2py in-memory bridge.** The initial ask was to
+make the overlap operation fast by transferring data through memory via f2py. Two facts
+ruled that out:
+
+- The dominant per-query cost isn't process-spawn overhead — it's the
+  ground-state-dependent setup (`init0`→`init1`→`readstate`→`genvsig`→`linengy`→
+  `genapwlofr`→`gensocfr`) that must run once before any diagonalisation is valid. A
+  mechanism that amortizes that setup across many queries captures essentially the whole
+  realistic speedup, whether or not it also eliminates process-spawn cost.
+- Making a persistent f2py bridge robust would mean converting every Fortran `stop`
+  reachable from the new entry points (Elk's error handling is bare `stop` throughout —
+  no catchable error path) into a real error return. That can't be done additively: it
+  touches upstream files across most of `vendor/elk/src/`, directly conflicting with
+  this project's core vendoring constraint (§8: "changes must stay isolated... prefer
+  additive new files"). It would also need a new `-fPIC`/shared-library build path that
+  doesn't exist today (`vendor/elk/src/Makefile` only links a single `program elk`
+  executable) and raises OpenMP thread-pool reentrancy questions the project has never
+  needed to reason about.
+
+Instead, `eigenstate_session()` starts one long-lived `elk` subprocess (task 9002) that
+does the setup once, prints a sentinel line (`ELKPY_SESSION_READY`), then loops reading
+one query per line from standard input — `EIGENSTATES k1 k2 k3` or
+`OVERLAP k1a k2a k3a k1b k2b k3b ist0 ist1` — writing each response back to standard
+output, until a `QUIT` command. This captures the same "stay warm" benefit as an f2py
+bridge purely via subprocess + pipes: no new build machinery, no `stop`-to-exception
+conversion, and no OpenMP reentrancy concerns, since — unlike f2py calling into Fortran
+repeatedly from Python's own process — this is one Fortran executable's own loop calling
+OpenMP-parallel routines repeatedly, exactly the pattern its SCF loop already relies on.
+`EIGENSTATES` and `OVERLAP` both reuse `elkpy_wfcorner` (§13, extended with optional
+`evalsv_out`/`evecsv_out` arguments so `EIGENSTATES` queries can retrieve the
+diagonalisation's own eigenvalues/eigenvectors, not just its real-space expansion) — the
+same fresh, on-the-fly diagonalisation `bandstr.f90` and task 9001 use, so an
+`eigenstate_session()` k-point needs no `ngridk` alignment either.
+
+One easy-to-miss implementation detail: gfortran fully buffers standard output once it
+isn't a tty — true here, since Python pipes it — so every response (including the
+initial ready sentinel) ends with an explicit `flush(6)`; without it, the elkpy side
+would block forever on output sitting in an unflushed buffer.
+
+**Accepted limitation.** Malformed input or an invalid band window is new code's own to
+handle gracefully (`ELKPY_SESSION_ERROR <message>`, loop continues) — but a query that
+reaches a pre-existing `stop` inside reused code (e.g. a pathological/near-singular
+`genolpq` call) still kills the whole session, the same way it would already kill a
+one-shot task 9001 subprocess today; here it costs a warmed-up session rather than one
+query. `EigenstateSession` recognizes Elk's own `Error(...)` diagnostic convention as a
+signal that a `stop` is imminent and raises a `RuntimeError` carrying that diagnostic text
+(rather than letting the sentinel-matching loop misparse it as numeric tokens or fall
+through to a message-less end-of-file error), and separately detects the process having
+exited unexpectedly on the next query. Neither attempts to make the session resilient to
+this — the caller starts a new session to continue. A worker that hangs rather than exits
+(e.g. a deadlock inside a BLAS call) is not covered: there is no read timeout, only
+EOF/sentinel detection — out of scope for the same reason full `stop`-to-exception
+conversion was rejected in the first place (§ above).
+
+**How to use in code**:
+
+```python
+from elkpy import Structure
+
+s = Structure.from_ase(bulk("Si"))
+calc = s.get_calculation(xc="PW", ngridk=(4, 4, 4))
+
+with calc.eigenstate_session() as session:
+    state = session.get_eigenstates((0.1, 0.2, 0.05))
+    state.energies  # (nstsv,) Hartree
+    state.evecsv    # (nstsv, nstsv) complex, evecsv[:, i] the i-th eigenvector
+
+    m = session.overlap((0.0, 0.0, 0.0), (0.1, 0.0, 0.0), ist0=1, ist1=4)
+    # m[a, b] = <psi_{1+a}(k_a)|psi_{1+b}(k_b)>
+
+# one-off convenience wrappers, each opening/closing their own session --
+# prefer eigenstate_session() directly when issuing more than one query
+e = calc.get_eigenstates((0.0, 0.0, 0.0))
+m = calc.get_overlap((0.0, 0.0, 0.0), (0.1, 0.0, 0.0), 1, 4)
+```
+
+Verified against a real compiled binary: `evecsv^H @ evecsv = I` at an arbitrary
+k-point; `overlap(k, k, ...)` is the identity matrix, to a tolerance (~1e-3) set by the
+genwfsvp/genolpq real-space expansion's own inherent truncation error (angular-momentum
+and interstitial G-vector cutoffs), not machine precision — observed at this order even
+for a single, non-degenerate band at a generic k-point, so it's a property of the
+numerical scheme, not a bug; a session issuing the same queries twice returns identical
+results (the session actually stays usable across many queries, the point of this
+feature); and — cross-checking two independent Fortran code paths, the same style as
+§13's path/mesh agreement test — `overlap(Γ, Γ+e₁, ...)` from this task's fresh
+diagonalisation matches the corresponding mesh-neighbour overlap task 9000 already
+exports for the same pair, checked for band 1 specifically
+(`tests/test_calculation_eigenstates.py`) — not the full occupied window, since bands
+2-4 are triply degenerate at Γ (§13) and two *independent* diagonalisations are free to
+pick different, equally valid bases within that degenerate subspace; comparing raw
+overlap-matrix elements of a degenerate window between two independent diagonalisations
+isn't meaningful (confirmed empirically: bands 1-2 agree to the same ~1e-3 floor between
+the two methods, bands 3-4 do not, consistent with an arbitrary within-subspace unitary
+mixing rather than a convention bug). Only gauge-invariant quantities built from a whole
+degenerate window (e.g. §13's FHS flux) are safe to compare that way.
