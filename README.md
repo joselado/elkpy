@@ -138,23 +138,3 @@ is the place to actually start:
 | [`03_phonon_dispersion_and_dos.ipynb`](notebooks/03_phonon_dispersion_and_dos.ipynb) | Phonon dispersion/DOS via DFPT | -- |
 
 New notebooks should be added here alongside any new physics capability.
-
-# Project layout and status #
-
-- `src/elkpy/` -- the Python package (`structure.py`, `calculation.py`, `session.py`,
-  `spec.py`, `parsers/`).
-- `vendor/elk/` -- vendored Elk 11.0.2 source, unmodified. `patches/` -- the additive
-  Fortran patch series (SOC scaling, Berry curvature, eigenstate session) applied to
-  an out-of-tree build copy, never to `vendor/elk/` itself.
-- `docs/physics.tex` -- the physics writeup for each elkpy Fortran extension (formulas,
-  symbols, what's verified against a real compiled binary); `docs/design.md`/
-  `docs/roadmap.md` -- architecture and status.
-- `tests/` -- unit tests plus integration suites against a real `elk` binary; run
-  `python3 -m pytest tests/` after `./scripts/build_elk.sh`.
-
-Roadmap Tiers 1-3 (core DFT workflow) are implemented and verified; Tiers 4-6 remain
-planning-only (`docs/roadmap.md`). Not implemented: symbolic k-path's disconnected-
-segment support, the classical supercell phonon method, MPI, and named `get_*` methods
-for potential/ELF volumetric plots (reachable via `run_tasks()` today). `src/elkpy/`
-is the source of truth -- check it directly rather than assuming the docs describe
-current behavior.
