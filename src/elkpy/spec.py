@@ -40,6 +40,7 @@ TASKS = {
 
 # output filenames, per the `open(unit, file=...)` calls in the cited source
 OUTPUT_FILES = {
+    "state": "STATE.OUT",                  # src/writestate.f90
     "info": "INFO.OUT",                    # src/gndstate.f90
     "totenergy": "TOTENERGY.OUT",          # src/gndstate.f90
     "band": "BAND.OUT",                    # src/bandstr.f90

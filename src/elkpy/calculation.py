@@ -116,16 +116,27 @@ class Calculation:
             "elk_binary": f"{self.launcher.elk_binary}:{self.launcher.elk_binary.stat().st_mtime}",
         }
 
-    def _ground_state_valid(self):
-        if not self._manifest_path.exists() or not (self.workdir / "STATE.OUT").exists():
-            return False
+    def _load_valid_manifest(self):
+        """Return the saved manifest dict if STATE.OUT exists and its
+        recorded basis signature matches the current one, else None.
+
+        Deliberately doesn't consider convergence -- a non-converged cached
+        run is still a "valid" (matching) cache entry in the sense that its
+        STATE.OUT/manifest don't need to be regenerated; ensure_ground_state
+        is what decides whether that non-convergence should raise, via
+        raise_on_nonconvergence.
+        """
+        if not self._manifest_path.exists() or not (self.workdir / spec.OUTPUT_FILES["state"]).exists():
+            return None
         with open(self._manifest_path) as fh:
             saved = json.load(fh)
         # normalize through JSON (fresh signature has tuples, saved has lists
         # after the round trip -- compare their JSON forms, not Python equality)
         saved_sig = json.dumps(saved.get("basis_signature"), sort_keys=True)
         fresh_sig = json.dumps(self._basis_signature(), sort_keys=True)
-        return saved_sig == fresh_sig
+        if saved_sig != fresh_sig:
+            return None
+        return saved
 
     @property
     def converged(self):
@@ -135,16 +146,26 @@ class Calculation:
         immediately instead of just being recorded here."""
         return self._converged
 
+    def _raise_if_not_converged(self):
+        if not self._converged and self.raise_on_nonconvergence:
+            raise RuntimeError(
+                f"Ground state did not converge in {self.workdir} (hit maxscl) -- see "
+                f"INFO.OUT, or construct with raise_on_nonconvergence=False and check "
+                f"calc.converged instead of raising"
+            )
+
     def ensure_ground_state(self):
         """Run task 0 if no valid ground state exists yet in this directory
         (docs/design.md #4: basis-defining parameters must match exactly for
         STATE.OUT to be considered reusable). Does not re-run merely because
         a cached run didn't converge -- that's still a "valid" (matching)
         ground state in the cache sense; see `converged`/
-        `raise_on_nonconvergence` for how non-convergence is surfaced."""
-        if self._ground_state_valid():
-            with open(self._manifest_path) as fh:
-                self._converged = json.load(fh).get("converged")
+        `raise_on_nonconvergence` for how non-convergence is surfaced, on
+        both this path and the fresh-run path below."""
+        manifest = self._load_valid_manifest()
+        if manifest is not None:
+            self._converged = manifest.get("converged")
+            self._raise_if_not_converged()
             return
         f = InputFile()
         f.add_block("tasks", [spec.TASKS["ground_state"]])
@@ -155,12 +176,7 @@ class Calculation:
         with open(self._manifest_path, "w") as fh:
             json.dump({"basis_signature": self._basis_signature(), "converged": converged}, fh)
         self._converged = converged
-        if not converged and self.raise_on_nonconvergence:
-            raise RuntimeError(
-                f"Ground state did not converge in {self.workdir} (hit maxscl) -- see "
-                f"INFO.OUT, or construct with raise_on_nonconvergence=False and check "
-                f"calc.converged instead of raising"
-            )
+        self._raise_if_not_converged()
 
     def _run_resumed(self, subdir_name, tasks, extra_blocks=None, ngridk=None):
         """Run task(s) resumed from the ground state's STATE.OUT, in an
@@ -190,7 +206,9 @@ class Calculation:
         subdir = self.workdir / subdir_name
         shutil.rmtree(subdir, ignore_errors=True)
         subdir.mkdir(parents=True)
-        shutil.copyfile(self.workdir / "STATE.OUT", subdir / "STATE.OUT")
+        shutil.copyfile(
+            self.workdir / spec.OUTPUT_FILES["state"], subdir / spec.OUTPUT_FILES["state"]
+        )
         f = InputFile()
         f.add_block("tasks", [spec.TASKS["ground_state_resume"]] + list(tasks))
         self._add_base_blocks(f, ngridk=ngridk)
@@ -319,12 +337,25 @@ class Calculation:
         from .structure import Structure
 
         subdir = self._run_resumed("relax", [spec.TASKS["relax_resume"]])
-        avec, species = geometry.parse_last_geometry(subdir / spec.OUTPUT_FILES["geometry_opt"])
+        # species_order: writegeom.f90 echoes species back in their original
+        # declared order but only as the species *filename* -- if
+        # species_files overrides that filename away from "{symbol}.in", the
+        # filename alone can't recover the real element, so pass the
+        # original order explicitly instead of guessing from the filename.
+        avec, species = geometry.parse_last_geometry(
+            subdir / spec.OUTPUT_FILES["geometry_opt"],
+            species_order=list(self.structure.species.keys()),
+        )
         relaxed_structure = Structure(
             avec,
             species,
             sppath=self.structure.sppath,
-            scale=self.structure.scale,
+            # scale=1.0, not self.structure.scale: writegeom.f90 always
+            # hardcodes scale to 1.0 and bakes any scaling directly into the
+            # avec it writes (see parsers/geometry.py), so avec here is
+            # already fully scaled -- reapplying self.structure.scale would
+            # scale the lattice a second time.
+            scale=1.0,
             species_files=self.structure.species_files,
         )
         new_workdir = Path(workdir) if workdir else self.workdir / "relaxed"

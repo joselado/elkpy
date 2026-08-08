@@ -110,7 +110,7 @@ def test_extra_blocks_reach_elk_in_and_affect_ground_state_cache(tmp_path):
     calc2 = s.get_calculation(
         tmp_path / "si", xc="PW", ngridk=(2, 2, 2), extra_blocks={"maxscl": [60]}
     )
-    assert not calc2._ground_state_valid()
+    assert calc2._load_valid_manifest() is None
 
 
 def test_converged_status(si_calculation):
@@ -154,6 +154,19 @@ def test_get_effective_mass(si_calculation):
     assert diag.max() - diag.min() < 1e-4
 
 
+def test_get_effective_mass_tensor_is_inverse_of_derivative_tensor(si_calculation):
+    """Regression test: EFFMASS.OUT has two distinct 3x3 blocks per state --
+    the raw eigenvalue-derivative matrix and its inverse, the actual
+    effective mass tensor. `tensor` must be the latter, not the former (see
+    parsers/effmass.py)."""
+    import numpy as np
+
+    first = si_calculation.get_effective_mass((0.0, 0.0, 0.0))[0]
+    assert not np.allclose(first["tensor"], first["derivative_tensor"])
+    product = first["tensor"] @ first["derivative_tensor"]
+    assert np.allclose(product, np.eye(3), atol=1e-3)
+
+
 def test_get_density(si_calculation):
     points, density = si_calculation.get_density(grid=(4, 4, 4))
     assert points.shape == (64, 3)
@@ -177,3 +190,62 @@ def test_species_file_override(tmp_path):
     assert -600 < e < -550
     elk_in = (calc.workdir / "elk.in").read_text()
     assert "Si_custom.in" in elk_in
+
+    # regression: get_relaxed() must recover the real element symbol ("Si"),
+    # not the filename stem ("Si_custom") -- see parsers/geometry.py
+    relaxed = calc.get_relaxed()
+    assert "Si" in relaxed.structure.species
+    relaxed.structure.to_ase()  # raises if the species key isn't a real symbol
+
+
+def test_get_relaxed_does_not_double_apply_scale(tmp_path):
+    """Regression test: writegeom.f90 always bakes any scale factor into the
+    avec it writes to GEOMETRY_OPT.OUT, so get_relaxed() must not reapply
+    the original Structure's scale on top of that (see parsers/geometry.py's
+    docstring and get_relaxed()'s scale=1.0 comment)."""
+    # scale=2.565 with unit-ish direction vectors reproduces the same
+    # physical cell as SI_AVEC (already in Bohr, scale=1.0 implicitly)
+    s_scaled = Structure(
+        [(2.0, 2.0, 0.0), (2.0, 0.0, 2.0), (0.0, 2.0, 2.0)], SI_SPECIES, scale=2.565
+    )
+    calc_scaled = s_scaled.get_calculation(tmp_path / "si_scaled", xc="PW", ngridk=(2, 2, 2))
+    e_scaled = calc_scaled.get_energy()
+
+    s_unscaled = Structure(SI_AVEC, SI_SPECIES)
+    calc_unscaled = s_unscaled.get_calculation(tmp_path / "si_unscaled", xc="PW", ngridk=(2, 2, 2))
+    e_unscaled = calc_unscaled.get_energy()
+    # sanity check that the two setups really are the same physical cell
+    assert abs(e_scaled - e_unscaled) < 1e-6
+
+    relaxed = calc_scaled.get_relaxed()
+    e_relaxed = relaxed.get_energy()
+    # a scale^2 bug would blow this up to a wildly different (much smaller
+    # cell -> much more negative, or a crash) energy, not a tiny numerical
+    # relaxation shift
+    assert abs(e_relaxed - e_scaled) < 1e-4
+
+
+def test_nonconvergence_raises_on_cache_hit_too(tmp_path):
+    """Regression test: ensure_ground_state()'s cache-hit path must apply
+    raise_on_nonconvergence just like the fresh-run path -- previously it
+    silently returned from a cached non-converged run instead of raising."""
+    s = Structure(SI_AVEC, SI_SPECIES)
+    workdir = tmp_path / "si_nonconv"
+
+    calc = s.get_calculation(workdir, xc="PW", ngridk=(2, 2, 2), extra_blocks={"maxscl": [1]})
+    with pytest.raises(RuntimeError):
+        calc.get_energy()
+
+    # re-instantiate on the same workdir -- manifest + STATE.OUT already on
+    # disk with a matching (non-converged) basis signature: the cache-hit path
+    calc2 = s.get_calculation(workdir, xc="PW", ngridk=(2, 2, 2), extra_blocks={"maxscl": [1]})
+    with pytest.raises(RuntimeError):
+        calc2.get_energy()
+
+    # raise_on_nonconvergence=False must still allow inspecting .converged
+    calc3 = s.get_calculation(
+        workdir, xc="PW", ngridk=(2, 2, 2), extra_blocks={"maxscl": [1]},
+        raise_on_nonconvergence=False,
+    )
+    calc3.get_energy()
+    assert calc3.converged is False
