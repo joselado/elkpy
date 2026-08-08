@@ -28,43 +28,22 @@ python3 -m pip install -e .        # add .[ase] for Structure.from_ase()/to_ase(
 ```
 
 # FUNCTIONALITIES #
-elkpy's own contribution is physics **beyond** what Elk provides upstream, added as a
-small, additive Fortran patch series (`patches/`) plus Python arithmetic on top --
-never a modification of `vendor/elk/` itself. The three capabilities below don't
-exist in stock Elk at all.
 
-## Per-species spin-orbit coupling scaling ##
-Elk's spin-orbit term (Koelling-Harmon approximation) is
-$$ \hat H_{\rm soc}(r)=f_{\rm soc}(r)\,\hat{\mathbf L}\cdot\boldsymbol\sigma $$
-scaled upstream by one single global number, `socscf`, applied identically to every
-atom regardless of species. elkpy promotes that to an independent scale per chemical
-species, $\texttt{socscf}\to s_{is}$, so a correction fitted for one (typically heavy)
-element doesn't leak onto a lighter one sharing the cell.
+## Spin-orbit coupling ##
+- Per-species scaling of the spin-orbit term $\hat H_{\rm soc}(r)=f_{\rm soc}(r)\,\hat{\mathbf L}\cdot\boldsymbol\sigma$, rather than one global scale for the whole cell
 
-## Topological characterization: Berry curvature and Chern numbers ##
-Elk has no Berry-curvature capability at all. elkpy adds the gauge-invariant
-Wilson-loop (Fukui-Hatsugai-Suzuki) discretization of
-$$ F_{12}(\mathbf k)=\partial_1A_2(\mathbf k)-\partial_2A_1(\mathbf k), \qquad c_n=\frac1{2\pi i}\int_{T^2}\!d^2k\;F_{12}(\mathbf k)\in\mathbb Z, $$
-in two modes: over Elk's full periodic k-mesh (a genuine, topologically quantized
-Chern number), or at an arbitrary, explicit k-point via fresh on-the-fly
-diagonalization (no periodic mesh required at all) -- e.g. to resolve the curvature
-of one valley of a 2D material without a mesh covering the whole zone.
+## Topological characterization ##
+- Berry curvature $F_{12}(\mathbf k)=\partial_1A_2-\partial_2A_1$ and Chern numbers $c_n=\frac1{2\pi i}\int_{T^2}\!d^2k\,F_{12}\in\mathbb Z$, via a gauge-invariant Wilson-loop discretization
+- Berry curvature at an arbitrary k-point with no periodic mesh required, e.g. to resolve individual valleys of a 2D material
 
-## Eigenstates and wavefunction overlaps at arbitrary k-points ##
-Elk can diagonalize at an arbitrary off-mesh k-point internally (e.g. along a band
-path), but exposes no way to retrieve `evecsv` or a cross-k wavefunction overlap
-programmatically, nor to amortize the ground-state-dependent setup cost across many
-such queries. elkpy adds a persistent, interactive Elk session that returns
-second-variational energies/eigenvectors and the wavefunction overlap
-$$ O_{ab}(\mathbf k_a,\mathbf k_b)=\langle\psi_a(\mathbf k_a)|\psi_b(\mathbf k_b)\rangle $$
-between two arbitrary k-points, on demand, staying warm across repeated queries.
+## Eigenstates and wavefunction overlaps ##
+- Second-variational energies and eigenvectors at an arbitrary k-point
+- Wavefunction overlaps $O_{ab}(\mathbf k_a,\mathbf k_b)=\langle\psi_a(\mathbf k_a)|\psi_b(\mathbf k_b)\rangle$ between two arbitrary k-points, queried interactively
 
-## Also wraps Elk's standard DFT workflow ##
-Total energy $E[n]$, band structure $\epsilon_i(\mathbf k)$, density of states,
-Hellmann-Feynman forces and structural relaxation, effective mass tensor, real-space
-charge density $n(\mathbf r)$, phonon dispersion/DOS via DFPT, and a `run_tasks()`
-escape hatch to any other standard Elk task -- all through the same `Structure`/
-`Calculation` object model as the capabilities above (see notebooks 01-03).
+## Ground-state electronic structure ##
+- Self-consistent total energy $E[n]$, band structure $\epsilon_i(\mathbf k)$, density of states
+- Hellmann-Feynman forces, structural relaxation, effective mass tensor, charge density $n(\mathbf r)$
+- Phonon dispersion and density of states via density functional perturbation theory
 
 # EXAMPLES #
 Full worked notebooks (formulas + code + real Elk output) are in [`notebooks/`](notebooks); short examples below, in the same order as FUNCTIONALITIES.
