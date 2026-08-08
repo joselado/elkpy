@@ -1,0 +1,397 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+
+\title{Berry curvature via the Wilson-loop (Fukui-Hatsugai-Suzuki) method in elkpy}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Setting: Berry curvature and the Chern number}
+
+For a family of Bloch states $|n(\mathbf k)\rangle$ (a non-degenerate band, or a
+gapped multiplet of bands) over the Brillouin zone, the Berry connection and the
+associated field strength (Berry curvature) are
+\begin{equation}
+  A_\mu(\mathbf k) = \langle n(\mathbf k) | \partial_\mu | n(\mathbf k) \rangle, \qquad
+  F_{12}(\mathbf k) = \partial_1 A_2(\mathbf k) - \partial_2 A_1(\mathbf k),
+  \label{eq:berry}
+\end{equation}
+with $\mu=1,2$ two reciprocal-space directions and $\partial_\mu = \partial/\partial
+k_\mu$. When the Fermi energy lies in a gap, the (2D) Hall conductance is
+$\sigma_{xy} = -(e^2/h)\sum_n c_n$, where the Chern number of band $n$,
+\begin{equation}
+  c_n = \frac{1}{2\pi i} \int_{T^2} d^2k\, F_{12}(\mathbf k),
+  \label{eq:chern}
+\end{equation}
+is an integer topological invariant (Thouless-Kohmoto-Nightingale-den Nijs,
+Phys.\ Rev.\ Lett.\ \textbf{49}, 405 (1982)) -- nonzero only when $A_\mu$ cannot be
+chosen as a single smooth gauge over the whole (torus) Brillouin zone, which is exactly
+the topological obstruction the Chern number counts. $|n(\mathbf k)\rangle$ carries an
+arbitrary $\mathbf k$-dependent phase (the gauge freedom of quantum mechanics);
+$A_\mu$ depends on that choice, $F_{12}$ and $c_n$ do not.
+
+\section{The Wilson-loop (Fukui-Hatsugai-Suzuki) discretization}
+
+In a real DFT calculation, wavefunctions exist only on a discrete $\mathbf k$-mesh, and
+the phase Elk's (or any) diagonalizer returns at each mesh point is an arbitrary,
+numerically-determined gauge choice -- not smooth across the mesh, not known in closed
+form. Naively finite-differencing Eq.~\eqref{eq:berry} in that raw gauge does not work.
+Fukui, Hatsugai and Suzuki (FHS; \emph{Chern Numbers in Discretized Brillouin Zone:
+Efficient Method of Computing (Spin) Hall Conductances}, J.\ Phys.\ Soc.\ Jpn.\
+\textbf{74}, 1674 (2005), arXiv:cond-mat/0503172) give a construction that is exactly
+gauge invariant on the discretized zone, for {\it any} choice of per-$\mathbf k$-point
+phase, by never differentiating a phase directly and instead multiplying wavefunction
+overlaps ("Wilson loops") around each mesh plaquette -- the same idea used for Berry
+curvature in tight-binding/lattice models, e.g.\ \texttt{pyqula}'s
+\texttt{berry\_curvature} (which this implementation was cross-checked against for
+convention, per this project's development-practices policy).
+
+For a mesh point $\mathbf k_\ell$ and the two lattice directions $\hat\mu$ ($\mu=1,2$)
+spanning the loop, and a (possibly multi-band) manifold $\psi(\mathbf k) =
+(|n_1(\mathbf k)\rangle,\dots,|n_M(\mathbf k)\rangle)$, define the U(1) link variable
+\begin{equation}
+  U_\mu(\mathbf k_\ell) = \frac{\det\, \psi^\dagger(\mathbf k_\ell)\,
+    \psi(\mathbf k_\ell+\hat\mu)}{\bigl|\det\, \psi^\dagger(\mathbf k_\ell)\,
+    \psi(\mathbf k_\ell+\hat\mu)\bigr|},
+  \label{eq:link}
+\end{equation}
+a single unit-modulus complex number per link, built from the $M \times M$ overlap
+matrix between the band manifold at $\mathbf k_\ell$ and at its mesh neighbour
+$\mathbf k_\ell+\hat\mu$ (the Abelian, $M=1$, case is Eq.~7 of FHS; Eq.~\eqref{eq:link}
+here is their non-Abelian generalization, their Eq.~16). The lattice field strength
+around the plaquette is
+\begin{equation}
+  \tilde F_{12}(\mathbf k_\ell) = \ln\!\bigl[
+    U_1(\mathbf k_\ell)\, U_2(\mathbf k_\ell+\hat 1)\,
+    U_1(\mathbf k_\ell+\hat 2)^{-1}\, U_2(\mathbf k_\ell)^{-1} \bigr],
+  \qquad -\pi < \frac{1}{i}\tilde F_{12}(\mathbf k_\ell) \le \pi,
+  \label{eq:fieldstrength}
+\end{equation}
+i.e.\ the principal-branch phase of the product of the four link variables walked
+around the plaquette. Because $\tilde F_{12}$ is built entirely from gauge-covariant
+overlaps (never a bare derivative of a phase), it is exactly invariant under
+$|n_a(\mathbf k)\rangle \to e^{-i\lambda_a(\mathbf k)}|n_a(\mathbf k)\rangle$ for {\it
+any} $\mathbf k$-dependent phases $\lambda_a$ -- this is the property elkpy's
+\texttt{tests/test\_berry\_gauge\_invariance.py} checks directly (Section~4). The
+lattice Chern number is the sum over the mesh,
+\begin{equation}
+  \tilde c_n = \frac{1}{2\pi i} \sum_\ell \tilde F_{12}(\mathbf k_\ell),
+  \label{eq:latticechern}
+\end{equation}
+and FHS prove it is \emph{exactly} an integer for any mesh spacing (not just in a
+continuum limit), converging to Eq.~\eqref{eq:chern} as the mesh is refined, correct
+even on a coarsely discretized zone provided the \emph{admissibility condition}
+$|\tilde F_{12}(\mathbf k_\ell)| < \pi$ holds at every plaquette (their Eq.~14) -- a
+value approaching $\pi$ signals a mesh too coarse to trust.
+
+\section{elkpy's implementation}
+
+\subsection{What Elk already provides, and why it isn't reused directly}
+
+Elk's Wannier90 export (task 550, \texttt{writew90mmn.f90}) computes exactly this kind
+of quantity -- an overlap matrix $M_{mn}(\mathbf k,\mathbf k+\mathbf b) = \langle
+\psi_m(\mathbf k)|\psi_n(\mathbf k+\mathbf b)\rangle$ between neighbouring $\mathbf
+k$-points on a mesh -- via \texttt{genwfsvp} (expand the second-variational
+wavefunction, muffin-tin plus interstitial) and \texttt{genolpq} (the overlap itself,
+including the $e^{i\mathbf b\cdot\mathbf r}$ phase factor needed inside the muffin-tins
+for the cell-periodic part). It cannot be used as-is here: which neighbours
+$\mathbf k+\mathbf b$ to use is decided by \texttt{wannier\_setup}, a call into the
+external Wannier90 library that is only a stub (\texttt{w90\_stub.f90}, ``libwannier not
+or improperly installed'') unless Elk is separately linked against libwannier90 -- not
+part of this project's build (\texttt{build-config/make.inc}).
+
+elkpy sidesteps this rather than adding a libwannier90 build dependency: the two
+Wilson-loop directions $\hat\mu$ are, by construction, exactly two of the three
+\texttt{ngridk} mesh generators, so the neighbour of $\mathbf k_\ell$ in direction $\mu$
+is simply $\mathbf k_\ell + \hat\mu$ in lattice coordinates -- $1/\texttt{ngridk}(\mu)$
+of a reciprocal lattice vector -- with no neighbour-shell search needed at all.
+
+\subsection{Fortran: exporting the overlap matrices (task 9000)}
+
+\texttt{patches/0002-berry-curvature-wilson-loop.patch} adds one new task, reserved in
+the high, clearly-unused range per \texttt{docs/design.md}~\S8, and one new additive
+file, \texttt{elkpy\_berry.f90} (\texttt{elkpy\_berrycurv} subroutine):
+\begin{itemize}
+  \item \texttt{modmain.f90}: four new integers (\texttt{elkpy\_berry\_dir1/dir2},
+    the two loop directions, and \texttt{elkpy\_berry\_ist0/ist1}, the requested band
+    window).
+  \item \texttt{readinput.f90}: a new input block \texttt{elkpy\_berry} populating
+    them, with validation (directions distinct and in $\{1,2,3\}$, \texttt{ist0}
+    $\ge 1$, \texttt{ist1} $\ge$ \texttt{ist0}).
+  \item \texttt{elk.f90}: one line, \texttt{case(9000): call elkpy\_berrycurv}, plus a
+    documentation block for the new input block (same pattern as
+    \texttt{elkpy\_socscale}, \texttt{docs/soc\_scaling.tex}).
+  \item \texttt{elkpy\_berry.f90} (new file): for every point of the full,
+    non-reduced \texttt{ngridk} mesh and for each of the two requested directions,
+    reuses \texttt{genwfsvp}/\texttt{genolpq} exactly as \texttt{writew90mmn.f90} does,
+    but against the directly-constructed neighbour $\mathbf k_\ell+\hat\mu$ instead of
+    a Wannier90-supplied shell, and writes the resulting $M^{(\mu)}(\mathbf k_\ell)$
+    matrices (restricted to the requested band window) plus, for a gap-closing check,
+    the eigenvalues of the window and one band on each side of it, to
+    \texttt{ELKPY\_BERRY.OUT}.
+\end{itemize}
+This requires \texttt{reducek=0} (set automatically by
+\texttt{Calculation.get\_berry\_curvature()}): with symmetry reduction on, eigenvectors
+are only computed/stored on the irreducible wedge of the mesh, not the full mesh the
+Wilson loop walks.
+
+No Wilson-loop arithmetic happens in Fortran at all -- Eqs.~\eqref{eq:link}
+through~\eqref{eq:latticechern} are evaluated entirely in Python
+(\texttt{elkpy.parsers.berry}), so that part is unit-testable against synthetic overlap
+matrices without running Elk (Section~4).
+
+\subsection{Python: the Wilson loop and Chern number}
+
+\texttt{elkpy.parsers.berry.compute\_berry\_curvature} evaluates
+Eqs.~\eqref{eq:link}--\eqref{eq:latticechern} directly with \texttt{numpy}, at every
+point of the mesh (looping over the direction not spanned by the loop as independent
+2D slices), and additionally reports $\max_\ell |\tilde F_{12}(\mathbf k_\ell)|$, the
+admissibility diagnostic. \texttt{check\_gap} verifies, from the exported boundary
+eigenvalues, that the requested band window stays separated from the rest of the
+spectrum at every mesh point -- required for Eq.~\eqref{eq:link}'s multi-band
+determinant to be well defined (FHS's relaxed gap-opening condition for the
+non-Abelian case: $E_n(\mathbf k) \ne E_{n'}(\mathbf k)$ for $n$ in the window,
+$n'$ outside it, for all $\mathbf k$) -- and raises rather than silently returning a
+number computed through a near-degeneracy.
+
+\subsection{Verification}
+
+\begin{itemize}
+  \item \emph{Gauge invariance} (\texttt{tests/test\_berry\_gauge\_invariance.py}, no
+    Elk needed): applying a random per-$\mathbf k$-point, per-band diagonal unitary
+    gauge transformation $M(\mathbf k,\mathbf k') \to D(\mathbf k)^\dagger\, M(\mathbf
+    k,\mathbf k')\, D(\mathbf k')$ to synthetic overlap matrices leaves the computed
+    flux and Chern number exactly unchanged (to floating-point precision) -- validates
+    the arithmetic itself, independent of whether the overlaps are physical. This does
+    \emph{not} pin the overall sign of the result: replacing every overlap matrix $M$
+    by $M^*$ flips the sign of every $\tilde F_{12}$ but leaves the gauge-cancellation
+    algebra (Section~2, the derivation showing the four link phases cancel exactly)
+    completely unaffected, so a conjugation-sign bug would pass this test undetected.
+  \item \emph{Sign} (also \texttt{tests/test\_berry\_gauge\_invariance.py}): the sign of
+    the Python-side arithmetic is instead pinned directly against Eq.~\eqref{eq:fieldstrength}
+    with hand-constructed single-band overlap matrices of known phase -- one test checks
+    a link entering the numerator role ($U_1(\mathbf k_\ell)$), one checks a link entering
+    the (inverted) denominator role ($U_1(\mathbf k_\ell+\hat 2)$), each asserting the
+    resulting flux has the correspondingly correct sign. This pins that
+    \texttt{compute\_berry\_curvature} implements Eq.~\eqref{eq:fieldstrength} with the
+    right overall sign \emph{given} overlap matrices in the
+    $M(a,b)=\langle\psi_a(\mathbf k)|\psi_b(\mathbf k+\hat\mu)\rangle$ convention -- it
+    does not by itself verify that \texttt{elkpy\_berry.f90} produces matrices in that
+    convention.
+  \item \emph{Convention (Fortran)}: the overlap convention
+    ($M(a,b)=\langle\psi_a(\mathbf k)|\psi_b(\mathbf k+\hat\mu)\rangle$, i.e.\
+    \texttt{conjg(oq(b,a))} of \texttt{genolpq}'s own output) was pinned down directly
+    from the documented \texttt{zgemv} BLAS semantics of \texttt{genolpq.f90} --
+    derived independently twice, agreeing both times -- rather than by an empirical
+    runtime check: since Eq.~\eqref{eq:link} only ever uses $\det M$, which is
+    transpose-invariant, only the conjugation (not the row/column convention) is
+    physically consequential, and no test currently exercises the real
+    Fortran-to-Python sign chain end to end. An attempted empirical check (requesting
+    the overlap of $\Gamma$ with itself via a full reciprocal lattice vector, on a
+    $1\times1\times1$ mesh, which should trivially equal the identity matrix) did not
+    hold, traced to an apparent limitation of \texttt{getevecfv}'s G-vector relabelling
+    for that specific degenerate case -- not exercised by any real calculation, since
+    \texttt{elkpy\_berry.f90} now rejects \texttt{ngridk}$<2$ in either loop direction
+    outright (a single mesh point gives a zero-area plaquette regardless). A real
+    multi-point mesh ($2\times2\times2$) showed consistent $|\det M|$ across both
+    boundary-wrapping and non-wrapping neighbour pairs, evidence against (though not
+    proof against) the same issue affecting realistic usage.
+  \item \emph{Physics} (\texttt{tests/test\_calculation\_berry.py}, needs a built
+    binary): bulk Si's 4 valence bands are a trivial (non-topological) insulator --
+    the Chern number on every $k_3$ slice comes out $\sim 10^{-19}$ (floating-point
+    zero, not merely ``close to an integer''), with the admissibility diagnostic
+    ($\max|\tilde F_{12}|\lesssim 2\times 10^{-3}$ on a $4\times4\times4$ mesh) well
+    inside FHS's validity regime. This exercises the full Fortran-to-Python pipeline
+    end to end, but -- since Si's Chern number is $0=-0$ regardless of sign -- it
+    cannot by itself catch a conjugation-sign error; no topologically nontrivial
+    reference case is checked here yet.
+\end{itemize}
+
+\section{How to use in code: mesh mode}
+
+\begin{verbatim}
+from elkpy import Structure
+
+s = Structure(avec, species)
+calc = s.get_calculation(xc="PW", ngridk=(4, 4, 4))
+
+result = calc.get_berry_curvature(1, 4, directions=(1, 2))
+result["flux"]          # (n1, n2, n3) array, dimensionless plaquette flux
+result["chern_number"]  # (n3,) array, one Chern number per k3 slice
+result["max_flux"]      # admissibility diagnostic; keep well under pi
+\end{verbatim}
+\texttt{ist0}/\texttt{ist1} (here 1, 4) give the contiguous, 1-indexed
+second-variational band window (e.g.\ the occupied bands); \texttt{directions}
+(here the default, $(1,2)$) picks the two \texttt{ngridk} mesh directions the loop is
+built from, leaving the third as the free (slice) direction. The window must stay
+gapped from the rest of the spectrum at every mesh $\mathbf k$-point -- checked
+automatically, raising \texttt{ValueError} otherwise.
+
+\section{Path mode: Berry curvature at arbitrary k-points}
+
+\subsection{Motivation and construction}
+
+Mesh mode only ever evaluates on a periodic mesh covering the whole Brillouin zone --
+the only way to get a genuine Chern number (Eq.~\eqref{eq:latticechern} is a sum over a
+closed cover of $T^2$), but every Wilson-loop corner then has to be an actual mesh
+point, since \texttt{genwfsvp} only knows how to expand a wavefunction from an
+eigenvector \emph{already computed and stored} for a specific $k$-point
+(\texttt{getevecfv}/\texttt{getevecsv} read from \texttt{EVECFV.OUT}/\texttt{EVECSV.OUT}).
+Evaluating curvature along an arbitrary band-structure-style path (e.g.\
+$\Gamma$-K-M-K$'$-$\Gamma$) then means either interpolating a mesh or aligning
+\texttt{ngridk} to every point of interest by hand.
+
+Path mode instead evaluates one small, independent Wilson loop directly at each
+requested point $\mathbf k_0$ -- the same construction \texttt{pyqula}'s own
+\texttt{berry\_curvature(h, k, dk=...)} uses for a tight-binding Hamiltonian. Four
+corners
+\begin{equation}
+  \mathbf k_0 - \hat 1\,\texttt{dk} - \hat 2\,\texttt{dk}, \quad
+  \mathbf k_0 + \hat 1\,\texttt{dk} - \hat 2\,\texttt{dk}, \quad
+  \mathbf k_0 + \hat 1\,\texttt{dk} + \hat 2\,\texttt{dk}, \quad
+  \mathbf k_0 - \hat 1\,\texttt{dk} + \hat 2\,\texttt{dk}
+  \label{eq:corners}
+\end{equation}
+are walked cyclically, and the plaquette flux is the phase of the product of the four
+edge link variables,
+\begin{equation}
+  \theta(\mathbf k_0) = \arg\bigl[U_{1\to2}\,U_{2\to3}\,U_{3\to4}\,U_{4\to1}\bigr],
+  \qquad U_{i\to j} = \frac{\det M_{ij}}{|\det M_{ij}|}, \quad
+  (M_{ij})_{ab} = \langle\psi_a(\text{corner } i)|\psi_b(\text{corner } j)\rangle,
+  \label{eq:pathflux}
+\end{equation}
+and the curvature is $\theta(\mathbf k_0)$ divided by the loop's actual Cartesian area,
+$|(2\,\texttt{dk}\,\mathbf b_1)\times(2\,\texttt{dk}\,\mathbf b_2)|$ (not a bare
+$\texttt{dk}^2$, which silently assumes an orthogonal reciprocal lattice).
+Eq.~\eqref{eq:pathflux} is algebraically identical to Eq.~\eqref{eq:fieldstrength} with
+$k_\ell = $ corner 1: since $M_{ji} = M_{ij}^\dagger$ (a direct consequence of
+$\langle\psi_a(j)|\psi_b(i)\rangle = \overline{\langle\psi_b(i)|\psi_a(j)\rangle}$), each
+``backward'' edge's link variable is exactly the complex conjugate -- i.e.\ the
+inverse, since $|U|=1$ -- of the corresponding forward one, so the plain 4-term product
+in Eq.~\eqref{eq:pathflux} reduces exactly to FHS's
+$U_1(k_\ell)U_2(k_\ell+\hat1)U_1(k_\ell+\hat2)^{-1}U_2(k_\ell)^{-1}$ once corners 2 and 4
+are identified with $k_\ell+\hat1$ and $k_\ell+\hat2$. No Chern number is defined for a
+single loop (that needs the closed cover), and no automatic gap check runs in this mode
+(no eigenvalues are exported, unlike mesh mode's boundary-window eigenvalues) --
+degeneracy shows up instead as a singular or ill-conditioned $M_{ij}$, or as a value that
+grows rather than converges as \texttt{dk} shrinks (Section~4.4).
+
+\subsection{Implementation: fresh diagonalisation, not a mesh lookup}
+
+The one piece of machinery this needed that mesh mode didn't: \texttt{elkpy\_wfcorner}
+(\texttt{elkpy\_berry.f90}) expands a wavefunction at an arbitrary $\mathbf k$ by a
+\emph{fresh diagonalisation} of the converged Kohn-Sham Hamiltonian
+(\texttt{eveqnfv}/\texttt{eveqnsv}) rather than reading a previously stored eigenvector
+-- the same on-the-fly pattern \texttt{src/bandstr.f90} already uses for an arbitrary
+band-structure path (\texttt{readstate} $\to$ \texttt{genvsig} $\to$ \texttt{linengy}
+$\to$ \texttt{genapwlofr} $\to$ \texttt{gensocfr}, then diagonalise), reusing
+\texttt{genwfsvp}'s own on-the-fly $\mathbf G+\mathbf k$-vector setup
+(\texttt{gengkvec}/\texttt{gensfacgp}/\texttt{match}) rather than the mesh's persistent
+bookkeeping arrays. \texttt{elkpy\_berrycurv\_path} (task 9001) builds the four corners
+per requested point, calls \texttt{elkpy\_wfcorner} at each, reuses \texttt{genolpq} for
+the four cyclic edges exactly as task 9000 does, and writes the edge overlap matrices to
+\texttt{ELKPY\_BERRY\_PATH.OUT}; \texttt{parsers.berry.compute\_berry\_curvature\_path}
+evaluates Eq.~\eqref{eq:pathflux} in Python, for the same testability reason as mesh
+mode. Because each corner is a one-off diagonalisation from the converged
+density/potential, the ground state's own \texttt{ngridk} is irrelevant here -- unlike
+mesh mode, this task does not require \texttt{reducek}$=0$, and a $\Gamma$-only ground
+state is not a stopgap but simply sufficient, since task 9001 never touches whatever
+mesh the ground state happened to converge on.
+
+\subsection{The dk floor}
+
+\texttt{dk} is the accuracy knob, and unlike \texttt{pyqula}'s tight-binding version it
+has a floor: each corner is an independent LAPW diagonalisation, and the overlap between
+two corners separated by a very small \texttt{dk} is dominated by basis-truncation noise
+once \texttt{dk} is small enough -- the plaquette phase becomes a difference of
+nearly-identical quantities. There is no universally correct default; the working
+procedure is to evaluate one point of interest at a few \texttt{dk} values and look for
+where the resulting curvature plateaus (Section~4.4) before trusting a full path --
+\texttt{get\_berry\_curvature\_path} does not do this automatically.
+
+\subsection{Verification}
+
+\begin{itemize}
+  \item \emph{Gauge invariance and sign}, on synthetic single-loop data, mirroring
+    Section~3.4's mesh-mode tests: a random per-corner gauge transform leaves flux and
+    curvature exactly unchanged, and the sign of Eq.~\eqref{eq:pathflux} is pinned by
+    giving exactly one of the four edges a known phase and checking the flux equals it
+    (every edge enters the plain product with the same sign, unlike mesh mode's mixed
+    numerator/denominator form -- a difference confirmed by the derivation above, not
+    just asserted). The area normalisation is checked against a deliberately
+    non-orthogonal (hexagonal-like) \texttt{bvec}, so a bug that only appears for a
+    skewed reciprocal lattice isn't masked by testing with an identity metric
+    (\texttt{tests/test\_berry\_gauge\_invariance.py}).
+  \item \emph{Cross-check against mesh mode}, against a real compiled binary: for
+    \texttt{ngridk}$=(2,2,2)$, task 9000's plaquette anchored at $\Gamma$ visits
+    $\Gamma,\Gamma+\hat1,\Gamma+\hat1+\hat2,\Gamma+\hat2$ in that cyclic order
+    ($\hat\mu=1/\texttt{ngridk}(\mu)$); a path loop centred at
+    $\mathbf k_0=(1/4,1/4,0)$ with $\texttt{dk}=1/4$ visits the identical four points in
+    the identical order (Eq.~\eqref{eq:corners} with $\mathbf k_0-\hat\mu\,\texttt{dk}$
+    etc.\ working out to exactly those corners). On bulk Si, the two modes agree to
+    ordinary numerical-noise tolerance ($\sim10^{-5}$, not bit-for-bit, since one path
+    reads a converged mesh eigenvector and the other diagonalises fresh) --
+    (\texttt{tests/test\_calculation\_berry.py::test\_path\_and\_mesh\_conventions\_agree}).
+    This is the end-to-end Fortran-to-Python sign-chain check Section~3.4 notes was
+    still missing for mesh mode, though it only catches a discrepancy \emph{between} the
+    two modes, not a sign error shared by both.
+  \item \emph{Physics}, against a real compiled binary, on monolayer $h$-BN (broken
+    sublattice inversion symmetry between B and N, unlike Si -- so K and K$'$ are
+    physically inequivalent valleys rather than related by a crystal symmetry): the
+    occupied manifold's curvature vanishes at $\Gamma$ and M and is exactly
+    antisymmetric between K and K$'$ ($\Omega(\mathrm K)=8.568$,
+    $\Omega(\mathrm K')=-8.568$ Bohr$^{-2}$, agreeing to 0.01\%) -- the sign flip
+    time-reversal symmetry requires for a non-magnetic crystal, $\Omega(-\mathbf
+    k)=-\Omega(\mathbf k)$, and a substantially sharper discriminating check than Si's
+    Chern number, which is $0=-0$ regardless of sign. Getting to that result surfaced
+    two real usage pitfalls: (1) the occupied-band count must come from Elk's own
+    \texttt{EIGVAL.OUT} occupation numbers, not be assumed from a total (core $+$
+    valence) electron count -- core electrons are not among the valence bands
+    \texttt{nstsv} indexes at all, and getting this wrong silently selects the wrong
+    band without any error; (2) a single band's curvature can diverge approaching a
+    point where it is degenerate with a \emph{neighbouring occupied} band, not just the
+    first unoccupied one, even when the requested window's own outer boundary is safely
+    gapped -- $h$-BN's bands 3 and 4 are degenerate exactly at $\Gamma$, so band 4 alone
+    diverges there while the full occupied window (bands 1--4 together) does not, since
+    the non-Abelian construction (Eq.~\eqref{eq:link}) only requires the window gapped
+    from \emph{outside} itself, not internally non-degenerate.
+\end{itemize}
+
+\subsection{How to use in code}
+
+\begin{verbatim}
+result = calc.get_berry_curvature_path(
+    [(0.0, 0.0, 0.0), (1/3, 1/3, 0.0)],  # Gamma, K -- fractional coordinates
+    1, 4, directions=(1, 2), dk=0.005,
+)
+result[0]["curvature"]  # Bohr^-2, one dict per requested k-point
+\end{verbatim}
+\texttt{kpoints} need not lie on any mesh; \texttt{ist0}/\texttt{ist1}/\texttt{directions}
+match mesh mode's meaning. Unlike mesh mode, the requested window is \emph{not}
+automatically checked for a closing gap -- see Section~4.5's second pitfall.
+
+In place of \texttt{kpoints}, a symbolic path can be passed as
+\texttt{kpath="GKMG"} (pyqula/ASE style), discretized into \texttt{npoints} points along
+the path; each returned point then also carries a \texttt{"distance"} entry (cumulative
+Cartesian distance along the path) for plotting against the same $x$-axis convention as
+\texttt{get\_bands()}. Unlike \texttt{get\_bands()}/\texttt{get\_phonon\_dispersion()},
+whose \texttt{kpath} must be a single connected segment (they hand vertices to Elk's own
+\texttt{plot1d} task, which interpolates one continuous line), a disconnected \texttt{','}
+path (e.g. \texttt{"GKM,K'G"}, to continue past M into a specific $K'$ zone image rather
+than the nearest image a \texttt{plot1d}-style interpolation would pick) is fully
+supported here, since task 9001 evaluates every point's Wilson loop independently via
+fresh diagonalisation -- there is no interpolation across the break to get wrong:
+
+\begin{verbatim}
+result = calc.get_berry_curvature_path(
+    ist0=1, ist1=4, directions=(1, 2), dk=0.005,
+    kpath="GKM,K'G", npoints=200,
+)
+result[-1]["distance"]  # cumulative distance along the path, for plotting
+\end{verbatim}
+
+\end{document}

@@ -104,6 +104,16 @@ as a bridge to a tight-binding-style model, e.g. compatible with pyqula's
 analysis). Revisit if/when there's a specific target for it — don't build
 speculative infrastructure for this ahead of a real use case.
 
+**One such direction landed for real**: `get_berry_curvature()` (Wilson-loop /
+Fukui-Hatsugai-Suzuki Berry curvature, task 9000) — see `docs/design.md` §13 /
+`docs/berry_curvature.tex`. Task 550's own overlap machinery
+(`genwfsvp`/`genolpq`) turned out to be reusable, but task 550 itself wasn't
+(its neighbour-shell search calls the external Wannier90 library, only a stub
+in this build) — needed a small new Fortran task
+(`patches/0002-berry-curvature-wilson-loop.patch`) rather than being pure
+Python after all, since the two Wilson-loop directions being exact `ngridk`
+mesh generators let elkpy skip the shell search entirely.
+
 ## Tier 5 — Scale & execution
 
 1. **MPI-enabled build variant.** `LocalLauncher` now correctly refuses

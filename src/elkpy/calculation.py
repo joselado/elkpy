@@ -14,7 +14,7 @@ from pathlib import Path
 from . import config, spec
 from .inputfile import InputFile
 from .launcher import LocalLauncher
-from .parsers import band, dos, effmass, forces, geometry, info, totenergy, volumetric
+from .parsers import band, berry, dos, effmass, forces, geometry, info, totenergy, volumetric
 
 MANIFEST_NAME = ".elkpy_manifest.json"
 
@@ -310,6 +310,38 @@ class Calculation:
                 f"{sorted(special_points)}"
             ) from exc
 
+    def _kpath_to_points(self, kpath, npoints):
+        """Resolve a symbolic k-path (e.g. "GKMG" or "GKM,K'G") to a dense
+        list of (kx, ky, kz) fractional-coordinate points plus their
+        cumulative Cartesian distance along the path, via ASE's
+        Bravais-lattice-aware special points and Cell.bandpath()
+        discretization (optional 'ase' dependency, same as
+        _kpath_to_vertices()).
+
+        Unlike _kpath_to_vertices() (used by get_bands()/
+        get_phonon_dispersion(), which hand raw *vertices* to Elk's own
+        plot1d task for discretization -- and which therefore can't support
+        a disconnected ',' path, since plot1d interpolates one continuous
+        line), get_berry_curvature_path() evaluates one independent small
+        Wilson loop per point rather than relying on Elk's path machinery at
+        all, so the discretization happens here in Python and a disconnected
+        ',' path is fine: each point is independent, so there's no
+        interpolation across the break to get wrong.
+        """
+        try:
+            from ase.cell import Cell
+        except ImportError as exc:
+            raise ImportError(
+                "kpath= requires the optional 'ase' dependency "
+                "(pip install elkpy[ase]); pass kpoints= directly to avoid it"
+            ) from exc
+        from .structure import BOHR_PER_ANGSTROM
+
+        cell = Cell([[c / BOHR_PER_ANGSTROM for c in row] for row in self.structure.avec])
+        bandpath = cell.bandpath(kpath, npoints=npoints)
+        distances, _special_x, _special_labels = bandpath.get_linear_kpoint_axis()
+        return [tuple(k) for k in bandpath.kpts], list(distances)
+
     def get_energy(self):
         """Total energy in Hartree (task 0/1, TOTENERGY.OUT)."""
         self.ensure_ground_state()
@@ -483,6 +515,135 @@ class Calculation:
             "phonon_dispersion", [spec.TASKS["phonon_dfpt"], spec.TASKS["phonon_dispersion"]], blocks
         )
         return band.parse_bands(subdir / spec.OUTPUT_FILES["phdisp"])
+
+    def get_berry_curvature(self, ist0, ist1, directions=(1, 2), ngridk=None, gap_tol=1e-4):
+        """Berry curvature via the Wilson-loop / Fukui-Hatsugai-Suzuki (FHS)
+        method (task 9000, elkpy Fortran extension --
+        patches/0002-berry-curvature-wilson-loop.patch, src/elkpy_berry.f90;
+        not upstream Elk). See docs/design.md #13 / docs/berry_curvature.tex
+        for the physics (link variables, plaquette flux, admissibility) this
+        implements, and cond-mat/0503172 for the original method.
+
+        `ist0`/`ist1`: the contiguous, 1-indexed second-variational band
+        window (e.g. the occupied valence bands) the non-Abelian Wilson loop
+        is built from -- this window must stay gapped from the rest of the
+        spectrum at every k-point on the mesh, checked automatically (raises
+        ValueError otherwise; disable via `run_tasks` + `parsers.berry`
+        directly if you understand the risk).
+
+        `directions`: the two `ngridk` grid axes (1, 2 or 3, must differ)
+        spanning the Wilson-loop plane -- e.g. (1, 2) computes curvature on
+        the k1-k2 planes, with k3 as the free (slice) direction.
+
+        `ngridk` optionally overrides the calculation's k-mesh for this call
+        only, same as get_dos() -- a sampling-only parameter (docs/design.md
+        #4), though a denser mesh is generally needed here than for DOS: see
+        the returned "max_flux" diagnostic (the FHS admissibility condition,
+        cond-mat/0503172 eq. 14) to judge convergence.
+
+        Requires reducek=0 (set automatically) so that eigenvectors are
+        available on the full, non-reduced ngridk mesh the Wilson loop walks.
+
+        Returns a dict: {"flux": (n1,n2,n3) array (dimensionless plaquette
+        flux, eq. 8), "chern_number": (n_free,) array (one Chern number per
+        slice along the direction not in `directions`), "max_flux": float
+        (admissibility diagnostic -- keep well under pi)}.
+        """
+        blocks = {
+            "elkpy_berry": [(directions[0], directions[1], ist0, ist1)],
+            "reducek": [0],
+        }
+        subdir = self._run_resumed(
+            "berry", [spec.TASKS["berry_curvature"]], blocks, ngridk=tuple(ngridk) if ngridk else None
+        )
+        return berry.parse_berry_curvature(subdir / spec.OUTPUT_FILES["berry"], gap_tol=gap_tol)
+
+    def get_berry_curvature_path(
+        self,
+        kpoints=None,
+        ist0=None,
+        ist1=None,
+        directions=(1, 2),
+        dk=0.005,
+        kpath=None,
+        npoints=100,
+        label="berry_path",
+    ):
+        """Berry curvature at an arbitrary, explicit list of k-points (task
+        9001, elkpy Fortran extension -- patches/0002-berry-curvature-wilson-loop.patch,
+        src/elkpy_berry.f90). Unlike get_berry_curvature(), which evaluates
+        the Fukui-Hatsugai-Suzuki construction over a full periodic mesh to
+        get a Chern number, this evaluates one small Wilson loop per
+        requested point via fresh on-the-fly diagonalisation from the
+        converged potential -- the same construction pyqula's
+        `berry_curvature(h, k, dk=...)` uses -- so the requested points need
+        not lie on any mesh (e.g. an arbitrary band-structure-style path), at
+        the cost of not producing a Chern number (that requires closing the
+        loop over the whole Brillouin zone, which a handful of path points
+        don't do).
+
+        Pass exactly one of:
+        - `kpoints`: explicit iterable of (kx, ky, kz) in fractional
+          (lattice) coordinates.
+        - `kpath`: a symbolic path string, e.g. "GKMG" (pyqula/ASE style),
+          resolved via ASE's Bravais-lattice-aware special points and
+          discretized into `npoints` points along the path (density
+          proportional to each segment's Cartesian length -- ASE's
+          Cell.bandpath() convention; optional 'ase' dependency). Unlike
+          get_bands()/get_phonon_dispersion(), a disconnected ',' path (e.g.
+          "GKM,K'G" to skip straight from M to a specific K' image) IS
+          supported here -- see _kpath_to_points()'s docstring for why. Each
+          returned point also carries a "distance" entry (cumulative
+          Cartesian distance along the path, for plotting against the same
+          x-axis as get_bands()).
+
+        `ist0`/`ist1`: contiguous, 1-indexed band window, as in
+        get_berry_curvature() -- but note this method does *not* check that
+        the window stays gapped at every point (no eigenvalues are exported
+        for this mode); a closing gap shows up as a near-singular overlap
+        matrix, raising ValueError from parsers.berry, not a clean check.
+
+        `directions`: the two reciprocal-lattice directions (1, 2 or 3, must
+        differ) the small loop is built from, as in get_berry_curvature().
+
+        `dk`: fractional-coordinate half-width of the loop around each
+        point. This is the accuracy knob, with a floor: too large smears out
+        sharply-peaked curvature (e.g. near a Dirac-like gap), too small and
+        the overlap between two nearly-identical LAPW diagonalizations is
+        dominated by basis-truncation noise. There's no single correct
+        default -- check stability by evaluating one point of interest at a
+        few `dk` values and looking for where the resulting curvature
+        plateaus before trusting a full path.
+
+        `npoints`: only used with `kpath`, total points distributed across
+        the path (same meaning as get_bands()'s `npoints`).
+
+        Returns a list of dicts, one per requested k-point, in the order
+        given: {"k": (kx,ky,kz), "flux": dimensionless plaquette phase in
+        (-pi,pi], "curvature": flux / loop area (1/Bohr^2)}, plus a
+        "distance" entry when `kpath` was used.
+        """
+        if (kpoints is None) == (kpath is None):
+            raise ValueError("pass exactly one of kpoints= or kpath=")
+        if ist0 is None or ist1 is None:
+            raise ValueError("ist0 and ist1 are required")
+        distances = None
+        if kpath is not None:
+            kpoints, distances = self._kpath_to_points(kpath, npoints)
+        kpoints = [tuple(k) for k in kpoints]
+        blocks = {
+            "elkpy_berry_path": [
+                (directions[0], directions[1], dk, ist0, ist1),
+                (len(kpoints),),
+            ]
+            + kpoints
+        }
+        subdir = self._run_resumed(label, [spec.TASKS["berry_curvature_path"]], blocks)
+        result = berry.parse_berry_curvature_path(subdir / spec.OUTPUT_FILES["berry_path"])
+        if distances is not None:
+            for point, distance in zip(result, distances):
+                point["distance"] = float(distance)
+        return result
 
     def run_tasks(self, tasks, blocks=None, resume=True, label=None):
         """Escape hatch for any Elk task not covered by a named get_*

@@ -343,3 +343,176 @@ e = calc.get_energy()
 no effect), keys must be species present in `structure`, and values must be `>= 0`.
 Species omitted from `soc_scale` keep Elk's default global `socscf` (1.0 unless
 overridden separately via `extra_blocks`).
+
+## 13. Berry curvature via the Wilson-loop (Fukui-Hatsugai-Suzuki) method
+
+The second entry in the §8 patch series: `Calculation.get_berry_curvature(ist0, ist1,
+directions=(1, 2))`, a new task (9000, reserved high range per §8) computing the
+discretized Berry curvature of a contiguous band window via the Wilson-loop method of
+Fukui, Hatsugai and Suzuki (FHS; J. Phys. Soc. Jpn. **74**, 1674 (2005),
+arXiv:cond-mat/0503172) — the same lattice-gauge-theory construction used for Berry
+curvature in tight-binding codes (e.g. `pyqula`'s `berry_curvature`, cross-checked for
+convention per this project's development-practices policy). Full physics writeup
+(Berry connection/curvature/Chern number, the FHS link-variable/plaquette-flux
+construction, admissibility): `docs/berry_curvature.tex`.
+
+For a mesh point $k_\ell$ and mesh directions $\hat\mu=1,2$, FHS build a gauge-invariant
+plaquette flux entirely from wavefunction overlaps — never a bare derivative of a
+numerically-arbitrary phase — via link variables $U_\mu(k_\ell) = \det M^{(\mu)}(k_\ell)
+/ |\det M^{(\mu)}(k_\ell)|$, $M^{(\mu)}_{ab}(k_\ell) = \langle\psi_a(k_\ell)|
+\psi_b(k_\ell+\hat\mu)\rangle$ restricted to the requested band window, and the Chern
+number is the mesh sum of the resulting plaquette flux. The needed overlap matrices are
+exactly what Elk's Wannier90 export (task 550, `writew90mmn.f90`) already computes via
+`genwfsvp`/`genolpq` — but task 550 is unusable here without a change: which neighbour
+$k+b$ to use is decided by `wannier_setup`, a call into the external Wannier90 library
+that is only a stub (`w90_stub.f90`) unless Elk is linked against libwannier90, not part
+of this project's build. elkpy sidesteps that dependency rather than adding it: since
+the two Wilson-loop directions are exactly two of the three `ngridk` mesh generators,
+the neighbour of $k_\ell$ in direction $\mu$ is simply $k_\ell+\hat\mu$ directly (a
+mesh step of $1/\texttt{ngridk}(\mu)$), with no neighbour-shell search needed —
+`patches/0002-berry-curvature-wilson-loop.patch` adds one new file,
+`elkpy_berry.f90` (`elkpy_berrycurv`, reusing `genwfsvp`/`genolpq` exactly as
+`writew90mmn.f90` does, against this directly-constructed neighbour instead), plus the
+usual minimal-footprint hooks: one `elk.f90` dispatch line, one new `elkpy_berry` input
+block (`readinput.f90`) for the two directions and the band window, and four new
+`modmain.f90` integers. Requires `reducek=0` (set automatically by
+`get_berry_curvature()`) so eigenvectors are available on the full, non-reduced
+`ngridk` mesh the loop walks — with symmetry reduction on they only exist on the
+irreducible wedge. All Wilson-loop arithmetic (link variables, plaquette flux, Chern
+number, the admissibility diagnostic) is deliberately done in Python
+(`parsers/berry.py`), not Fortran, so it's unit-testable against synthetic overlap
+matrices with no Elk run at all (`tests/test_berry_gauge_invariance.py`).
+
+Verified: gauge invariance of the flux/Chern number under a random synthetic gauge
+transform of parsed overlap matrices (exact to floating-point precision, independent of
+whether the overlaps are physical) — note this does *not* pin the overall sign of the
+result: replacing every overlap matrix with its complex conjugate flips the sign of
+every flux value but leaves gauge invariance exactly intact (the phase-cancellation
+algebra is identical either way), so a conjugation-sign bug would pass this test
+undetected. The sign of the Python-side arithmetic (`parsers/berry.py`) is instead
+pinned directly against FHS eq. 8 with hand-constructed overlap matrices of known
+target phase (`test_flux_sign_matches_fhs_eq8_*`); the Fortran overlap convention
+(`M(a,b)=conjg(oq(b,a))` in `elkpy_berry.f90`) is pinned by direct derivation from
+`genolpq.f90`'s documented BLAS (`zgemv`) semantics, cross-checked twice, rather than
+verified at runtime — no test exercises the real Fortran-to-Python sign chain
+end-to-end, since Si's Chern number is 0 regardless of sign ($0=-0$) and no other
+topological reference case is used here. Also verified against a real compiled binary:
+bulk Si's 4 valence bands (a trivial insulator) give a Chern number of $\sim 10^{-19}$
+(floating-point zero) on every slice of a $4\times4\times4$ mesh, with the
+admissibility diagnostic comfortably inside FHS's validity regime
+(`tests/test_calculation_berry.py`).
+
+**How to use in code**:
+
+```python
+from elkpy import Structure
+
+s = Structure.from_ase(bulk("Si"))
+calc = s.get_calculation(xc="PW", ngridk=(4, 4, 4))
+result = calc.get_berry_curvature(1, 4, directions=(1, 2))
+result["chern_number"]  # one Chern number per slice along the free (3rd) direction
+result["max_flux"]      # admissibility diagnostic; keep well under pi
+```
+
+### Path mode: Berry curvature at arbitrary k-points (task 9001)
+
+`get_berry_curvature()` only ever evaluates on a periodic mesh covering the whole
+Brillouin zone — the only way to get a genuine Chern number, but it means every
+Wilson-loop corner has to be an actual mesh point (via `genwfsvp`'s file-backed
+`getevecfv`/`getevecsv`, which only knows about previously-diagonalised k-points), so
+querying curvature along an arbitrary band-structure-style path (e.g. Γ-K-M-K′-Γ) means
+either interpolating a mesh or aligning `ngridk` to every point of interest by hand —
+raised directly by a user wanting exactly that. `get_berry_curvature_path(kpoints, ist0,
+ist1, directions=(1, 2), dk=0.005)` (task 9001) adds the complementary mode: the same
+single-plaquette Wilson loop `pyqula`'s own `berry_curvature(h, k, dk=...)` uses — four
+corners $k_0\pm\hat\mu\,\texttt{dk}$ around each requested point, independently
+evaluated, no periodic mesh, no `ngridk`/`reducek` constraint at all. The trade-off is
+exactly what a single small loop can't give you: no Chern number (that needs a closed
+cover of the whole zone), and no automatic gap check across the mesh (no eigenvalues are
+exported in this mode — see below).
+
+Making this possible needed one genuinely new piece of machinery, not just a smaller
+version of task 9000: `genwfsvp` can only expand a wavefunction from an eigenvector
+*already computed and stored* for a specific k-point (`getevecfv`/`getevecsv` read from
+`EVECFV.OUT`/`EVECSV.OUT`), so an arbitrary loop corner needs a **fresh
+diagonalisation** from the converged potential instead. `elkpy_wfcorner`
+(`elkpy_berry.f90`) does exactly that — the same on-the-fly-diagonalisation pattern
+`src/bandstr.f90` already uses for a band-structure path (`readstate` → `genvsig` →
+`linengy` → `genapwlofr` → `gensocfr`, then `eveqnfv`/`eveqnsv` in place of the file
+read), reusing `genwfsvp`'s own on-the-fly `gengkvec`/`gensfacgp`/`match` G+k-vector
+setup rather than the mesh's `ngk`/`igkig` bookkeeping arrays. Because each corner is a
+one-off diagonalisation from the converged density/potential, the ground state's own
+`ngridk` is irrelevant to this mode too — a Γ-only ground state is not a stopgap here,
+it's sufficient, since task 9001 never touches whatever mesh the ground state happened
+to converge on. `elkpy_berrycurv_path` builds the four corners per requested point
+(`elkpy_berry_path` input block: two directions, `dk`, the band window, then an explicit
+k-point list), reuses `genolpq` for each of the four cyclic edges exactly as task 9000
+does, and writes the edge overlap matrices to `ELKPY_BERRY_PATH.OUT` —
+`parsers.berry.compute_berry_curvature_path` does the arithmetic (a plain product of the
+four edge link variables around the loop, algebraically identical to FHS eq. 8's
+`U1(k)U2(k+1)U1(k+2)^{-1}U2(k)^{-1}` form — verified by direct derivation, not just
+assumed — since each "backward" edge's link variable is exactly the complex-conjugate,
+i.e. inverse, of the corresponding "forward" one), normalised by the loop's actual
+Cartesian area (accounting for a non-orthogonal reciprocal lattice, not a bare
+`dk*dk`-style normalisation).
+
+`dk` is the accuracy knob here, and it has a floor unlike `pyqula`'s tight-binding
+version: each corner is an independent LAPW diagonalisation, and the overlap between two
+corners separated by a very small `dk` is dominated by basis-truncation noise once `dk`
+gets small enough, so there's no universally-correct default — check stability by
+evaluating one point of interest at a few `dk` values and looking for a plateau before
+trusting a full path (`get_berry_curvature_path` doesn't do this automatically).
+
+Verified: gauge invariance and the FHS-eq.-8 sign convention on synthetic single-loop
+data, and separately that the loop's area normalisation is correct for a non-orthogonal
+(hexagonal-like) reciprocal lattice, not just an orthogonal one
+(`tests/test_berry_gauge_invariance.py`); against a real compiled binary, that path mode
+and mesh mode agree (to ordinary numerical-noise tolerance, not bit-for-bit, since one
+reads a converged mesh eigenvector and the other diagonalises fresh) when both are asked
+to evaluate literally the same four k-points on bulk Si
+(`tests/test_calculation_berry.py::test_path_and_mesh_conventions_agree`) — this is the
+end-to-end Fortran-to-Python sign-chain cross-check the mesh-only verification above
+notes was still missing, though it only catches a discrepancy *between* the two modes,
+not a sign error shared by both. Also exercised on monolayer h-BN (broken sublattice
+inversion symmetry, so K and K′ are physically inequivalent, unlike Si): the occupied
+manifold's curvature vanishes at Γ and M and is exactly antisymmetric between K and K′
+($\Omega(\mathrm K)=8.568$, $\Omega(\mathrm K')=-8.568$ Bohr$^{-2}$, agreeing to 0.01%) —
+the sign flip time-reversal symmetry requires for a non-magnetic crystal,
+$\Omega(-k)=-\Omega(k)$, and a much sharper discriminating check than Si's Chern number
+(which is $0=-0$ either way). This also surfaced two real usage pitfalls worth noting
+for anyone reaching for this method: (1) the occupied-band count should come from Elk's
+own `EIGVAL.OUT` occupation numbers, not be assumed from a total (core + valence)
+electron count — core electrons aren't among the valence bands `nstsv` indexes at all;
+(2) a single band's curvature can still diverge approaching a k-point where it is
+degenerate with a *neighbouring occupied* band (not just the first unoccupied one) even
+when the requested window's own boundary is safely gapped — h-BN's bands 3 and 4 are
+degenerate exactly at Γ, so band 4 alone diverges there while the full occupied window
+(bands 1–4 together) does not, since the non-Abelian construction only needs the window
+gapped from *outside* itself.
+
+**How to use in code**:
+
+```python
+result = calc.get_berry_curvature_path(
+    [(0.0, 0.0, 0.0), (1 / 3, 1 / 3, 0.0)],  # Gamma, K -- fractional coordinates
+    1, 4, directions=(1, 2), dk=0.005,
+)
+result[0]["curvature"]  # Bohr^-2, one dict per requested k-point
+```
+
+`ist0`/`ist1` must be a contiguous, 1-indexed band window (e.g. the occupied bands)
+that stays gapped from the rest of the spectrum at every mesh k-point — checked
+automatically from exported boundary eigenvalues, raising `ValueError` otherwise.
+
+In place of `kpoints=`, a symbolic path can be passed as `kpath="GKMG"` (pyqula/ASE
+style, resolved via `_kpath_to_points()`, the same ASE-special-points machinery
+`get_bands()`/`get_phonon_dispersion()`'s `kpath=` already uses), discretized into
+`npoints` points along the path; each returned point then also carries a `"distance"`
+entry (cumulative Cartesian distance along the path) for plotting against the same
+x-axis convention as `get_bands()`. Unlike `get_bands()`/`get_phonon_dispersion()`,
+whose `kpath=` must be a single connected segment (they hand vertices to Elk's own
+`plot1d` task, which interpolates one continuous line and so cannot jump), a
+disconnected `,` path (e.g. `"GKM,K'G"`, to continue past M into a specific K′ zone
+image rather than the nearest image `plot1d`-style interpolation would pick) is fully
+supported here — task 9001 evaluates every point's Wilson loop independently via fresh
+diagonalisation, so there's no interpolation across the break to get wrong.

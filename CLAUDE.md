@@ -27,6 +27,54 @@ single-species cell and to scale independently per species in a two-species cell
 (`tests/test_calculation_soc.py`). Physics writeup (Koelling-Harmon SOC term, why a global scale is
 the wrong shape for multi-species cells): `docs/design.md` §12 and `docs/soc_scaling.tex`.
 
+Also implemented, as the second entry in the Fortran patch series:
+`Calculation.get_berry_curvature(ist0, ist1, directions=(1, 2))` — Berry curvature and Chern number via
+the Wilson-loop (Fukui-Hatsugai-Suzuki) method. `patches/0002-berry-curvature-wilson-loop.patch` adds a
+new task (9000) and `elkpy_berry.f90`, reusing Elk's own `genwfsvp`/`genolpq` (the machinery behind
+Wannier90 export, task 550) to export mesh-neighbour wavefunction overlap matrices without needing
+task 550's own neighbour-shell search (which calls the external Wannier90 library, unavailable in this
+build) — the two loop directions are exact `ngridk` mesh generators, so the neighbour is constructed
+directly. All Wilson-loop arithmetic (link variables, plaquette flux, Chern number, admissibility) is
+done in Python (`parsers/berry.py`), independently unit-tested against synthetic overlap matrices, both
+for gauge invariance and, separately, for sign -- gauge invariance alone can't catch a conjugation-sign
+flip, since `conj(M)` is exactly as gauge-invariant as `M`, so the Python arithmetic's sign is pinned
+directly against FHS eq. 8 with hand-built matrices of known phase (`tests/test_berry_gauge_invariance.py`).
+The Fortran conjugation convention itself rests on a `zgemv` BLAS-semantics derivation, not a runtime
+test. Against a real compiled binary, bulk Si's trivial valence manifold gives a Chern number of
+floating-point zero (`tests/test_calculation_berry.py`) -- which, being zero either way, would not itself
+catch a sign error.
+
+Also implemented: `Calculation.get_berry_curvature_path(kpoints, ist0, ist1, directions=(1, 2), dk=)`
+(task 9001) -- Berry curvature at an arbitrary, explicit list of k-points (e.g. a band-structure-style
+path), via one small Wilson loop per point (`pyqula`'s `berry_curvature(h, k, dk=...)` convention)
+rather than a periodic mesh. Also accepts `kpath="GKMG"` (pyqula/ASE-style symbolic path, same
+convention as `get_bands()`/`get_phonon_dispersion()`'s `kpath=`, resolved via `_kpath_to_points()`)
+instead of `kpoints=`, discretized into `npoints` points with each returned point additionally carrying
+a `"distance"` entry for plotting; unlike `get_bands()`/`get_phonon_dispersion()` (which hand vertices to
+Elk's own `plot1d` task, so a disconnected `,` path can't be interpolated), `get_berry_curvature_path()`
+evaluates every point independently, so a disconnected `,` path (e.g. to jump straight to a specific K′
+zone image) is fully supported. Needed one genuinely new piece of Fortran, not just a smaller task 9000:
+`elkpy_wfcorner` expands a wavefunction at an arbitrary k-point via fresh on-the-fly diagonalisation
+(`eveqnfv`/`eveqnsv`, the same pattern `src/bandstr.f90` uses for a band-structure path) rather than
+`genwfsvp`'s file-backed `getevecfv`/`getevecsv`, which only knows previously-diagonalised mesh points --
+so this mode needs no `ngridk` alignment and no `reducek=0` at all, and a Γ-only ground state is
+sufficient (not a stopgap), since task 9001 never touches the ground state's own mesh. Trade-off: no
+Chern number (needs a closed cover of the zone) and no automatic gap check (no eigenvalues exported in
+this mode). Verified against a real compiled binary two ways: mesh mode and path mode agree (to ordinary
+numerical tolerance) when asked to evaluate the literal same four k-points on bulk Si
+(`tests/test_calculation_berry.py::test_path_and_mesh_conventions_agree`); and on monolayer h-BN (broken
+sublattice inversion symmetry, unlike Si), the occupied manifold's curvature is exactly antisymmetric
+between the two physically inequivalent valleys K/K′ (8.568 vs -8.568 Bohr⁻², agreeing to 0.01%) --
+required by time-reversal symmetry and a much sharper check than Si's Chern number ($0=-0$ either way).
+That h-BN run also surfaced two real pitfalls worth remembering for any future band-window usage: the
+occupied-band count should come from Elk's own `EIGVAL.OUT` occupation numbers, not assumed from a total
+(core + valence) electron count (core electrons aren't among the valence bands `nstsv` indexes at all);
+and a single band's curvature can diverge near a point where it's degenerate with a *neighbouring
+occupied* band, not just the first unoccupied one, even when the requested window's own outer boundary
+stays gapped -- the fix is windowing the full degenerate group together, not picking a different single
+band. Physics writeup (both modes, the FHS link-variable/plaquette-flux construction, and exactly what
+is/isn't verified): `docs/design.md` §13 and `docs/berry_curvature.tex`.
+
 ## Architecture
 
 - `src/elkpy/structure.py` — `Structure`: lattice vectors (`avec`, Bohr) + species, each atom either a
@@ -59,7 +107,10 @@ the wrong shape for multi-species cells): `docs/design.md` §12 and `docs/soc_sc
 - `src/elkpy/parsers/` — one small module per output file family (`info`, `totenergy`, `band` — reused
   for phonon dispersion, since `PHDISP.OUT` shares `BAND.OUT`'s exact layout — `dos`, reused for phonon
   DOS, `forces`, `geometry`, `effmass`, `volumetric`), each verified against real Elk output, not
-  assumed from the manual.
+  assumed from the manual. `berry` is the exception to "just a parser": it also does all of the
+  Wilson-loop/Chern-number arithmetic in Python (`compute_berry_curvature()`), deliberately kept out of
+  Fortran so it's unit-testable against synthetic overlap matrices (`tests/test_berry_gauge_invariance.py`)
+  without an Elk run.
 - `src/elkpy/config.py` — locates the built `elk` binary (`build/elk/src/elk` by default, override via
   `ELKPY_ELK_BIN`) and the species directory (`vendor/elk/species/` by default).
 

@@ -1,0 +1,608 @@
+diff -ruN a/src/elk.f90 b/src/elk.f90
+--- a/src/elk.f90	2026-08-08 16:17:58.943412181 +0300
++++ b/src/elk.f90	2026-08-08 16:17:58.946084976 +0300
+@@ -281,6 +281,13 @@
+     call potuplot
+   case(771,772,773)
+     call maguplot
++  case(9000)
++! elkpy: Berry curvature (Wilson loop / Fukui-Hatsugai-Suzuki)
++    call elkpy_berrycurv
++  case(9001)
++! elkpy: Berry curvature at an arbitrary list of k-points (small Wilson
++! elkpy: loop per point, pyqula-style)
++    call elkpy_berrycurv_path
+   case default
+     write(*,*)
+     write(*,'("Error(elk): task not defined : ",I0)') task
+@@ -1622,6 +1629,38 @@
+ !   {\tt is} only, leaving every other species at {\tt socscf}. One line per
+ !   overridden species, terminated by a blank line.
+ !
++!   \block{elkpy\_berry}{
++!   {\tt dir1, dir2} & the two {\tt ngridk} grid directions (1, 2 or 3, must
++!    differ) spanning the Wilson-loop plane & integer, integer & -\\
++!   {\tt ist0, ist1} & first and last second-variational state index of the
++!    contiguous band window & integer, integer & -}
++!   elkpy extension (not upstream Elk, task 9000): computes mesh-neighbour
++!   wavefunction overlap matrices for the Wilson-loop (Fukui-Hatsugai-Suzuki)
++!   Berry curvature method, writing them to {\tt ELKPY\_BERRY.OUT}; the
++!   plaquette-flux/Chern-number arithmetic itself is done on the elkpy
++!   (Python) side. Requires {\tt reducek}={\tt 0} so that the eigenvectors
++!   are available on the full, non-reduced {\tt ngridk} mesh.
++!
++!   \block{elkpy\_berry\_path}{
++!   {\tt dir1, dir2} & the two directions (1, 2 or 3, must differ) spanning
++!    the small Wilson loop & integer, integer & -\\
++!   {\tt dk} & fractional-coordinate half-width of the small loop around
++!    each point & real & -\\
++!   {\tt ist0, ist1} & first and last second-variational state index of the
++!    contiguous band window & integer, integer & -\\
++!   {\tt np} & number of k-points & integer & -\\
++!   {\tt vkl} & one {\tt k1 k2 k3} line per k-point (lattice coordinates)
++!    & real(3) $\times$ np & -}
++!   elkpy extension (not upstream Elk, task 9001): like {\tt elkpy\_berry}
++!   above, but evaluates a small, pyqula-style Wilson loop
++!   ($\mathbf k\pm\hat\mu\,\texttt{dk}$, $\mu=$ {\tt dir1}, {\tt dir2}) at
++!   each of an arbitrary, explicitly listed set of k-points, via fresh
++!   on-the-fly diagonalisation (not a read from a previously stored
++!   eigenvector file) rather than a periodic {\tt ngridk} mesh -- so the
++!   k-points need not lie on any mesh, {\tt reducek} is irrelevant, and no
++!   Chern number (a whole-Brillouin-zone integral) is produced, only a
++!   local curvature per point. Writes to {\tt ELKPY\_BERRY\_PATH.OUT}.
++!
+ !   \block{spincore}{
+ !   {\tt spincore} & set to {\tt .true.} if the core should be spin-polarised
+ !    & logical & {\tt .false.}}
+diff -ruN a/src/elkpy_berry.f90 b/src/elkpy_berry.f90
+--- a/src/elkpy_berry.f90	1970-01-01 02:00:00.000000000 +0200
++++ b/src/elkpy_berry.f90	2026-08-08 16:17:58.954488764 +0300
+@@ -0,0 +1,398 @@
++
++! elkpy extension (not upstream Elk). This file is distributed under the
++! terms of the GNU General Public License, consistent with the rest of Elk.
++
++!BOP
++! !ROUTINE: elkpy_berrycurv
++! !INTERFACE:
++subroutine elkpy_berrycurv
++! !USES:
++use modmain
++! !DESCRIPTION:
++!   Exports the raw ingredients for the Wilson-loop (Fukui-Hatsugai-Suzuki,
++!   J. Phys. Soc. Jpn. {\bf 74}, 1674 (2005)) discretized Berry curvature:
++!   for every point $k_\ell$ of the full (non-reduced) {\tt ngridk} mesh and
++!   for the two grid directions requested via the {\tt elkpy\_berry} input
++!   block, the overlap matrices
++!   $$ M^{(d)}_{mn}(k_\ell) = \langle \psi_m(k_\ell) | \psi_n(k_\ell+e_d)
++!   \rangle, \qquad d=1,2, $$
++!   restricted to the requested contiguous band window $[ist0,ist1]$, are
++!   written to {\tt ELKPY\_BERRY.OUT}. $e_d$ is the mesh step in direction
++!   $d$: $1/${\tt ngridk(d)} of a reciprocal lattice vector in lattice
++!   coordinates. All further arithmetic (link variables, plaquette flux,
++!   Chern number) is done on the elkpy (Python) side --
++!   {\tt elkpy.parsers.berry} -- this routine only exports overlap matrices.
++!
++!   The overlaps themselves reuse exactly the same machinery Elk already
++!   uses to compute Wannier90's {\tt .mmn} file (see {\tt writew90mmn.f90}):
++!   {\tt genwfsvp} to expand the second-variational wavefunctions at a given
++!   $k$-point (APW+lo augmented, muffin-tin plus interstitial), and
++!   {\tt genolpq} for the overlap itself, including the
++!   $e^{i(k_\ell+e_d-k_\ell)\cdot r}=e^{ie_d\cdot r}$ phase factor needed
++!   inside the muffin-tins. Unlike {\tt writew90mmn.f90}, no call is made to
++!   {\tt wannier\_setup} (the Wannier90 library's nearest-neighbour shell
++!   finder, only a stub, {\tt w90\_stub.f90}, unless Elk is linked against
++!   the external libwannier90) -- since the two loop directions are exactly
++!   two of the three {\tt ngridk} mesh generators, the neighbour of $k_\ell$
++!   in direction $d$ is simply $k_\ell+e_d$ in lattice coordinates, with no
++!   shell search required.
++!
++!   Requires {\tt reducek}={\tt 0} (checked in {\tt calculation.py}, not
++!   here): with symmetry reduction on, eigenvectors would only be available
++!   on the irreducible wedge of the mesh, not the full mesh this routine
++!   loops over.
++!
++! !REVISION HISTORY:
++!   Created 2026 (elkpy)
++!EOP
++!BOC
++implicit none
++! local variables
++integer ik,idir,jdir,a,b,nst,nlo,nhi
++real(8) vl(3),vc(3),q,vkql(3)
++integer ngp(nspnfv),ngpq(nspnfv)
++character(256) fname
++! automatic arrays
++integer igpig(ngkmax,nspnfv),igpqig(ngkmax,nspnfv)
++real(8) jlqr(njcmax,nspecies)
++complex(8) ylmq(lmmaxo),sfacq(natmtot)
++! allocatable arrays
++integer, allocatable :: idx(:)
++complex(8), allocatable :: wfmt(:,:,:,:),wfir(:,:,:)
++complex(8), allocatable :: wfmtq(:,:,:,:),wfgpq(:,:,:)
++complex(8), allocatable :: expqmt(:,:),oq(:,:)
++complex(8), allocatable :: mlink(:,:,:,:)
++if ((elkpy_berry_ist0 < 1).or.(elkpy_berry_ist1 > nstsv).or. &
++ (elkpy_berry_ist1 < elkpy_berry_ist0)) then
++  write(*,*)
++  write(*,'("Error(elkpy_berrycurv): invalid band window (ist0,ist1,nstsv) : ", &
++   &3I8)') elkpy_berry_ist0,elkpy_berry_ist1,nstsv
++  write(*,*)
++  stop
++end if
++if (reducek /= 0) then
++  write(*,*)
++  write(*,'("Error(elkpy_berrycurv): reducek must be 0 (full, non-reduced &
++   &k-point mesh required)")')
++  write(*,*)
++  stop
++end if
++if ((ngridk(elkpy_berry_dir1) < 2).or.(ngridk(elkpy_berry_dir2) < 2)) then
++! elkpy: a loop direction with only one mesh point per this direction gives a
++! elkpy: zero-area plaquette (the "neighbour" is the point itself via a full
++! elkpy: reciprocal lattice vector) -- not a meaningful Wilson loop
++  write(*,*)
++  write(*,'("Error(elkpy_berrycurv): ngridk must be >= 2 in both loop &
++   &directions : ",3I8)') ngridk
++  write(*,*)
++  stop
++end if
++nst=elkpy_berry_ist1-elkpy_berry_ist0+1
++allocate(idx(nst))
++do a=1,nst
++  idx(a)=elkpy_berry_ist0+a-1
++end do
++! also export one band below and one above the requested window (clipped to
++! [1,nstsv]) so the elkpy (Python) side can check that the window stays
++! gapped from the rest of the spectrum at every k-point on the mesh -- the
++! non-Abelian Wilson-loop construction (eq. 16 of Fukui-Hatsugai-Suzuki)
++! requires this
++nlo=max(1,elkpy_berry_ist0-1)
++nhi=min(nstsv,elkpy_berry_ist1+1)
++do ik=1,nkptnr
++  call getevalsv(filext,ik,vkl(:,ik),evalsv(:,ik))
++end do
++allocate(wfmt(npcmtmax,natmtot,nspinor,nst),wfir(ngtc,nspinor,nst))
++allocate(wfmtq(npcmtmax,natmtot,nspinor,nst),wfgpq(ngkmax,nspinor,nst))
++allocate(expqmt(npcmtmax,natmtot),oq(nst,nst))
++! mlink(a,b,d,ik) = <psi_{idx(a)}(k_ik) | psi_{idx(b)}(k_ik+e_d)>, d=1,2
++! (d=1 -> elkpy_berry_dir1, d=2 -> elkpy_berry_dir2)
++allocate(mlink(nst,nst,2,nkptnr))
++do ik=1,nkptnr
++! generate the wavefunctions at k
++  call genwfsvp(.false.,.false.,nst,idx,ngdgc,igfc,vkl(:,ik),ngp,igpig,wfmt, &
++   ngtc,wfir)
++  do jdir=1,2
++    if (jdir == 1) then
++      idir=elkpy_berry_dir1
++    else
++      idir=elkpy_berry_dir2
++    end if
++! the mesh-step vector e_d in lattice coordinates: 1/ngridk(d) along the d-th
++! reciprocal lattice vector -- exact by construction (init1.f90's automatic
++! k-point box is the identity box), so no reciprocal-lattice-vector wrap
++! correction is needed here (contrast writew90mmn.f90's nncell, which
++! reconstructs this same small vector from a wrapped, shell-searched
++! neighbour)
++    vl(:)=0.d0
++    vl(idir)=1.d0/dble(ngridk(idir))
++    call r3mv(bvec,vl,vc)
++    q=sqrt(vc(1)**2+vc(2)**2+vc(3)**2)
++! generate phase factor function exp(ie_d.r) in the muffin-tins
++    call genjlgpr(1,q,jlqr)
++    call genylmv(.true.,lmaxo,vc,ylmq)
++    call gensfacgp(1,vc,1,sfacq)
++    call genexpmt(1,jlqr,ylmq,1,sfacq,expqmt)
++! k+e_d in lattice coordinates
++    vkql(1:3)=vkl(1:3,ik)+vl(1:3)
++! generate the wavefunctions at k+e_d
++    call genwfsvp(.false.,.true.,nst,idx,ngdgc,igfc,vkql,ngpq,igpqig,wfmtq, &
++     ngkmax,wfgpq)
++! overlap: oq(m,n) = <psi_{idx(m)}(k+e_d) | psi_{idx(n)}(k)> (genolpq's own
++! convention, same as used internally by writew90mmn.f90)
++    call genolpq(nst,expqmt,ngpq,igpqig,wfmt,wfir,wfmtq,wfgpq,oq)
++! store in the <k|k+e_d> convention: M(a,b) = <psi_a(k)|psi_b(k+e_d)>
++!                                            = conjg(oq(b,a))
++    do b=1,nst
++      do a=1,nst
++        mlink(a,b,jdir,ik)=conjg(oq(b,a))
++      end do
++    end do
++  end do
++end do
++deallocate(wfmt,wfir,wfmtq,wfgpq,expqmt,oq,idx)
++! write overlap matrices to file
++fname='ELKPY_BERRY.OUT'
++open(50,file=trim(fname),action='WRITE',form='FORMATTED')
++write(50,'("elkpy Berry curvature (Wilson loop / Fukui-Hatsugai-Suzuki): &
++ &mesh-neighbour overlap matrices")')
++write(50,*) ngridk(1),ngridk(2),ngridk(3)
++write(50,*) elkpy_berry_dir1,elkpy_berry_dir2
++write(50,*) elkpy_berry_ist0,elkpy_berry_ist1
++write(50,*) nlo,nhi
++write(50,*) bvec(1,1),bvec(2,1),bvec(3,1)
++write(50,*) bvec(1,2),bvec(2,2),bvec(3,2)
++write(50,*) bvec(1,3),bvec(2,3),bvec(3,3)
++write(50,*) nkptnr
++do ik=1,nkptnr
++  write(50,*) ivk(1,ik),ivk(2,ik),ivk(3,ik)
++  do a=nlo,nhi
++    write(50,*) evalsv(a,ik)
++  end do
++  do jdir=1,2
++    do b=1,nst
++      do a=1,nst
++        write(50,*) dble(mlink(a,b,jdir,ik)),aimag(mlink(a,b,jdir,ik))
++      end do
++    end do
++  end do
++end do
++close(50)
++deallocate(mlink)
++write(*,*)
++write(*,'("Info(elkpy_berrycurv): mesh-neighbour overlaps written to file ", &
++ &A)') trim(fname)
++end subroutine
++!EOC
++
++!BOP
++! !ROUTINE: elkpy_wfcorner
++! !INTERFACE:
++subroutine elkpy_wfcorner(vpl,nst,idx,wfmt,wfir,wfgp,ngp,igpig)
++! !USES:
++use modmain
++! !DESCRIPTION:
++!   Second-variational wavefunction (muffin-tin, plus both real-space and
++!   G+p-space interstitial representations -- {\tt wfir}/{\tt wfgp}, needed
++!   for the two different roles a corner plays in {\tt genolpq} depending on
++!   which of its two neighbouring edges is being evaluated) at an arbitrary
++!   $k$-point {\tt vpl}, obtained by a fresh on-the-fly diagonalisation of
++!   the converged Kohn-Sham Hamiltonian ({\tt eveqnfv}/{\tt eveqnsv}) rather
++!   than reading a previously stored eigenvector ({\tt getevecfv}/
++!   {\tt getevecsv}, as {\tt genwfsvp} uses) -- so {\tt vpl} need not lie on
++!   any previously-diagonalised mesh. Used by {\tt elkpy\_berrycurv\_path}
++!   to evaluate a small Wilson loop around an arbitrary point (cf.
++!   {\tt bandstr.f90}, which diagonalises fresh at each of an arbitrary
++!   band-structure path's points the same way).
++!
++! !REVISION HISTORY:
++!   Created 2026 (elkpy)
++!EOP
++!BOC
++implicit none
++! arguments
++real(8), intent(in) :: vpl(3)
++integer, intent(in) :: nst,idx(*)
++complex(8), intent(out) :: wfmt(npcmtmax,natmtot,nspinor,nst)
++complex(8), intent(out) :: wfir(ngtc,nspinor,nst)
++complex(8), intent(out) :: wfgp(ngkmax,nspinor,nst)
++integer, intent(out) :: ngp(nspnfv),igpig(ngkmax,nspnfv)
++! local variables
++integer ispn,nmatp
++real(8) vl(3),vc(3)
++! automatic arrays
++real(8) vgpl(3,ngkmax,nspnfv),vgpc(3,ngkmax),gpc(ngkmax)
++real(8) evalfv(nstfv,nspnfv),evalsv_(nstsv)
++! allocatable arrays
++complex(8), allocatable :: sfacgp(:,:),apwalm(:,:,:,:,:)
++complex(8), allocatable :: evecfv(:,:,:),evecsv(:,:)
++if (spinsprl) then
++  write(*,*)
++  write(*,'("Error(elkpy_wfcorner): spin-spirals not supported by the elkpy &
++   &Berry curvature path task")')
++  write(*,*)
++  stop
++end if
++allocate(sfacgp(ngkmax,natmtot))
++allocate(apwalm(ngkmax,apwordmax,lmmaxapw,natmtot,nspnfv))
++allocate(evecfv(nmatmax,nstfv,nspnfv),evecsv(nstsv,nstsv))
++! loop over first-variational spins (nspnfv = 2 for spin-spirals only, which
++! are rejected above, so this is a single pass in practice)
++do ispn=1,nspnfv
++  vl(1:3)=vpl(1:3)
++  vc(1:3)=bvec(1:3,1)*vpl(1)+bvec(1:3,2)*vpl(2)+bvec(1:3,3)*vpl(3)
++! generate the G+p-vectors
++  call gengkvec(ngvc,ivg,vgc,vl,vc,gkmax,ngkmax,ngp(ispn),igpig(:,ispn), &
++   vgpl(:,:,ispn),vgpc,gpc)
++! generate structure factors for G+p-vectors
++  call gensfacgp(ngp(ispn),vgpc,ngkmax,sfacgp)
++! find the matching coefficients
++  call match(ngp(ispn),vgpc,gpc,sfacgp,apwalm(:,:,:,:,ispn))
++! solve the first-variational eigenvalue equation fresh (not read from file)
++  nmatp=ngp(ispn)+nlotot
++  call eveqnfv(nmatp,ngp(ispn),igpig(:,ispn),vc,vgpc,apwalm(:,:,:,:,ispn), &
++   evalfv(:,ispn),evecfv(:,:,ispn))
++end do
++deallocate(sfacgp)
++! solve the second-variational eigenvalue equation fresh; vgpc here is
++! spin 1's (nspnfv=1 in the only case reached, since spin-spirals were
++! rejected above -- see genwfsvp.f90 for the same reuse-after-loop pattern).
++! evalsv_ is a local array, not a slice of the global evalsv(:,ik) -- there
++! is no valid mesh index ik for an arbitrary point, and writing into evalsv
++! would corrupt ground-state eigenvalues used elsewhere in this invocation.
++call eveqnsv(ngp(1),igpig(:,1),vgpc,apwalm,evalfv,evecfv,evalsv_,evecsv)
++! second-variational wavefunctions: muffin-tin (spherical coordinate form,
++! shared by both interstitial representations) plus both interstitial
++! representations, since a corner plays both a "bra" role (needs wfir, real
++! space) and a "ket" role (needs wfgp, G+p space) in genolpq depending on
++! which neighbouring edge is being evaluated
++call genwfsv(.false.,.false.,nst,idx,ngdgc,igfc,ngp,igpig,apwalm,evecfv, &
++ evecsv,wfmt,ngtc,wfir)
++call genwfsv(.false.,.true.,nst,idx,ngdgc,igfc,ngp,igpig,apwalm,evecfv, &
++ evecsv,wfmt,ngkmax,wfgp)
++deallocate(apwalm,evecfv,evecsv)
++end subroutine
++!EOC
++
++!BOP
++! !ROUTINE: elkpy_berrycurv_path
++! !INTERFACE:
++subroutine elkpy_berrycurv_path
++! !USES:
++use modmain
++! !DESCRIPTION:
++!   Berry curvature at an arbitrary, explicitly-listed set of k-points, each
++!   evaluated from its own small Wilson loop (four corners
++!   $\mathbf k_0\pm\hat\mu\,\texttt{dk}$, $\mu=$ {\tt dir1}, {\tt dir2}) --
++!   the same construction as {\tt pyqula}'s {\tt berry\_curvature}, and the
++!   $M=1$ (single-plaquette) special case of the Fukui-Hatsugai-Suzuki
++!   lattice field strength computed by {\tt elkpy\_berrycurv} (task 9000)
++!   over a full periodic mesh. Unlike task 9000, the four corners are
++!   obtained by fresh on-the-fly diagonalisation ({\tt elkpy\_wfcorner}), not
++!   read from a previously-stored eigenvector file, so the k-points need not
++!   lie on any mesh and {\tt reducek} is irrelevant here. Writes the four
++!   edge overlap matrices per point to {\tt ELKPY\_BERRY\_PATH.OUT}; as with
++!   task 9000, all further arithmetic (the plaquette determinant/phase, the
++!   curvature = flux / (4 dk^2)) is done on the elkpy (Python) side. Since
++!   each point is an independent small loop rather than a closed cover of
++!   the Brillouin zone, no Chern number is produced here, only a local
++!   curvature.
++!
++! !REVISION HISTORY:
++!   Created 2026 (elkpy)
++!EOP
++!BOC
++implicit none
++! local variables
++integer ip,c,e,a,b,nst,i1,i2
++real(8) dxv(3),dyv(3),k0(3),vl(3),vc(3),q
++character(256) fname
++! automatic arrays
++real(8) jlqr(njcmax,nspecies)
++complex(8) ylmq(lmmaxo),sfacq(natmtot)
++real(8) corner(3,4)
++integer ngp_c(nspnfv,4),igpig_c(ngkmax,nspnfv,4)
++integer, parameter :: edge_i(4)=[1,2,3,4],edge_j(4)=[2,3,4,1]
++! allocatable arrays
++integer, allocatable :: idx(:)
++complex(8), allocatable :: wfmt(:,:,:,:,:),wfir(:,:,:,:),wfgp(:,:,:,:)
++complex(8), allocatable :: expqmt(:,:),oq(:,:),medge(:,:,:)
++if ((elkpy_berrypath_ist0 < 1).or.(elkpy_berrypath_ist1 > nstsv).or. &
++ (elkpy_berrypath_ist1 < elkpy_berrypath_ist0)) then
++  write(*,*)
++  write(*,'("Error(elkpy_berrycurv_path): invalid band window (ist0,ist1,&
++   &nstsv) : ",3I8)') elkpy_berrypath_ist0,elkpy_berrypath_ist1,nstsv
++  write(*,*)
++  stop
++end if
++nst=elkpy_berrypath_ist1-elkpy_berrypath_ist0+1
++allocate(idx(nst))
++do a=1,nst
++  idx(a)=elkpy_berrypath_ist0+a-1
++end do
++allocate(wfmt(npcmtmax,natmtot,nspinor,nst,4))
++allocate(wfir(ngtc,nspinor,nst,4),wfgp(ngkmax,nspinor,nst,4))
++allocate(expqmt(npcmtmax,natmtot),oq(nst,nst),medge(nst,nst,4))
++fname='ELKPY_BERRY_PATH.OUT'
++open(50,file=trim(fname),action='WRITE',form='FORMATTED')
++write(50,'("elkpy Berry curvature path (small Wilson loop per point, cf. &
++ &pyqula)")')
++write(50,*) elkpy_berrypath_dir1,elkpy_berrypath_dir2,elkpy_berrypath_dk
++write(50,*) elkpy_berrypath_ist0,elkpy_berrypath_ist1
++write(50,*) bvec(1,1),bvec(2,1),bvec(3,1)
++write(50,*) bvec(1,2),bvec(2,2),bvec(3,2)
++write(50,*) bvec(1,3),bvec(2,3),bvec(3,3)
++write(50,*) elkpy_berrypath_np
++do ip=1,elkpy_berrypath_np
++  k0(1:3)=elkpy_berrypath_vkl(1:3,ip)
++  dxv(:)=0.d0; dxv(elkpy_berrypath_dir1)=elkpy_berrypath_dk
++  dyv(:)=0.d0; dyv(elkpy_berrypath_dir2)=elkpy_berrypath_dk
++! four corners in cyclic (Wilson-loop) order, matching pyqula's
++! wf1=k-dx-dy, wf2=k+dx-dy, wf3=k+dx+dy, wf4=k-dx+dy
++  corner(:,1)=k0(:)-dxv(:)-dyv(:)
++  corner(:,2)=k0(:)+dxv(:)-dyv(:)
++  corner(:,3)=k0(:)+dxv(:)+dyv(:)
++  corner(:,4)=k0(:)-dxv(:)+dyv(:)
++  do c=1,4
++    call elkpy_wfcorner(corner(:,c),nst,idx,wfmt(:,:,:,:,c),wfir(:,:,:,c), &
++     wfgp(:,:,:,c),ngp_c(:,c),igpig_c(:,:,c))
++  end do
++  do e=1,4
++    i1=edge_i(e); i2=edge_j(e)
++! small q-vector for this edge (exactly +-2*dk along one loop direction)
++    vl(1:3)=corner(1:3,i2)-corner(1:3,i1)
++    call r3mv(bvec,vl,vc)
++    q=sqrt(vc(1)**2+vc(2)**2+vc(3)**2)
++! generate phase factor function exp(iq.r) in the muffin-tins
++    call genjlgpr(1,q,jlqr)
++    call genylmv(.true.,lmaxo,vc,ylmq)
++    call gensfacgp(1,vc,1,sfacq)
++    call genexpmt(1,jlqr,ylmq,1,sfacq,expqmt)
++! overlap: oq(m,n) = <psi_m(corner i2)|psi_n(corner i1)> (genolpq's own
++! convention, same as elkpy_berrycurv/writew90mmn.f90)
++    call genolpq(nst,expqmt,ngp_c(:,i2),igpig_c(:,:,i2),wfmt(:,:,:,:,i1), &
++     wfir(:,:,:,i1),wfmt(:,:,:,:,i2),wfgp(:,:,:,i2),oq)
++! store in the <corner i1|corner i2> convention:
++! medge(a,b,e) = <psi_a(corner i1)|psi_b(corner i2)> = conjg(oq(b,a))
++    do b=1,nst
++      do a=1,nst
++        medge(a,b,e)=conjg(oq(b,a))
++      end do
++    end do
++  end do
++  write(50,*) k0(1),k0(2),k0(3)
++  do e=1,4
++    do b=1,nst
++      do a=1,nst
++        write(50,*) dble(medge(a,b,e)),aimag(medge(a,b,e))
++      end do
++    end do
++  end do
++end do
++close(50)
++deallocate(wfmt,wfir,wfgp,expqmt,oq,medge,idx)
++write(*,*)
++write(*,'("Info(elkpy_berrycurv_path): path overlaps written to file ",A)') &
++ trim(fname)
++end subroutine
++!EOC
+diff -ruN a/src/Makefile b/src/Makefile
+--- a/src/Makefile	2026-08-08 16:17:58.948843201 +0300
++++ b/src/Makefile	2026-08-08 16:17:58.952138650 +0300
+@@ -222,9 +222,13 @@
+  writew90mmn.f90 writew90spn.f90 writew90amn.f90 writew90unk.f90 \
+  projkw90.f90
+ 
++# elkpy extension (not upstream Elk): Wilson-loop / Fukui-Hatsugai-Suzuki
++# Berry curvature (task 9000, see elkpy_berry.f90)
++SRC_ELKPY = elkpy_berry.f90
++
+ SRC = $(SRC_modules) $(SRC_FFT) $(SRC_elk) $(SRC_main) $(SRC_LAPACK) \
+  $(SRC_phonon) $(SRC_XC) $(SRC_DFTU) $(SRC_RDMFT) $(SRC_GW) $(SRC_TDDFT) \
+- $(SRC_ULR) $(SRC_W90) $(SRC_bog) $(SRC_TDHFC)
++ $(SRC_ULR) $(SRC_W90) $(SRC_bog) $(SRC_TDHFC) $(SRC_ELKPY)
+ 
+ OBJ = $(SRC:.f90=.o)
+ MOD = $(SRC_modules:.f90=.o)
+diff -ruN a/src/modmain.f90 b/src/modmain.f90
+--- a/src/modmain.f90	2026-08-08 16:17:58.931630295 +0300
++++ b/src/modmain.f90	2026-08-08 16:17:58.934813071 +0300
+@@ -233,6 +233,21 @@
+ ! elkpy: per-species override of socscf (sentinel < 0 means "not set, use
+ ! elkpy: socscf"); see elkpy_socscale in readinput.f90 and gensocfr.f90
+ real(8) socscfsp(maxspecies)
++! elkpy: Berry curvature (Wilson-loop / Fukui-Hatsugai-Suzuki) task -- the two
++! elkpy: k-mesh grid directions spanning the Wilson-loop plane and the
++! elkpy: contiguous second-variational band window; see elkpy_berry in
++! elkpy: readinput.f90 and elkpy_berry.f90
++integer elkpy_berry_dir1,elkpy_berry_dir2
++integer elkpy_berry_ist0,elkpy_berry_ist1
++! elkpy: Berry curvature path task -- a small Wilson loop (pyqula-style) is
++! elkpy: evaluated at each of an arbitrary list of k-points, via fresh
++! elkpy: on-the-fly diagonalisation rather than the periodic-mesh task
++! elkpy: above; see elkpy_berry_path in readinput.f90 and elkpy_berry.f90
++integer elkpy_berrypath_dir1,elkpy_berrypath_dir2
++real(8) elkpy_berrypath_dk
++integer elkpy_berrypath_ist0,elkpy_berrypath_ist1
++integer elkpy_berrypath_np
++real(8), allocatable :: elkpy_berrypath_vkl(:,:)
+ ! bforb is .true. for external B-field-orbit coupling
+ logical bforb
+ ! bfdmag is .true. for external B-field diamagnetic coupling
+diff -ruN a/src/readinput.f90 b/src/readinput.f90
+--- a/src/readinput.f90	2026-08-08 16:17:58.937953692 +0300
++++ b/src/readinput.f90	2026-08-08 16:17:58.940416449 +0300
+@@ -152,6 +152,18 @@
+ socscf=1.d0
+ ! elkpy: sentinel < 0 means "not overridden by elkpy_socscale"
+ socscfsp(:)=-1.d0
++! elkpy: sentinel ist0=0 means "elkpy_berry block not given"
++elkpy_berry_dir1=1
++elkpy_berry_dir2=2
++elkpy_berry_ist0=0
++elkpy_berry_ist1=0
++elkpy_berrypath_dir1=1
++elkpy_berrypath_dir2=2
++! elkpy: sentinel <= 0 means "elkpy_berry_path block not given"
++elkpy_berrypath_dk=0.d0
++elkpy_berrypath_ist0=0
++elkpy_berrypath_ist1=0
++elkpy_berrypath_np=0
+ bforb=.false.
+ bfdmag=.false.
+ atpopt=1
+@@ -654,6 +666,84 @@
+   write(*,'("Adjust maxspecies in modmain and recompile code")')
+   write(*,*)
+   stop
++case('elkpy_berry')
++! elkpy: Berry curvature (Wilson-loop / Fukui-Hatsugai-Suzuki) task parameters:
++! elkpy: the two k-mesh grid directions spanning the Wilson-loop plane, and
++! elkpy: the contiguous second-variational band window [ist0,ist1]
++  read(50,*,err=20) elkpy_berry_dir1,elkpy_berry_dir2,elkpy_berry_ist0, &
++   elkpy_berry_ist1
++  if ((elkpy_berry_dir1 < 1).or.(elkpy_berry_dir1 > 3).or. &
++   (elkpy_berry_dir2 < 1).or.(elkpy_berry_dir2 > 3).or. &
++   (elkpy_berry_dir1 == elkpy_berry_dir2)) then
++    write(*,*)
++    write(*,'("Error(readinput): elkpy_berry directions must be distinct and &
++     &in [1,3] : ",2I8)') elkpy_berry_dir1,elkpy_berry_dir2
++    write(*,*)
++    stop
++  end if
++  if (elkpy_berry_ist0 < 1) then
++    write(*,*)
++    write(*,'("Error(readinput): elkpy_berry ist0 must be >= 1 : ",I8)') &
++     elkpy_berry_ist0
++    write(*,*)
++    stop
++  end if
++  if (elkpy_berry_ist1 < elkpy_berry_ist0) then
++    write(*,*)
++    write(*,'("Error(readinput): elkpy_berry ist1 < ist0 : ",2I8)') &
++     elkpy_berry_ist0,elkpy_berry_ist1
++    write(*,*)
++    stop
++  end if
++case('elkpy_berry_path')
++! elkpy: Berry curvature path task parameters: the two loop directions, the
++! elkpy: small-loop half-width dk (fractional coordinates), the band window,
++! elkpy: then the number of k-points followed by one 'k1 k2 k3' line each
++  read(50,*,err=20) elkpy_berrypath_dir1,elkpy_berrypath_dir2,elkpy_berrypath_dk, &
++   elkpy_berrypath_ist0,elkpy_berrypath_ist1
++  if ((elkpy_berrypath_dir1 < 1).or.(elkpy_berrypath_dir1 > 3).or. &
++   (elkpy_berrypath_dir2 < 1).or.(elkpy_berrypath_dir2 > 3).or. &
++   (elkpy_berrypath_dir1 == elkpy_berrypath_dir2)) then
++    write(*,*)
++    write(*,'("Error(readinput): elkpy_berry_path directions must be distinct and &
++     &in [1,3] : ",2I8)') elkpy_berrypath_dir1,elkpy_berrypath_dir2
++    write(*,*)
++    stop
++  end if
++  if (elkpy_berrypath_dk <= 0.d0) then
++    write(*,*)
++    write(*,'("Error(readinput): elkpy_berry_path dk must be > 0 : ",G18.10)') &
++     elkpy_berrypath_dk
++    write(*,*)
++    stop
++  end if
++  if (elkpy_berrypath_ist0 < 1) then
++    write(*,*)
++    write(*,'("Error(readinput): elkpy_berry_path ist0 must be >= 1 : ",I8)') &
++     elkpy_berrypath_ist0
++    write(*,*)
++    stop
++  end if
++  if (elkpy_berrypath_ist1 < elkpy_berrypath_ist0) then
++    write(*,*)
++    write(*,'("Error(readinput): elkpy_berry_path ist1 < ist0 : ",2I8)') &
++     elkpy_berrypath_ist0,elkpy_berrypath_ist1
++    write(*,*)
++    stop
++  end if
++  read(50,*,err=20) elkpy_berrypath_np
++  if (elkpy_berrypath_np < 1) then
++    write(*,*)
++    write(*,'("Error(readinput): elkpy_berry_path number of k-points must be &
++     &>= 1 : ",I8)') elkpy_berrypath_np
++    write(*,*)
++    stop
++  end if
++  if (allocated(elkpy_berrypath_vkl)) deallocate(elkpy_berrypath_vkl)
++  allocate(elkpy_berrypath_vkl(3,elkpy_berrypath_np))
++  do i=1,elkpy_berrypath_np
++    read(50,*,err=20) elkpy_berrypath_vkl(1:3,i)
++  end do
+ case('bforb')
+   read(50,*,err=20) bforb
+ case('bfdmag')

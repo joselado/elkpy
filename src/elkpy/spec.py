@@ -36,6 +36,11 @@ TASKS = {
                            # not wrapped here, reachable via run_tasks()
     "phonon_dos": 210,     # src/phdos.f90
     "phonon_dispersion": 220,  # src/phdisp.f90
+    "berry_curvature": 9000,  # elkpy extension (not upstream Elk), src/elkpy_berry.f90 --
+                              # patches/0002-berry-curvature-wilson-loop.patch; reserved
+                              # high task number per docs/design.md #8
+    "berry_curvature_path": 9001,  # elkpy extension: small Wilson loop at an arbitrary
+                                    # list of k-points (pyqula-style), src/elkpy_berry.f90
 }
 
 # output filenames, per the `open(unit, file=...)` calls in the cited source
@@ -53,4 +58,6 @@ OUTPUT_FILES = {
     "phdos": "PHDOS.OUT",                  # src/phdos.f90
     "phdisp": "PHDISP.OUT",                # src/phdisp.f90
     "phdlines": "PHDLINES.OUT",            # src/phdisp.f90
+    "berry": "ELKPY_BERRY.OUT",            # elkpy extension, src/elkpy_berry.f90
+    "berry_path": "ELKPY_BERRY_PATH.OUT",  # elkpy extension, src/elkpy_berry.f90
 }
