@@ -2,8 +2,14 @@
 A Python interface to [Elk](https://elk.sourceforge.io/), an all-electron
 full-potential linearized augmented-plane-wave (FP-LAPW) code that solves the
 Kohn-Sham equations of density-functional theory,
-$$ \Big[-\tfrac12\nabla^2+v_{\rm eff}[n](\mathbf r)\Big]\psi_{i\mathbf k}(\mathbf r)=\epsilon_i(\mathbf k)\,\psi_{i\mathbf k}(\mathbf r), \qquad v_{\rm eff}=v_{\rm ext}+v_H[n]+v_{xc}[n], $$
-self-consistently in the electron density $n(\mathbf r)=\sum_{i\mathbf k}^{\rm occ}|\psi_{i\mathbf k}(\mathbf r)|^2$. elkpy wraps Elk's `elk.in`/task-number workflow in a small, `pyqula`-style object model (`Structure`, `Calculation`), and adds physics Elk itself does not provide on top: per-species spin-orbit coupling scaling, Berry curvature/Chern numbers via a Wilson-loop method, and fast eigenstate/wavefunction-overlap queries at arbitrary k-points.
+$$ \Big[-\tfrac12\nabla^2+v_{\rm eff}(\mathbf r)\Big]\psi_{i\mathbf k}(\mathbf r)=\epsilon_i(\mathbf k)\,\psi_{i\mathbf k}(\mathbf r). $$
+$v_{\rm eff}=v_{\rm ext}+v_H[n]+v_{xc}[n]$ is solved self-consistently in the electron
+density $n(\mathbf r)=\sum_{i\mathbf k}^{\rm occ}|\psi_{i\mathbf k}(\mathbf r)|^2$. elkpy
+wraps Elk's `elk.in`/task-number workflow in a small, `pyqula`-style object model
+(`Structure`, `Calculation`), and adds physics Elk itself does not provide on top:
+per-species spin-orbit coupling scaling, Berry curvature/Chern numbers via a
+Wilson-loop method, and fast eigenstate/wavefunction-overlap queries at arbitrary
+k-points.
 
 ```python
 from elkpy.structure import Structure
