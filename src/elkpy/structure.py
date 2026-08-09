@@ -87,3 +87,22 @@ class Structure:
         from .calculation import Calculation
 
         return Calculation(self, workdir, **params)
+
+    def atom_index(self, symbol, index=0):
+        """0-based global atom index matching Elk's own atom ordering
+        (species in declaration order, then atoms within each species in
+        order -- the same convention get_forces() documents, and the order
+        Calculation.get_atom_projection()'s per-atom matrices come back in).
+        `index` is 0-based within `symbol`'s own atom list."""
+        if symbol not in self.species:
+            raise ValueError(f"species {symbol!r} not in structure (known: {sorted(self.species)})")
+        if not (0 <= index < len(self.species[symbol])):
+            raise ValueError(
+                f"index {index} out of range for species {symbol!r} "
+                f"({len(self.species[symbol])} atoms)"
+            )
+        offset = 0
+        for s, atoms in self.species.items():
+            if s == symbol:
+                return offset + index
+            offset += len(atoms)

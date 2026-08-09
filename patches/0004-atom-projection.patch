@@ -1,0 +1,215 @@
+diff -ruN a/src/elkpy_eigenstates.f90 b/src/elkpy_eigenstates.f90
+--- a/src/elkpy_eigenstates.f90	2026-08-09 09:18:06.102568514 +0300
++++ b/src/elkpy_eigenstates.f90	2026-08-09 09:18:06.103843042 +0300
+@@ -74,6 +74,137 @@
+ !EOC
+ 
+ !BOP
++! !ROUTINE: elkpy_atomproj
++! !INTERFACE:
++subroutine elkpy_atomproj(vpl,ias,nst,idx,pmat)
++! !USES:
++use modmain
++! !DESCRIPTION:
++!   The atom-projection operator $P_\alpha$ restricted to atom {\tt ias}'s
++!   muffin-tin sphere, expressed as an {\tt nst}$\times${\tt nst} Hermitian
++!   matrix in the orthonormal second-variational eigenbasis of a fresh
++!   on-the-fly diagonalisation at an arbitrary $k$-point {\tt vpl} (the same
++!   diagonalisation method as {\tt elkpy\_diagonalize}/{\tt elkpy\_wfcorner}):
++!   $$ (P_\alpha)_{ij} = \sum_{\ell m,\sigma} \int_0^{R_\alpha}
++!    \psi_{i,\ell m\sigma}^*(r)\,\psi_{j,\ell m\sigma}(r)\,r^2\,dr, $$
++!   the muffin-tin-sphere restriction of $\langle\psi_i|\psi_j\rangle$, built
++!   from exactly the same per-atom $(\ell m,\sigma)$-resolved muffin-tin
++!   wavefunction expansion ({\tt wfmtsv}) and radial quadrature weights
++!   ({\tt wr2cmt}) that upstream {\tt gendmatk.f90} (used by the {\tt dos}
++!   and {\tt bandstr} tasks' atom/lm-projected DOS and band-character output)
++!   already uses -- generalised here to the full {\tt nst}$\times${\tt nst}$
++!   operator (bra state $i$ and ket state $j$ need not match) instead of
++!   {\tt gendmatk}'s per-state diagonal occupation-matrix entries, and summed
++!   over all $(\ell,m)$ (the total atomic weight, not an $\ell$-resolved
++!   one) -- so no new radial function or matching-coefficient computation is
++!   needed, only a different reduction of the same {\tt wfmt} array.
++!
++!   $P_\alpha$ is Hermitian and positive semi-definite by construction (a
++!   weighted Gram matrix, {\tt wr2cmt} being a positive quadrature weight).
++!   Diagonal entries $(P_\alpha)_{ii}\in[0,1]$ are each state's fractional
++!   weight on atom $\alpha$'s muffin-tin sphere alone, meaningful in
++!   isolation for a non-degenerate state $i$; off-diagonal entries mix two
++!   different eigenstates of this SAME diagonalisation only -- as with
++!   {\tt evecsv} generally (docs/design.md \S14), combining a $P_\alpha$
++!   from one query with an eigenvector from a separate query (even at the
++!   same $k$) is not valid, since nothing here guarantees the two
++!   diagonalisations picked the same internal basis. Summing $P_\alpha$ over
++!   every atom in the cell falls short of the identity by exactly the
++!   interstitial-region weight (the part of each wavefunction outside every
++!   muffin tin) -- not a defect, the standard non-uniqueness of an
++!   all-electron muffin-tin decomposition.
++!
++! !REVISION HISTORY:
++!   Created 2026 (elkpy)
++!EOP
++!BOC
++implicit none
++! arguments
++real(8), intent(in) :: vpl(3)
++integer, intent(in) :: ias,nst,idx(*)
++complex(8), intent(out) :: pmat(nst,nst)
++! local variables
++integer ispn,nmatp,is,irc,nrc,nrci,np,p0
++real(8) vl(3),vc(3)
++! automatic arrays
++integer ngp(nspnfv),igpig(ngkmax,nspnfv)
++real(8) vgpl(3,ngkmax,nspnfv),vgpc(3,ngkmax),gpc(ngkmax)
++real(8) evalfv(nstfv,nspnfv),evalsv_(nstsv)
++! allocatable arrays
++complex(8), allocatable :: sfacgp(:,:),apwalm(:,:,:,:,:)
++complex(8), allocatable :: evecfv(:,:,:),evecsv(:,:)
++complex(8), allocatable :: wfmt(:,:,:),wfmtw(:,:,:)
++real(8), allocatable :: wgt(:)
++if (spinsprl) then
++  write(*,*)
++  write(*,'("Error(elkpy_atomproj): spin-spirals not supported by the elkpy &
++   &atom-projection task")')
++  write(*,*)
++  stop
++end if
++is=idxis(ias)
++allocate(sfacgp(ngkmax,natmtot))
++allocate(apwalm(ngkmax,apwordmax,lmmaxapw,natmtot,nspnfv))
++allocate(evecfv(nmatmax,nstfv,nspnfv),evecsv(nstsv,nstsv))
++! fresh on-the-fly diagonalisation, same pattern as elkpy_diagonalize/
++! elkpy_wfcorner (kept as its own copy rather than a shared call, per this
++! file's existing convention -- see elkpy_diagonalize's own description)
++do ispn=1,nspnfv
++  vl(1:3)=vpl(1:3)
++  vc(1:3)=bvec(1:3,1)*vpl(1)+bvec(1:3,2)*vpl(2)+bvec(1:3,3)*vpl(3)
++  call gengkvec(ngvc,ivg,vgc,vl,vc,gkmax,ngkmax,ngp(ispn),igpig(:,ispn), &
++   vgpl(:,:,ispn),vgpc,gpc)
++  call gensfacgp(ngp(ispn),vgpc,ngkmax,sfacgp)
++  call match(ngp(ispn),vgpc,gpc,sfacgp,apwalm(:,:,:,:,ispn))
++  nmatp=ngp(ispn)+nlotot
++  call eveqnfv(nmatp,ngp(ispn),igpig(:,ispn),vc,vgpc,apwalm(:,:,:,:,ispn), &
++   evalfv(:,ispn),evecfv(:,:,ispn))
++end do
++deallocate(sfacgp)
++call eveqnsv(ngp(1),igpig(:,1),vgpc,apwalm,evalfv,evecfv,evalsv_,evecsv)
++! second-variational muffin-tin wavefunction of atom ias, in (l,m)-harmonic
++! form (tsh=.true., same as gendmatk.f90), for the requested band window
++allocate(wfmt(npcmtmax,nspinor,nst))
++call wfmtsv(.true.,lradstp,is,ias,nst,idx,ngp,apwalm,evecfv,evecsv,npcmtmax, &
++ wfmt)
++deallocate(apwalm,evecfv,evecsv)
++! radial quadrature weight per packed (l,m)+radial-shell index, matching
++! wfmt's own packing (lm-fast, radial-shell-slow -- see wfmtsv.f90/
++! gendmatk.f90): the same wr2cmt(ir,is) weight applies to every lm within a
++! given radial shell, so it is broadcast once per shell here rather than
++! looped per (l,m) pair the way gendmatk.f90 does for its lm-resolved output
++nrci=nrcmti(is)
++nrc=nrcmt(is)
++np=npcmt(is)
++allocate(wgt(np))
++do irc=1,nrci
++  wgt((irc-1)*lmmaxi+1:irc*lmmaxi)=wr2cmt(irc,is)
++end do
++p0=npcmti(is)
++do irc=nrci+1,nrc
++  wgt(p0+1:p0+lmmaxo)=wr2cmt(irc,is)
++  p0=p0+lmmaxo
++end do
++! (P_alpha)_ij = sum_(p,ispn) conjg(wfmt(p,ispn,i))*wfmt(p,ispn,j)*wgt(p) --
++! the muffin-tin-restricted overlap, as a single zgemm per spin channel over
++! the first np rows (np <= npcmtmax, so the unused padding rows of wfmt are
++! never read) rather than gendmatk.f90's explicit per-(l,m) loop, since the
++! full atomic weight (summed over all l,m) is wanted here, not an
++! l/m-resolved breakdown
++allocate(wfmtw(npcmtmax,nspinor,nst))
++do ispn=1,nspinor
++  wfmtw(1:np,ispn,1:nst)=wfmt(1:np,ispn,1:nst)*spread(wgt(1:np),2,nst)
++end do
++pmat(:,:)=zzero
++do ispn=1,nspinor
++  call zgemm('C','N',nst,nst,np,zone,wfmt(1,ispn,1),npcmtmax*nspinor, &
++   wfmtw(1,ispn,1),npcmtmax*nspinor,zone,pmat,nst)
++end do
++deallocate(wfmt,wfmtw,wgt)
++end subroutine
++!EOC
++
++!BOP
+ ! !ROUTINE: elkpy_eigenstate_session
+ ! !INTERFACE:
+ subroutine elkpy_eigenstate_session
+@@ -103,6 +234,15 @@
+ !    {\tt elkpy\_berrycurv\_path} (task 9001) already uses per Wilson-loop
+ !    edge, generalised to an arbitrary pair of $k$-points instead of a small
+ !    fixed loop.
++!   \item {\tt PROJECTION k1 k2 k3 ist0 ist1} -- the atom-projection operator
++!    $P_\alpha$ (see {\tt elkpy\_atomproj}) for every atom $\alpha$ in the
++!    cell at once, restricted to the contiguous band window $[ist0,ist1]$,
++!    all from the SAME fresh diagonalisation at {\tt k1 k2 k3} -- so, unlike
++!    pairing this response with a separate {\tt EIGENSTATES} query, the
++!    {\tt natmtot} returned matrices are guaranteed to share one consistent
++!    eigenbasis with each other (e.g. summing them and comparing to the
++!    identity minus the interstitial remainder is a valid, self-contained
++!    check; see {\tt tests/test\_calculation\_atom\_projection.py}).
+ !   \end{itemize}
+ !
+ !   Kept alive across many queries rather than one query per subprocess (as
+@@ -132,7 +272,7 @@
+ !BOC
+ implicit none
+ ! local variables
+-integer ios,ist0,ist1,nst,a,b
++integer ios,ist0,ist1,nst,a,b,ias
+ character(16) cmd
+ character(1024) line
+ real(8) vpl(3),vpla(3),vplb(3),vl(3),vc(3),q
+@@ -148,6 +288,7 @@
+ complex(8), allocatable :: wfmt1(:,:,:,:),wfir1(:,:,:),wfgp1(:,:,:)
+ complex(8), allocatable :: wfmt2(:,:,:,:),wfir2(:,:,:),wfgp2(:,:,:)
+ complex(8), allocatable :: expqmt(:,:),oq(:,:),moverlap(:,:)
++complex(8), allocatable :: pmat(:,:,:)
+ if (spinsprl) then
+   write(*,*)
+   write(*,'("Error(elkpy_eigenstate_session): spin-spirals not supported by &
+@@ -242,6 +383,40 @@
+     call flush(6)
+     deallocate(idx,wfmt1,wfir1,wfgp1,wfmt2,wfir2,wfgp2,expqmt,oq,moverlap)
+ 
++  case('PROJECTION')
++    read(line,*,iostat=ios) cmd,vpl(1),vpl(2),vpl(3),ist0,ist1
++    if (ios /= 0) then
++      write(*,'("ELKPY_SESSION_ERROR malformed PROJECTION command")')
++      call flush(6)
++      cycle
++    end if
++    if ((ist0 < 1).or.(ist1 > nstsv).or.(ist1 < ist0)) then
++      write(*,'("ELKPY_SESSION_ERROR invalid band window (ist0,ist1,nstsv) : ", &
++       &3I8)') ist0,ist1,nstsv
++      call flush(6)
++      cycle
++    end if
++    nst=ist1-ist0+1
++    allocate(idx(nst))
++    do a=1,nst
++      idx(a)=ist0+a-1
++    end do
++    allocate(pmat(nst,nst,natmtot))
++    do ias=1,natmtot
++      call elkpy_atomproj(vpl,ias,nst,idx,pmat(:,:,ias))
++    end do
++    write(*,*) nst,natmtot
++    do ias=1,natmtot
++      do b=1,nst
++        do a=1,nst
++          write(*,*) dble(pmat(a,b,ias)),aimag(pmat(a,b,ias))
++        end do
++      end do
++    end do
++    write(*,'("ELKPY_SESSION_END")')
++    call flush(6)
++    deallocate(idx,pmat)
++
+   case default
+     write(*,'("ELKPY_SESSION_ERROR unknown command: ",A)') trim(cmd)
+     call flush(6)

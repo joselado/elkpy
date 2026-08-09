@@ -14,13 +14,18 @@ created.
 
 from collections import namedtuple
 
-from .parsers.eigenstates import parse_eigenstates_response, parse_overlap_response
+from .parsers.eigenstates import (
+    parse_eigenstates_response,
+    parse_overlap_response,
+    parse_projection_response,
+)
 
 READY_SENTINEL = "ELKPY_SESSION_READY"
 END_SENTINEL = "ELKPY_SESSION_END"
 ERROR_PREFIX = "ELKPY_SESSION_ERROR"
 
 Eigenstates = namedtuple("Eigenstates", ["k", "energies", "evecsv"])
+AtomProjection = namedtuple("AtomProjection", ["k", "matrices"])
 
 
 def _fmt(x):
@@ -172,6 +177,42 @@ class EigenstateSession:
         )
         tokens = self._read_until_sentinel()
         return parse_overlap_response(tokens)
+
+    def atom_projection(self, k, ist0, ist1):
+        """The atom-projection operator P_alpha, restricted to atom alpha's
+        muffin-tin sphere, for EVERY atom alpha in the cell at once, in the
+        contiguous 1-indexed second-variational band window [ist0, ist1] --
+        via elkpy_atomproj (src/elkpy_eigenstates.f90, reusing wfmtsv/
+        wr2cmt, the same muffin-tin machinery upstream gendmatk.f90 uses for
+        the dos/bandstr tasks' atom/lm-projected DOS and band-character
+        output). See docs/design.md #16 and docs/physics.tex Part V for the
+        physics.
+
+        Returns an AtomProjection(k, matrices) namedtuple: matrices shape
+        (natmtot, nst, nst) complex, nst = ist1 - ist0 + 1, in Fortran's
+        global 1-based atom order (species in order, then atoms within each
+        species in order -- see get_forces()'s docstring for the same
+        convention; Calculation.get_atom_projection() resolves a (species,
+        index) pair to this array's index for you).
+
+        matrices[a] is Hermitian and positive semi-definite:
+        matrices[a][i, i] is state (ist0+i)'s fractional weight on atom a's
+        muffin-tin sphere alone (meaningful on its own for a non-degenerate
+        state); matrices[a][i, j] (i != j) mixes two different eigenstates
+        of THIS one query's diagonalisation only. All natmtot matrices
+        returned by one call share that same diagonalisation, so they may
+        be validly combined with each other (e.g. summed and compared
+        against the identity minus the interstitial remainder) -- but, as
+        with evecsv generally (docs/design.md #14), do not combine a matrix
+        from one atom_projection()/get_atom_projection() call with an
+        eigenvector or matrix from a SEPARATE call, even at the same k:
+        nothing here guarantees two independent diagonalisations picked the
+        same internal basis.
+        """
+        k = tuple(float(x) for x in k)
+        self._send(f"PROJECTION {_fmt(k[0])} {_fmt(k[1])} {_fmt(k[2])} {int(ist0)} {int(ist1)}")
+        tokens = self._read_until_sentinel()
+        return AtomProjection(k=k, matrices=parse_projection_response(tokens))
 
     def close(self, timeout=30):
         """Ask the session to quit and wait for it to exit; idempotent."""

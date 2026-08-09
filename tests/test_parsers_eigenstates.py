@@ -5,7 +5,11 @@ testing the Python-side arithmetic/parsing independently of Fortran)."""
 import numpy as np
 import pytest
 
-from elkpy.parsers.eigenstates import parse_eigenstates_response, parse_overlap_response
+from elkpy.parsers.eigenstates import (
+    parse_eigenstates_response,
+    parse_overlap_response,
+    parse_projection_response,
+)
 
 
 def _complex_matrix_tokens(mat):
@@ -43,3 +47,20 @@ def test_parse_overlap_response_round_trip():
     parsed = parse_overlap_response(tokens)
 
     assert parsed == pytest.approx(mat, abs=1e-12)
+
+
+def test_parse_projection_response_round_trip():
+    rng = np.random.default_rng(2)
+    nst, natmtot = 3, 4
+    mats = rng.normal(size=(natmtot, nst, nst)) + 1j * rng.normal(size=(natmtot, nst, nst))
+
+    # src/elkpy_eigenstates.f90's PROJECTION case writes "do ias; do b; do a"
+    # (a innermost) -- each atom's nst x nst block column-major, blocks
+    # consecutive.
+    tokens = [str(nst), str(natmtot)]
+    for ias in range(natmtot):
+        tokens += _complex_matrix_tokens(mats[ias])
+    parsed = parse_projection_response(tokens)
+
+    assert parsed.shape == (natmtot, nst, nst)
+    assert parsed == pytest.approx(mats, abs=1e-12)

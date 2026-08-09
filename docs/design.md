@@ -755,3 +755,84 @@ the already-trusted curvature value at the same point without dividing by a curv
 that's near zero at Γ/M — holds with comfortable margin at K/K′ ($\det g \approx 2\times$
 the bound) and trivially at Γ/M
 (`tests/test_calculation_quantum_geometry.py::test_hbn_gkm_valley_quantum_geometry`).
+
+## 16. Atom-projection operators
+
+`Calculation.get_atom_projection(k, ist0, ist1)` (task 9002's `PROJECTION` query,
+`patches/0004-atom-projection.patch`, `elkpy_atomproj` in `src/elkpy_eigenstates.f90`)
+computes, for every atom $\alpha$ in the cell at once, the atom-projection operator
+$P_\alpha$ — the muffin-tin-sphere restriction of the identity — as an
+`nst`$\times$`nst` Hermitian matrix in the second-variational eigenbasis of one fresh
+diagonalisation at $k$, `nst = ist1 - ist0 + 1`. Physics writeup (the operator, why it's
+Hermitian PSD, the exact-partition identity $\sum_\alpha P_\alpha + P_\text{interstitial}
+= \mathbb 1$, why it's not gauge-comparable across separate diagonalisations): §14's
+discussion applies unchanged (same physical basis), spelled out fully in
+`docs/physics.tex` Part V.
+
+**Reused, not new, machinery.** Elk's own upstream code already computes exactly this
+kind of quantity twice over — `dos.f90`'s atom/lm-resolved partial DOS (`PDOS_Sss_Aaaaa.OUT`)
+and `bandstr.f90`'s task 21-24 band character (`BAND_Sss_Aaaaa.OUT`) both call
+`gendmatk.f90`, which itself calls `wfmtsv.f90` to expand a batch of second-variational
+states into per-atom, $(\ell m,\sigma)$-resolved muffin-tin coefficients, then radially
+integrates $|\psi_{\ell m\sigma}(r)|^2$ against the quadrature weight `wr2cmt` — but only
+ever the *diagonal* in state index (one state's own occupation-matrix entry), and only
+ever reachable through a task that either periodic-mesh-integrates the result into an
+energy-binned DOS curve or ties it to Elk's own band-path machinery, neither an on-demand
+query at an arbitrary $k$-point returning the raw per-state number. `elkpy_atomproj`
+duplicates `elkpy_diagonalize`'s fresh on-the-fly diagonalisation (the same small
+duplication `elkpy_wfcorner` already has, kept a separate copy per this file's existing
+convention rather than a shared helper with optional arguments — see
+`elkpy_diagonalize`'s own docstring), calls the same `wfmtsv` for the requested atom, and
+then generalises `gendmatk`'s per-state diagonal reduction to a full $i,j$ off-diagonal
+one — a single `zgemm` per spin channel over the flattened muffin-tin index, weighted by
+the same `wr2cmt` quadrature Elk already trusts — summed over every $(\ell,m)$ rather
+than resolved by it, since only the total atomic weight is wanted here, not an
+$\ell$-resolved breakdown. No new radial function, matching coefficient, or numerical
+method was needed; only a different reduction of an already-computed array.
+
+**Why all atoms in one query, not one atom per query.** `PROJECTION k1 k2 k3 ist0 ist1`
+returns `natmtot` matrices from a single diagonalisation, looping `elkpy_atomproj` over
+every atom internally rather than letting the caller request one atom per round-trip.
+This isn't just convenience: as with `evecsv` generally (§14), two matrices from
+*separate* diagonalisations — even nominally the same $k$ — are not guaranteed to share
+an internal basis, so a meaningful cross-atom identity like $\sum_\alpha P_\alpha \le
+\mathbb 1$ can only be checked when every $P_\alpha$ being summed came from the exact
+same query. Since every atom's `wfmtsv` call reuses the same `apwalm`/`evecfv`/`evecsv`
+from that one diagonalisation, looping atoms server-side costs one extra `wfmtsv` call
+per atom, not another diagonalisation.
+
+**How to use in code**:
+
+```python
+proj = calc.get_atom_projection((0.1, 0.2, 0.05), ist0=1, ist1=4)
+proj.matrices.shape         # (natmtot, nst, nst) complex
+proj.matrices[a][i, i].real # state (ist0+i)'s fractional weight on atom a's muffin tin
+n = calc.structure.atom_index("N")  # (species, index) -> this array's atom axis
+proj.matrices[n]
+```
+
+Verified against a real compiled binary: every returned matrix is Hermitian and positive
+semi-definite (a direct consequence of `wr2cmt` being a positive quadrature weight, not
+external data to check against); summing every atom's matrix and subtracting from the
+identity is still Hermitian PSD (the interstitial remainder can't be negative), with each
+atom's own diagonal weight a substantial, physically reasonable fraction of the cell for
+bulk Si (not near zero, not exceeding 1); diamond Si's two atoms — related by inversion
+through the bond midpoint, which sends $k\to-k$ and therefore fixes Γ — have identical
+weight on band 1 (non-degenerate; bands 2-4 are degenerate at Γ, the same caveat §13/§14
+already document) at Γ; a diagonal entry matches an entirely independent Fortran code
+path — upstream `bandstr.f90` task 21's own `BAND_Sss_Aaaaa.OUT` "total atomic character"
+column, which calls the same `gendmatk`/`wfmtsv` machinery via a completely separate call
+site (Elk's own path diagonalisation, not `elkpy_atomproj`'s fresh one) and reduction (an
+explicit per-`l` loop, not this feature's `zgemm`) — to 5 decimal places once task 21's
+default `lmaxdb`=3 is raised to match the ground state's own `lmaxo`=6, catching e.g. a
+packing/stride bug the Hermitian/PSD and sum-below-identity checks alone would pass
+silently (they're satisfied by any consistent normalization, even an undercounting one);
+a spin-polarized run (`spinpol=True`, `nspinor`=2) is still Hermitian PSD and
+sum-below-identity, exercising the `do ispn=1,nspinor` accumulation the unpolarized
+fixture above never runs twice (SOC/`soc_scale` remains untested for this feature); and on
+monolayer h-BN, at $K=(1/3,1/3,0)$ the occupied valence-top ($\pi$) band is N-dominated
+and the unoccupied conduction-bottom ($\pi^*$) band is B-dominated — the more
+electronegative N pulling the bonding state's weight toward itself, the standard
+qualitative picture for h-BN's band character, and a sharp sign-of-the-effect prediction
+rather than a plausibility band, the same spirit as §13's K/K′ curvature antisymmetry check
+(`tests/test_calculation_atom_projection.py`).

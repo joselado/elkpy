@@ -147,6 +147,46 @@ generally. Physics writeup (the quantum geometric tensor, the Marzari-Vanderbilt
 discretization, the `Tr[P∂P∂P]` derivation, the Löwdin-normalization fix):
 `docs/design.md` §15 and `docs/physics.tex` (Part IV).
 
+Also implemented, as the fourth entry in the Fortran patch series:
+`Calculation.get_atom_projection(k, ist0, ist1)` (task 9002's new `PROJECTION` query,
+`patches/0004-atom-projection.patch`) — the atom-projection operator $P_\alpha$ (the
+muffin-tin-sphere restriction of the identity) for every atom in the cell at once, as an
+`nst`$\times$`nst` Hermitian matrix in the second-variational eigenbasis of one fresh
+diagonalisation at $k$. Reuses upstream `wfmtsv.f90` unchanged — the same per-atom,
+$(\ell m,\sigma)$-resolved muffin-tin wavefunction expansion and `wr2cmt` radial
+quadrature weight that `gendmatk.f90` already uses for the `dos`/`bandstr` tasks'
+atom/lm-projected DOS and band-character output — but generalizes `gendmatk`'s
+per-state diagonal occupation-matrix entry to the full off-diagonal `nst`$\times$`nst`
+operator (summed over all $\ell,m$, not $\ell$-resolved), computed as one `zgemm` per
+spin channel rather than `gendmatk`'s explicit per-$(\ell,m)$ loop. All `natmtot`
+matrices come from the same single diagonalisation (not one query per atom), since — as
+with `evecsv` generally (`docs/design.md` §14) — matrices from separate diagonalisations
+aren't guaranteed to share a basis, and the operator's main correctness identity
+($\sum_\alpha P_\alpha + P_\text{interstitial} = \mathbb 1$) needs every atom projected
+consistently. Verified against a real compiled binary: every returned matrix is
+Hermitian and positive semi-definite (immediate from `wr2cmt` being a positive
+quadrature weight); summing every atom and subtracting from the identity is still
+Hermitian PSD (the interstitial remainder can't be negative), with each atom's own
+weight a substantial, physically reasonable fraction of bulk Si's cell; diamond Si's two
+atoms — related by inversion through the bond midpoint, which sends $k\to-k$ and
+therefore fixes Γ — have identical weight on band 1 at Γ (non-degenerate; bands 2-4 are
+degenerate there, the same caveat already documented for `evecsv`); a diagonal entry
+agrees to 5 decimal places with an entirely independent Fortran code path — upstream
+`bandstr.f90` task 21's own atom-projected band-character output, same `gendmatk`/
+`wfmtsv` machinery but a separate call site and reduction — catching what the
+Hermitian/PSD and sum-below-identity checks alone would miss (a silent undercount, e.g.
+a packing bug, that's still internally consistent); a spin-polarized run (`nspinor`=2)
+stays Hermitian PSD, exercising the spin-channel accumulation the unpolarized checks
+above never run twice (SOC remains untested for this feature); and on monolayer
+h-BN at $K=(1/3,1/3,0)$, the occupied valence-top ($\pi$) band is N-dominated and the
+unoccupied conduction-bottom ($\pi^*$) band is B-dominated — the standard qualitative
+picture for h-BN's band character (the more electronegative N pulling the bonding
+state's weight toward itself), a sharp sign-of-the-effect prediction rather than a
+plausibility band (`tests/test_calculation_atom_projection.py`). Physics writeup (the
+projection operator, the exact muffin-tin/interstitial partition identity, why it's not
+gauge-comparable across separate diagonalisations): `docs/design.md` §16 and
+`docs/physics.tex` (Part V).
+
 ## Architecture
 
 - `src/elkpy/structure.py` — `Structure`: lattice vectors (`avec`, Bohr) + species, each atom either a
@@ -179,9 +219,10 @@ discretization, the `Tr[P∂P∂P]` derivation, the Löwdin-normalization fix):
   Refuses `nprocs > 1` since `build-config/make.inc` builds serial (`mpi_stub.f90`) — that combination
   would silently launch N racing copies into one directory, not parallelize.
 - `src/elkpy/session.py` — `EigenstateSession`: owns the interactive task-9002 subprocess started by
-  `eigenstate_session()`, sending `EIGENSTATES`/`OVERLAP` queries over stdin and parsing responses off
-  stdout until closed (context manager) or told to `QUIT`. See `docs/design.md` §14 for why this is a
-  persistent worker process rather than an f2py in-memory bridge.
+  `eigenstate_session()`, sending `EIGENSTATES`/`OVERLAP`/`PROJECTION` queries over stdin and parsing
+  responses off stdout until closed (context manager) or told to `QUIT`. See `docs/design.md` §14 for
+  why this is a persistent worker process rather than an f2py in-memory bridge, and §16 for
+  `PROJECTION` (atom-projection operators).
 - `src/elkpy/parsers/` — one small module per output file family (`info`, `totenergy`, `band` — reused
   for phonon dispersion, since `PHDISP.OUT` shares `BAND.OUT`'s exact layout — `dos`, reused for phonon
   DOS, `forces`, `geometry`, `effmass`, `volumetric`), each verified against real Elk output, not
@@ -189,7 +230,7 @@ discretization, the `Tr[P∂P∂P]` derivation, the Löwdin-normalization fix):
   Wilson-loop/Chern-number arithmetic in Python (`compute_berry_curvature()`), deliberately kept out of
   Fortran so it's unit-testable against synthetic overlap matrices (`tests/test_berry_gauge_invariance.py`)
   without an Elk run. `eigenstates` parses `EigenstateSession`'s stdout token stream (not a file) into
-  energies/`evecsv`/overlap arrays, independently unit-testable the same way
+  energies/`evecsv`/overlap/atom-projection arrays, independently unit-testable the same way
   (`tests/test_parsers_eigenstates.py`).
 - `src/elkpy/config.py` — locates the built `elk` binary (`build/elk/src/elk` by default, override via
   `ELKPY_ELK_BIN`) and the species directory (`vendor/elk/species/` by default).

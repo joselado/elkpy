@@ -8,8 +8,9 @@ density $n(\mathbf r)=\sum_{i\mathbf k}^{\rm occ}|\psi_{i\mathbf k}(\mathbf r)|^
 wraps Elk's `elk.in`/task-number workflow in a small, `pyqula`-style object model
 (`Structure`, `Calculation`), and adds physics Elk itself does not provide on top:
 per-species spin-orbit coupling scaling, the full quantum geometric tensor (Berry
-curvature/Chern numbers and the quantum metric) via a Wilson-loop method, and fast
-eigenstate/wavefunction-overlap queries at arbitrary k-points.
+curvature/Chern numbers and the quantum metric) via a Wilson-loop method, fast
+eigenstate/wavefunction-overlap queries at arbitrary k-points, and atom-projection
+operators applicable to those wavefunctions.
 
 ```python
 from elkpy.structure import Structure
@@ -48,6 +49,7 @@ python3 -m pip install -e .        # add .[ase] for Structure.from_ase()/to_ase(
 ## Eigenstates and wavefunction overlaps ##
 - Second-variational energies and eigenvectors at an arbitrary k-point
 - Wavefunction overlaps $O_{ab}(\mathbf k_a,\mathbf k_b)=\langle\psi_a(\mathbf k_a)|\psi_b(\mathbf k_b)\rangle$ between two arbitrary k-points, queried interactively
+- Atom-projection operators $(P_\alpha)_{ij}=\langle\psi_i|\hat P_\alpha|\psi_j\rangle$ (muffin-tin restriction of the identity, $\sum_\alpha P_\alpha+P_{\rm interstitial}=\mathbb 1$), applicable to any wavefunction in the same band window
 
 ## Ground-state electronic structure ##
 - Self-consistent total energy $E[n]$, band structure $\epsilon_i(\mathbf k)$, density of states
@@ -103,6 +105,18 @@ with calc.eigenstate_session() as session:              # one warm Elk process
     m = session.overlap((0, 0, 0), (0.1, 0, 0), ist0=1, ist1=4)  # <psi_a(k_a)|psi_b(k_b)>
 ```
 
+## Atom-projection operators: N vs. B character of monolayer h-BN ##
+The more electronegative N pulls the bonding (valence-top, $\pi$) state's weight toward
+itself; the antibonding (conduction-bottom, $\pi^*$) state is B-dominated instead:
+```python
+K = (1 / 3, 1 / 3, 0)
+proj = hbn.get_atom_projection(K, ist0=ist1, ist1=ist1 + 1)  # valence top, conduction bottom
+n, b = hbn.structure.atom_index("N"), hbn.structure.atom_index("B")
+proj.matrices[n][0, 0].real  # N's weight on the valence-top band -- large
+proj.matrices[b][1, 1].real  # B's weight on the conduction-bottom band -- large
+```
+![Alt text](images/hbn_atom_projection.png?raw=true "Atom-projected muffin-tin weight of monolayer h-BN's valence-top and conduction-bottom bands")
+
 ## Also: Elk's standard DFT workflow (band structure, DOS, charge density) ##
 ```python
 from elkpy.structure import Structure
@@ -119,7 +133,7 @@ points, density = calc.get_density(grid=(24, 24, 24))  # n(r) = sum_i^occ |psi_i
 ![Alt text](images/si_density.png?raw=true "Charge density slice of bulk silicon")
 
 # Notebooks #
-Seven notebooks under [`notebooks/`](notebooks), one per feature area above, each
+Eight notebooks under [`notebooks/`](notebooks), one per feature area above, each
 executed end-to-end against a real compiled Elk binary and checked in with its actual
 output (the DFPT phonon notebook is the exception -- left unexecuted with a note,
 since a single call takes ~11-13 minutes). Listed new-physics-first, matching
@@ -132,6 +146,7 @@ is the place to actually start:
 | [`05_berry_curvature.ipynb`](notebooks/05_berry_curvature.ipynb) | Berry curvature/Chern number, K/K' valleys of monolayer h-BN | yes |
 | [`06_eigenstate_session.ipynb`](notebooks/06_eigenstate_session.ipynb) | Eigenstates and wavefunction overlaps | yes |
 | [`07_quantum_geometry.ipynb`](notebooks/07_quantum_geometry.ipynb) | Quantum metric and Berry curvature along Gamma-K-M-K'-Gamma of monolayer h-BN | yes |
+| [`08_atom_projection.ipynb`](notebooks/08_atom_projection.ipynb) | Atom-projection operators, N/B character of monolayer h-BN | yes |
 | [`01_getting_started.ipynb`](notebooks/01_getting_started.ipynb) | Ground state, band structure, density of states | -- |
 | [`02_relaxation_forces_and_properties.ipynb`](notebooks/02_relaxation_forces_and_properties.ipynb) | Forces, relaxation, effective mass, density, `run_tasks()` | -- |
 | [`03_phonon_dispersion_and_dos.ipynb`](notebooks/03_phonon_dispersion_and_dos.ipynb) | Phonon dispersion/DOS via DFPT | -- |

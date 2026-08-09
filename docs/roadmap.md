@@ -114,6 +114,17 @@ in this build) — needed a small new Fortran task
 Python after all, since the two Wilson-loop directions being exact `ngridk`
 mesh generators let elkpy skip the shell search entirely.
 
+**A second landed for real**: `get_atom_projection()` (atom-projection
+operators, task 9002's `PROJECTION` query) — see `docs/design.md` §16 /
+`docs/physics.tex` (Part V). Elk's own `dos`/`bandstr` tasks already compute
+atom-resolved wavefunction weight internally (`gendmatk.f90`/`wfmtsv.f90`),
+but only ever the diagonal-in-state entry, and only reachable through a task
+that discards it into an energy-broadened DOS curve or ties it to Elk's own
+band-path machinery — not an on-demand off-diagonal operator at an arbitrary
+$k$-point, so a small additive Fortran extension
+(`patches/0004-atom-projection.patch`) was needed, reusing `wfmtsv` itself
+unchanged.
+
 ## Tier 5 — Scale & execution
 
 1. **MPI-enabled build variant.** `LocalLauncher` now correctly refuses

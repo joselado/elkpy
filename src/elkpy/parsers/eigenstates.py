@@ -54,3 +54,29 @@ def parse_overlap_response(tokens):
     reim = np.array(flat).reshape(nst * nst, 2)
     values = reim[:, 0] + 1j * reim[:, 1]
     return values.reshape(nst, nst, order="F")
+
+
+def parse_projection_response(tokens):
+    """Parse the token stream of a PROJECTION response: nst, natmtot, then
+    natmtot consecutive nst x nst atom-projection matrices (real/imag pairs,
+    same column-major convention as parse_eigenstates_response/
+    parse_overlap_response), one per atom, in Fortran's global 1-based atom
+    order (species in declaration order, then atoms within each species in
+    order -- see Calculation.get_forces()'s docstring for the same
+    convention, and Calculation.get_atom_projection() for how to look up a
+    particular atom's matrix by (species, index)).
+
+    Returns an (natmtot, nst, nst) complex array; matrices[ias] is the
+    atom-projection operator P_ias (0-based ias here, 1-based in the
+    Fortran/protocol sense) -- see EigenstateSession.atom_projection() for
+    what each matrix element means and its gauge caveat.
+    """
+    pos = 0
+    (nst, natmtot), pos = _take(tokens, pos, 2, int)
+    flat, pos = _take(tokens, pos, 2 * nst * nst * natmtot, float)
+    reim = np.array(flat).reshape(nst * nst * natmtot, 2)
+    values = reim[:, 0] + 1j * reim[:, 1]
+    # Fortran wrote "do ias; do b; do a" with a innermost -- so within each
+    # atom's block the layout is column-major (matching the other parsers
+    # here), and the natmtot blocks themselves are consecutive.
+    return values.reshape(nst, nst, natmtot, order="F").transpose(2, 0, 1)

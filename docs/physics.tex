@@ -889,11 +889,165 @@ Same \texttt{kpoints=}/\texttt{kpath=}/\texttt{ist0}/\texttt{ist1}/\texttt{direc
 \texttt{dk}/\texttt{npoints} conventions as \texttt{get\_berry\_curvature\_path()}
 (Part~\ref{part:berry}), including symbolic \texttt{kpath="GKMK'G"}-style paths.
 
+\part{Atom-projection operators}
+\label{part:atomprojection}
+
+\section{Setting: the muffin-tin partition of the unit cell}
+
+An all-electron LAPW calculation partitions the unit cell into non-overlapping muffin-tin
+(MT) spheres, one centered on each atom, plus the interstitial region between them
+(Singh \& Nordstr\"om, \emph{Planewaves, Pseudopotentials, and the LAPW Method}, 2nd ed.,
+Springer, 2006, ch.~2) -- the same partition Part~\ref{part:eigenstates}'s APW+lo basis is
+built on. This partition is exact and exhaustive: every point in the cell lies in exactly
+one region, so for any two states $\psi_i,\psi_j$ of the same diagonalization,
+\begin{equation}
+  \langle\psi_i|\psi_j\rangle
+  = \sum_{\alpha=1}^{N_{\rm atom}} \int_{{\rm MT}_\alpha} \psi_i^*\psi_j\,d^3r
+  \;+\; \int_{\rm interstitial} \psi_i^*\psi_j\,d^3r,
+  \label{eq:mt-partition}
+\end{equation}
+with no double-counted or omitted volume. Define the atom-projection operator $P_\alpha$
+as the restriction of the identity to atom $\alpha$'s sphere,
+\begin{equation}
+  (P_\alpha)_{ij} = \langle\psi_i|\hat P_\alpha|\psi_j\rangle
+  = \int_{{\rm MT}_\alpha} \psi_i^*(\mathbf r)\,\psi_j(\mathbf r)\,d^3r,
+  \label{eq:atomproj}
+\end{equation}
+an $n_{\rm st}\times n_{\rm st}$ matrix in whatever band window $\{\psi_i\}$ is requested.
+$P_\alpha$ is Hermitian by construction (Eq.~\eqref{eq:atomproj} is a restricted inner
+product) and positive semi-definite (it is literally a Gram matrix of the states
+restricted to a sub-volume -- see the discretized form below, where positivity is
+manifest). Eq.~\eqref{eq:mt-partition} restated in this notation is the operator identity
+\begin{equation}
+  \sum_{\alpha=1}^{N_{\rm atom}} P_\alpha + P_{\rm interstitial} = \mathbb 1,
+  \label{eq:atomproj-partition}
+\end{equation}
+the exact-partition constraint this Part's verification below checks directly: summing
+every atom's matrix can only ever fall short of the identity (never exceed it), by
+exactly the interstitial region's own weight.
+
+Diagonal entries $(P_\alpha)_{ii}\in[0,1]$ are the familiar atom-projected/partial weight
+of state $i$ on atom $\alpha$ -- the quantity Elk's own atom-and-$\ell$-resolved partial
+DOS (\texttt{dos} task, \texttt{PDOS\_Sss\_Aaaaa.OUT}) and band-character output
+(\texttt{bandstr} tasks 21--24, \texttt{BAND\_Sss\_Aaaaa.OUT}) already compute and
+energy-bin or tie to a band path. Off-diagonal entries $(P_\alpha)_{ij}$, $i\neq j$, are
+the genuinely new piece: matrix elements of an actual operator between two \emph{different}
+eigenstates of the same diagonalization, not merely a per-state weight -- e.g.\ they let
+$P_\alpha$ be applied to an arbitrary superposition $c=\sum_i c_i\,|\psi_i\rangle$
+(expressed as a coefficient vector in this same band window) via ordinary matrix-vector
+multiplication, $P_\alpha c$, rather than only to single basis states.
+
+\section{Discretized form: reusing \texttt{wfmtsv} and \texttt{wr2cmt}}
+
+Elk already expands a batch of second-variational states into atom $\alpha$'s
+muffin-tin, resolved by $(\ell m,\sigma)$ and radial shell, via upstream
+\texttt{wfmtsv.f90} -- exactly the ingredient \texttt{gendmatk.f90} uses to build the
+atom/$(\ell,m)$-resolved density-matrix entries behind \texttt{dos}/\texttt{bandstr}'s
+output, and the ingredient this Part reuses unchanged. Writing the expansion as
+$\psi_{i,\ell m\sigma}(r)$ (radial function on shell index, angular/spin index packed
+separately) and $w(r)$ for the \texttt{wr2cmt} quadrature weight (which depends only on
+radial shell, not on $\ell,m,\sigma$),
+\begin{equation}
+  (P_\alpha)_{ij} = \sum_{\ell m,\sigma}\int_0^{R_\alpha}
+    \psi_{i,\ell m\sigma}^*(r)\,\psi_{j,\ell m\sigma}(r)\,w(r)\,dr,
+  \label{eq:atomproj-discrete}
+\end{equation}
+the muffin-tin-sphere restriction of $\langle\psi_i|\psi_j\rangle$ summed over every
+$(\ell,m,\sigma)$ channel (the total atomic weight, not an $\ell$-resolved breakdown --
+\texttt{gendmatk} keeps the $(\ell,m)$ index open since \texttt{dos}/\texttt{bandstr}
+want an $\ell$-resolved curve; nothing here needs that, so it is summed away).
+Eq.~\eqref{eq:atomproj-discrete}, with $w(r)>0$ a genuine quadrature weight, is manifestly
+a weighted Gram matrix -- Hermitian and PSD without further argument, since it is
+$\Psi^\dagger W \Psi$ for $\Psi$ the (radial-shell,$\ell m\sigma$)$\times n_{\rm st}$
+coefficient matrix and $W={\rm diag}(w)\succeq0$.
+
+\texttt{gendmatk} only ever evaluates the \emph{diagonal} $i=j$ (one state's own
+occupation-matrix entry, needed for LDA+U-style applications), and only ever behind a
+task (\texttt{dos}, \texttt{bandstr}) that reduces the result before it reaches the
+caller -- energy-binned into a DOS curve, or tied to Elk's own band-path generator, never
+exposed raw at an arbitrary $\mathbf k$-point. \texttt{elkpy\_atomproj}
+(\texttt{patches/0004-atom-projection.patch}, new subroutine in
+\texttt{src/elkpy\_eigenstates.f90}) reuses \texttt{wfmtsv} identically -- no new radial
+function, matching coefficient, or numerical method -- but evaluates the full
+$i,j$ off-diagonal sum of Eq.~\eqref{eq:atomproj-discrete} as a single \texttt{zgemm} per
+spin channel, at a fresh on-the-fly diagonalization (the same
+\texttt{eveqnfv}/\texttt{eveqnsv} pattern as \texttt{elkpy\_diagonalize}/
+\texttt{elkpy\_wfcorner}, Part~\ref{part:eigenstates}) at an arbitrary requested
+$\mathbf k$-point.
+
+\section{Why every atom in one query}
+
+As with \texttt{evecsv} generally (Part~\ref{part:eigenstates}), a matrix from one
+diagonalization is not comparable to a matrix from a \emph{separate} diagonalization,
+even nominally at the same $\mathbf k$ -- nothing guarantees two independent
+diagonalizations picked the same internal basis. Eq.~\eqref{eq:atomproj-partition} is
+therefore only checkable when every $P_\alpha$ being summed came from the same
+diagonalization. The task 9002 \texttt{PROJECTION $k_1\,k_2\,k_3\,ist_0\,ist_1$} query
+returns all $N_{\rm atom}$ matrices from one diagonalization, looping
+\texttt{elkpy\_atomproj} over every atom server-side (reusing that one diagonalization's
+\texttt{apwalm}/\texttt{evecfv}/\texttt{evecsv} for each atom's \texttt{wfmtsv} call --
+one extra \texttt{wfmtsv} call per atom, not another diagonalization) rather than
+letting a caller assemble them from separate one-atom-at-a-time queries.
+
+\subsection{Verified}
+
+Against a real compiled binary (bulk Si, generic $\mathbf k$-point): every returned
+$P_\alpha$ is Hermitian and positive semi-definite, a direct algebraic consequence of
+Eq.~\eqref{eq:atomproj-discrete}'s Gram-matrix form rather than external reference data;
+$\mathbb 1-\sum_\alpha P_\alpha$ (Eq.~\eqref{eq:atomproj-partition}'s interstitial
+remainder) is itself Hermitian PSD, i.e.\ the sum never overshoots the identity, with
+each atom's own diagonal weight a substantial, physically reasonable fraction of the
+cell (neither near zero nor exceeding 1) for a tetrahedrally-bonded solid like Si; and
+diamond Si's two atoms -- related by inversion through the bond midpoint, which sends
+$\mathbf k\to-\mathbf k$ and therefore fixes $\Gamma$ -- have identical weight on band 1
+at $\Gamma$ (non-degenerate; bands 2--4 are degenerate there, the same caveat
+Part~\ref{part:eigenstates} documents for comparing eigenstates of a degenerate
+subspace). A diagonal entry agrees, to 5 decimal places, with an entirely independent
+Fortran code path -- upstream \texttt{bandstr.f90} task 21's own
+\texttt{BAND\_Sss\_Aaaaa.OUT} "total atomic character" column, which calls the same
+\texttt{gendmatk}/\texttt{wfmtsv} machinery via a separate call site (Elk's own path
+diagonalization, not \texttt{elkpy\_atomproj}'s fresh one) and a separate reduction (an
+explicit per-$\ell$ loop, not this feature's \texttt{zgemm}), once task 21's default
+$\ell_{\rm max}^{\rm db}=3$ is raised to match the ground state's own $\ell_{\rm
+max}^{\rm o}=6$ -- this catches what the Hermitian/PSD and sum-below-identity checks
+alone cannot: both are satisfied by any internally consistent normalization, even one
+that silently undercounts weight (e.g.\ a packing/stride bug in the \texttt{zgemm}
+reduction), so only an external reference computing the same number a different way
+closes that gap. A spin-polarized run ($n_{\rm spinor}=2$) remains Hermitian PSD and
+sum-below-identity, exercising the spin-channel accumulation the unpolarized checks
+above never run twice (spin-orbit coupling, Part~\ref{part:soc}, remains untested for
+this feature). On monolayer h-BN (same structure as Part~\ref{part:berry}'s K/K$'$
+verification), at $K=(1/3,1/3,0)$ the occupied valence-top ($\pi$) band is
+N-dominated and the unoccupied conduction-bottom ($\pi^*$) band is B-dominated -- the
+standard qualitative picture for h-BN's band character (the more electronegative N
+pulling the bonding state's weight toward itself), a sharp sign-of-the-effect
+prediction rather than a plausibility band, the same spirit as Part~\ref{part:berry}'s
+K/K$'$ curvature-antisymmetry check
+(\texttt{tests/test\_calculation\_atom\_projection.py}).
+
+\subsection{How to use in code}
+
+\begin{verbatim}
+proj = calc.get_atom_projection((0.1, 0.2, 0.05), ist0=1, ist1=4)
+proj.matrices.shape          # (natmtot, nst, nst) complex
+proj.matrices[a][i, i].real  # state (ist0+i)'s fractional weight on atom a's muffin tin
+
+n = calc.structure.atom_index("N")   # (species, index) -> this array's atom axis
+proj.matrices[n]                     # atom-projection operator for that N atom
+\end{verbatim}
+\texttt{EigenstateSession.atom\_projection(k, ist0, ist1)} is the underlying session
+method (\texttt{eigenstate\_session()}, Part~\ref{part:eigenstates}); this is a one-off
+convenience wrapper opening and closing its own session, for a single query.
+
 \begin{thebibliography}{9}
 \bibitem{koelling1977}
 D.~D.~Koelling and B.~N.~Harmon,
 \emph{A technique for relativistic spin-polarised calculations},
 J.\ Phys.\ C: Solid State Phys.\ \textbf{10}, 3107 (1977).
+\bibitem{singhnordstrom2006}
+D.~J.~Singh and L.~Nordstr\"om,
+\emph{Planewaves, Pseudopotentials, and the LAPW Method}, 2nd ed.,
+Springer (2006).
 \end{thebibliography}
 
 \end{document}

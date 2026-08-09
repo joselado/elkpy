@@ -817,6 +817,22 @@ class Calculation:
         with self.eigenstate_session() as session:
             return session.overlap(k_a, k_b, ist0, ist1)
 
+    def get_atom_projection(self, k, ist0, ist1):
+        """The atom-projection operator P_alpha for every atom alpha in the
+        cell, restricted to the contiguous band window [ist0, ist1], at a
+        single k-point. A one-off convenience wrapper around
+        eigenstate_session() -- see get_eigenstates()'s docstring about
+        preferring eigenstate_session() directly for repeated queries, and
+        EigenstateSession.atom_projection() for what this computes, its
+        (natmtot, nst, nst) return shape/atom ordering, and its gauge
+        caveat.
+
+        `self.structure.atom_index(symbol, index)` maps a (species, index)
+        pair to this array's first axis.
+        """
+        with self.eigenstate_session() as session:
+            return session.atom_projection(k, ist0, ist1)
+
     def run_tasks(self, tasks, blocks=None, resume=True, label=None):
         """Escape hatch for any Elk task not covered by a named get_*
         method (docs/design.md #3).
