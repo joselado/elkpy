@@ -187,6 +187,54 @@ projection operator, the exact muffin-tin/interstitial partition identity, why i
 gauge-comparable across separate diagonalisations): `docs/design.md` §16 and
 `docs/physics.tex` (Part V).
 
+Also implemented, and — like `get_quantum_geometry()` — needing no new Fortran at all:
+`Calculation.get_spin_operator(k, ist0, ist1)` / `EigenstateSession.spin_operator(k, ist0,
+ist1)` — the spin operators $S_x$, $S_y$, $S_z$ (eigenvalues $\pm\tfrac12$) as
+`nst`$\times$`nst` Hermitian matrices in the second-variational eigenbasis, applicable to
+any wavefunction in a band window, the spin-space sibling of the atom-projection operators
+above. The reason no Fortran is needed: Elk's second-variational scheme builds the spinor
+Hilbert space as a literal product basis (the same `nstfv` first-variational spatial
+orbitals reused unchanged for both spin channels — `evecsv` row `i = p + (ispn-1)*nstfv`,
+confirmed directly against `eveqnsv.f90`), so a spin operator ($\mathbb
+1_\text{spatial}\otimes\tfrac12\sigma_a$) is block-diagonal in the spatial index with no
+muffin-tin partition, radial integral, or real-space wavefunction expansion involved at
+all — its matrix elements reduce to plain inner products between `evecsv`'s already-computed
+spin-up/spin-down row blocks (`parsers/spin.py`, pure NumPy). This means
+`EigenstateSession.spin_operator()` issues no new task-9002 query either: it's a
+`get_eigenstates(k)` call (already implemented) plus that linear algebra. Requires
+`spinpol=True` or `spinorb=True` (`nspinor=2`, needed for the up/down block split to
+exist) — raises `ValueError` immediately otherwise, before any Fortran query. Verified
+against a real compiled binary: `sx`/`sy`/`sz` are Hermitian at a generic k-point; and, on
+monolayer WSe2 with `spinorb=True` — broken inversion symmetry (unlike bulk 2H stacking, a
+monolayer TMD has no inversion center) plus strong spin-orbit coupling locks the
+valence-band-top spin to the valley index, so $S_z(K)=-S_z(K')$ (Xiao, Liu, Feng, Xu & Yao,
+*Coupled Spin and Valley Physics in Monolayers of MoS2 and Other Group-VI Dichalcogenides*,
+PRL 108, 196802 (2012)) — the RELATIVE sign is that published sign-of-the-effect prediction,
+the same K/K' spirit as the Berry-curvature and atom-projection checks above; the ABSOLUTE
+sign ($S_z(K)$ specifically negative) is a regression pin, not itself a physics prediction —
+it depends on this structure's own conventions (chalcogen z-ordering, lattice-vector
+handedness) and on which `evecsv` row block (§14's `i = p + (ispn-1)*nstfv`) is physically
+"up". Measured: $S_z(K)\approx-0.4997$, $S_z(K')\approx+0.4997$ — nearly maximal
+polarization, consistent with WSe2's unusually strong ($\gtrsim400$ meV) valence-band SOC
+splitting (`tests/test_calculation_spin.py`). That row-block labelling is itself verified,
+not just derived from reading `eveqnsv.f90`: collinear ferromagnetic Fe (`spinpol=True`, no
+SOC) takes `eveqnsv.f90`'s block-diagonalization branch, which zeros the off-diagonal spin
+blocks so bands `1..nstfv` are EXACTLY pure spin-up and `nstfv+1..nstsv` EXACTLY pure
+spin-down by construction (machine-precision $S_z=\pm0.5$, no genolpq truncation floor
+involved) — and, crucially, upstream `bandstr.f90` task 23 ("spin character of band", an
+entirely separate Fortran code path via `gendmatk`/`wfmtsv`, not `evecsv` arithmetic at all)
+independently confirms band 1 is the state ITS OWN printed column labels "spin-up" — closing
+the one thing Hermiticity/su(2)/K-K′-antisymmetry structurally cannot catch: a global
+up↔down relabelling flips every one of those checks identically, so none of them alone can
+tell which physical spin `evecsv` row block 1 actually is. The arithmetic itself is
+separately pinned on synthetic data (`tests/test_parsers_spin.py`): Hermiticity and the
+su(2) commutation relation $[S_x,S_y]=iS_z$ (and the spin-$\tfrac12$ Casimir
+$S_x^2+S_y^2+S_z^2=\tfrac34\mathbb 1$) hold for a random unitary `evecsv`, not just the
+identity basis — expected, since $S_a$ in any eigenbasis is a similarity transform of the
+fixed physical operator, which preserves commutators. Physics writeup (the product-basis
+derivation, spin-valley locking, the Fe cross-checks): `docs/design.md` §17 and
+`docs/physics.tex` (Part VI).
+
 ## Architecture
 
 - `src/elkpy/structure.py` — `Structure`: lattice vectors (`avec`, Bohr) + species, each atom either a

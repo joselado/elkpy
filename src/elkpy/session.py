@@ -19,6 +19,7 @@ from .parsers.eigenstates import (
     parse_overlap_response,
     parse_projection_response,
 )
+from .parsers.spin import compute_spin_operator
 
 READY_SENTINEL = "ELKPY_SESSION_READY"
 END_SENTINEL = "ELKPY_SESSION_END"
@@ -26,6 +27,7 @@ ERROR_PREFIX = "ELKPY_SESSION_ERROR"
 
 Eigenstates = namedtuple("Eigenstates", ["k", "energies", "evecsv"])
 AtomProjection = namedtuple("AtomProjection", ["k", "matrices"])
+SpinOperator = namedtuple("SpinOperator", ["k", "sx", "sy", "sz"])
 
 
 def _fmt(x):
@@ -59,10 +61,11 @@ class EigenstateSession:
     a hang. Start a new session to continue after that.
     """
 
-    def __init__(self, proc, workdir):
+    def __init__(self, proc, workdir, nspinor=1):
         self._proc = proc
         self.workdir = workdir
         self._closed = False
+        self._nspinor = nspinor
         self._wait_ready()
 
     def _send(self, line):
@@ -213,6 +216,39 @@ class EigenstateSession:
         self._send(f"PROJECTION {_fmt(k[0])} {_fmt(k[1])} {_fmt(k[2])} {int(ist0)} {int(ist1)}")
         tokens = self._read_until_sentinel()
         return AtomProjection(k=k, matrices=parse_projection_response(tokens))
+
+    def spin_operator(self, k, ist0, ist1):
+        """The spin operators S_x, S_y, S_z (hbar=1, so eigenvalues +-1/2
+        for a pure spin state) as Hermitian nst x nst matrices in the
+        contiguous 1-indexed band window [ist0, ist1], applicable to any
+        wavefunction in that window -- the spin-space analogue of
+        atom_projection(). See docs/design.md #17 and docs/physics.tex
+        Part VI for the physics.
+
+        Unlike atom_projection(), this issues NO new query to the Fortran
+        session: evecsv already returned by an EIGENSTATES query fully
+        determines S_a (the second-variational spinor basis makes S_a
+        block-diagonal in the first-variational spatial index -- see
+        parsers.spin.compute_spin_operator's docstring), so this is a plain
+        get_eigenstates(k) call plus Python-side linear algebra.
+
+        Raises ValueError if this calculation is not spin-polarized
+        (nspinor=1, i.e. neither spinpol=True nor spinorb=True was set) --
+        there is no spin-up/spin-down block to build S_a from.
+
+        Returns a SpinOperator(k, sx, sy, sz) namedtuple, each of sx/sy/sz
+        an (nst, nst) complex Hermitian array, nst = ist1 - ist0 + 1.
+        """
+        if self._nspinor != 2:
+            raise ValueError(
+                f"spin operators require a spin-polarized calculation "
+                f"(spinpol=True or spinorb=True), got nspinor={self._nspinor} -- there is "
+                f"no spin-up/spin-down block to build sx/sy/sz from"
+            )
+        state = self.get_eigenstates(k)
+        nstfv = state.evecsv.shape[0] // self._nspinor
+        ops = compute_spin_operator(state.evecsv, nstfv, ist0, ist1)
+        return SpinOperator(k=state.k, **ops)
 
     def close(self, timeout=30):
         """Ask the session to quit and wait for it to exit; idempotent."""

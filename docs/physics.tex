@@ -141,6 +141,7 @@ scale on a disabled term has no physical effect), every key must name a species 
 in the \texttt{Structure}, and every value must be $\geq 0$.
 
 \part{Berry curvature via the Wilson-loop (Fukui-Hatsugai-Suzuki) method}
+\label{part:berry}
 
 \section{Setting: Berry curvature and the Chern number}
 
@@ -1048,6 +1049,181 @@ J.\ Phys.\ C: Solid State Phys.\ \textbf{10}, 3107 (1977).
 D.~J.~Singh and L.~Nordstr\"om,
 \emph{Planewaves, Pseudopotentials, and the LAPW Method}, 2nd ed.,
 Springer (2006).
+\end{thebibliography}
+
+\part{Spin operators applicable to wavefunctions}
+\label{part:spin}
+
+\section{Setting: the second-variational spinor basis is a product basis}
+
+Part~\ref{part:eigenstates} established that Elk's second-variational step diagonalizes the
+spin-dependent Hamiltonian in the basis
+$\{|\varphi_p\rangle\otimes|\uparrow\rangle,\,|\varphi_p\rangle\otimes|\downarrow\rangle\}_{p=1}^{n_{\rm fv}}$,
+where $\{|\varphi_p\rangle\}$ are the already-orthonormal first-variational (scalar,
+spin-independent) eigenstates and $n_{\rm fv}=$ \texttt{nstfv}. This is a genuine \emph{product}
+basis: the same set of spatial orbitals is reused, unchanged, for both spin channels --
+\texttt{eveqnsv.f90} builds exactly one \texttt{evecfv} per first-variational spin index
+(trivially one, outside spin-spirals, which this feature -- like Part~\ref{part:eigenstates}'s
+session generally -- does not support) and only ever couples spin channels through the
+second-variational Hamiltonian's own off-diagonal blocks, never by changing the underlying
+spatial basis per channel. Concretely, \texttt{evecsv} row $i$ corresponds to basis ket
+$|\varphi_p\rangle\otimes|\sigma\rangle$ via
+\begin{equation}
+  i = p + (\sigma-1)\,n_{\rm fv}, \qquad \sigma\in\{1,2\}\ (\uparrow,\downarrow),
+  \label{eq:spinor-index}
+\end{equation}
+Elk's own convention in \texttt{eveqnsv.f90} (the diagonal-block loop
+\texttt{i=nstfv*(ispn-1)+ist}) and confirmed by \texttt{init1.f90}'s
+\texttt{nstsv=nstfv*nspinor}.
+
+\section{Why the spin operator needs no new Fortran}
+
+A spin operator is, by definition, purely a spin-space object acting trivially on the spatial
+degree of freedom: $\hat S_a = \mathbb 1_{\rm spatial}\otimes\tfrac12\sigma_a$ ($a\in\{x,y,z\}$,
+$\hbar=1$, so $\hat S_a$ has eigenvalues $\pm\tfrac12$). In the product basis of
+Eq.~\eqref{eq:spinor-index}, $\hat S_a$ is manifestly \emph{block-diagonal in $p$}:
+\begin{equation}
+  \langle\varphi_p\otimes\sigma|\hat S_a|\varphi_{p'}\otimes\sigma'\rangle
+  = \delta_{pp'}\,\big(\tfrac12\sigma_a\big)_{\sigma\sigma'},
+  \label{eq:spin-op-product-basis}
+\end{equation}
+using $\langle\varphi_p|\varphi_{p'}\rangle=\delta_{pp'}$ (first-variational orthonormality)
+and the ordinary $2\times2$ Pauli matrices $\sigma_x,\sigma_y,\sigma_z$ for the spin factor.
+No radial integral, muffin-tin partition, or real-space wavefunction expansion enters
+Eq.~\eqref{eq:spin-op-product-basis} at all -- unlike literally every other elkpy quantity
+built from \texttt{wfmt}/\texttt{wfir} (Berry curvature, the quantum metric,
+atom-projection). Transforming Eq.~\eqref{eq:spin-op-product-basis} into the second-variational
+eigenbasis $\{|\psi_n\rangle\}$ (columns of \texttt{evecsv}) via
+$(\hat S_a)_{mn}=\sum_{i,j}\overline{\texttt{evecsv}_{im}}\,(\hat S_a)_{ij}\,\texttt{evecsv}_{jn}$
+and using Eq.~\eqref{eq:spin-op-product-basis} to collapse the $p$-sum,
+\begin{align}
+  (S_z)_{mn} &= \tfrac12\Big(u_m^\dagger u_n - d_m^\dagger d_n\Big), \label{eq:sz}\\
+  (S_x)_{mn} &= \tfrac12\Big(u_m^\dagger d_n + d_m^\dagger u_n\Big), \label{eq:sx}\\
+  (S_y)_{mn} &= \tfrac{i}{2}\Big(d_m^\dagger u_n - u_m^\dagger d_n\Big), \label{eq:sy}
+\end{align}
+where $u_n,d_n\in\mathbb C^{n_{\rm fv}}$ are \texttt{evecsv}'s own spin-up/spin-down row
+blocks for eigenvector $n$ ($u_n=\texttt{evecsv}[0{:}n_{\rm fv},\,n]$,
+$d_n=\texttt{evecsv}[n_{\rm fv}{:}2n_{\rm fv},\,n]$ in the 0-based row layout of
+Eq.~\eqref{eq:spinor-index}) -- plain inner products between two already-computed vectors,
+Hermitian by inspection (each is a sum of a matrix and its own conjugate-transpose partner).
+This is \texttt{parsers.spin.compute\_spin\_operator}: given \texttt{evecsv} (already returned
+by the existing \texttt{EIGENSTATES} query, Part~\ref{part:eigenstates}) and $n_{\rm fv}$, it
+is NumPy matrix algebra, no new elk task or Fortran subroutine.
+
+\section{Requires spin polarization}
+
+Eqs.~\eqref{eq:sz}--\eqref{eq:sy} presuppose a spin-up/spin-down block split, i.e.\
+$n_{\rm spinor}=2$ -- true whenever \texttt{spinpol=True} \emph{or} \texttt{spinorb=True} (the
+latter forces the former internally, Elk's own \texttt{init0.f90}: \texttt{if (spinorb...)
+spinpol=.true.}). For a non-spin-polarized calculation ($n_{\rm spinor}=1$, \texttt{nstsv}
+$=n_{\rm fv}$) there is no second block to build $u_n,d_n$ from, and
+\texttt{EigenstateSession.spin\_operator()} raises \texttt{ValueError} rather than returning a
+zero or otherwise meaningless operator.
+
+\subsection{Which row block is actually ``up''?}
+
+Eqs.~\eqref{eq:sz}--\eqref{eq:sy} assume \texttt{evecsv} row block 1 (rows $0{:}n_{\rm fv}$)
+is physically spin-up, $\sigma=1$ in \texttt{eveqnsv.f90}'s own convention -- read directly
+from the Fortran (\S above), but a \emph{derivation from reading code} is not a runtime
+check, and this one has a specific blind spot: a global relabelling of the two blocks (swap
+``up''/``down'' everywhere) flips the sign of $S_z$ and $S_y$ identically, so Hermiticity,
+the $\mathfrak{su}(2)$ algebra, and even $S_z(K)=-S_z(K')$ below all stay satisfied either
+way -- none of them can distinguish the two labellings. Closing this needs an independent
+Fortran code path that never touches \texttt{evecsv}-block arithmetic at all (verified
+subsection below).
+
+\subsection{Verified}
+
+The arithmetic itself (Eqs.~\eqref{eq:sz}--\eqref{eq:sy}) is pinned on synthetic data before
+trusting it against any real diagonalization
+(\texttt{tests/test\_parsers\_spin.py}): Hermiticity and the $\mathfrak{su}(2)$ commutation
+relation $[S_x,S_y]=iS_z$ (and cyclic permutations) hold for a \emph{random} unitary
+\texttt{evecsv}, not merely the trivial identity basis -- expected, since $S_a$ in any
+eigenbasis is exactly the similarity transform $V^\dagger(\mathbb
+1\otimes\tfrac12\sigma_a)V$ of the fixed physical operator, and $[V^\dagger A V, V^\dagger B
+V]=V^\dagger[A,B]V$ for any unitary $V$; likewise the spin-$\tfrac12$ Casimir
+$S_x^2+S_y^2+S_z^2=\tfrac34\mathbb 1$, also basis-independent. Definite-$\sigma_a$ pure
+states, built directly from the block split with no diagonalization involved, reproduce the
+expected $\pm\tfrac12$ diagonal expectation values (and vanishing cross-axis ones).
+
+Against a real compiled binary (\texttt{tests/test\_calculation\_spin.py}): $S_x,S_y,S_z$ are
+Hermitian at a generic $\mathbf k$-point (a live diagonalization, not the synthetic matrices
+above); \texttt{spin\_operator()} raises \texttt{ValueError} for a non-spin-polarized
+calculation; and, on monolayer WSe$_2$ with spin-orbit coupling, the valence-band-top spin is
+locked to the valley index, $S_z(K)=-S_z(K')$ -- the RELATIVE sign is a sharp,
+sign-of-the-effect physical prediction from an independent published source (\S\,below), not
+a plausibility band; the ABSOLUTE sign ($S_z(K)$ specifically negative) is a regression pin,
+not itself part of that prediction -- it depends on this structure's own conventions
+(chalcogen $z$-ordering, lattice-vector handedness) and on the row-block labelling above.
+Measured: $S_z(K)\approx-0.4997$, $S_z(K')\approx+0.4997$, i.e.\ nearly maximal polarization,
+consistent with WSe$_2$'s unusually strong ($\gtrsim400$~meV) valence-band spin-orbit
+splitting.
+
+\textbf{Closing the row-block question.} On collinear ferromagnetic Fe (\texttt{spinpol=True},
+no spin-orbit coupling, no noncollinear magnetism), \texttt{eveqnsv.f90} takes its
+block-diagonalization branch (the off-diagonal spin blocks are zeroed and the two remaining
+blocks diagonalized separately), so bands $1{:}n_{\rm fv}$ are EXACTLY pure spin-up and
+$n_{\rm fv}{+}1{:}n_{\rm sv}$ EXACTLY pure spin-down BY CONSTRUCTION -- $S_z=\pm0.5$ to
+machine precision (no real-space wavefunction expansion enters this feature at all, so
+\texttt{genolpq}'s $\sim10^{-3}$ truncation floor, Part~\ref{part:eigenstates}, is not a
+factor here). That alone is a strong structural check but not yet proof of which physical
+spin is which; upstream \texttt{bandstr.f90} task 23 (``spin character of band'', via
+\texttt{gendmatk}/\texttt{wfmtsv} -- no \texttt{evecsv}-block arithmetic at all) closes that
+gap: its own log message names its output columns ``spin-up and spin-down characters'' for
+$\sigma=1,2$, i.e.\ Elk's own code independently labels $\sigma=1$ ``spin-up''. Checked at
+the same $\mathbf k$-point (a 2-point \texttt{plot1d} path whose first vertex is that $k$,
+the same construction Part~\ref{part:atomprojection}'s task 21 cross-check uses): band 1
+(this feature's own ``spin-up'' state) is the one \texttt{bandstr.f90} also reports as
+spin-up-dominated, and band $n_{\rm fv}{+}1$ is spin-down-dominated
+(\texttt{tests/test\_calculation\_spin.py}) -- the same ``internally consistent but possibly
+mislabelled'' risk Part~\ref{part:atomprojection} already flagged for atom-projection
+weight, here closed for a sign rather than a magnitude.
+
+\section{The physical prediction: spin-valley locking in monolayer TMDs}
+
+Bulk 2H group-VI transition-metal dichalcogenides (MX$_2$, $M=$Mo,W, $X=$S,Se) stack layers
+related by inversion, restoring an inversion center for the bulk crystal. An isolated
+\emph{monolayer} has no such partner layer and lacks inversion symmetry outright (space group
+$P\bar 6m2$, point group $D_{3h}$). Broken inversion symmetry lifts the spin degeneracy that
+would otherwise be enforced at a generic $\mathbf k$ by the combination of time-reversal and
+inversion; combined with the strong spin-orbit coupling native to the heavy $M$ atom's $d$
+orbitals (dominating the valence-band-edge states at $K$/$K'$), this produces a large,
+valley-contrasting spin splitting of the valence band \cite{xiao2012}. Because the two valleys
+$K$ and $K'=-K$ (mod a reciprocal lattice vector) are exchanged by time reversal, and time
+reversal flips both momentum \emph{and} spin, the valence-band-top spin must be exactly
+opposite at the two valleys:
+\begin{equation}
+  S_z(K) = -S_z(K'),
+  \label{eq:spin-valley-locking}
+\end{equation}
+\emph{spin-valley locking} -- the basis of proposed valleytronic and spintronic applications
+of these materials, since flipping either the valley or the spin index alone (but not both
+together) is forbidden at the band edge. Eq.~\eqref{eq:spin-valley-locking} is exactly what
+\texttt{tests/test\_calculation\_spin.py::test\_valence\_band\_spin\_valley\_locking} checks,
+at the same $K=(1/3,1/3,0)$, $K'=(-1/3,-1/3,0)$ points already used for the K/K$'$ Berry
+curvature (Part~\ref{part:berry}) and quantum-metric (Part~\ref{part:quantumgeometry}) checks.
+
+\subsection{How to use in code}
+
+\begin{verbatim}
+wse2 = Structure(WSE2_AVEC, WSE2_SPECIES).get_calculation(
+    "wse2", xc="PW", ngridk=(3, 3, 1), rgkmax=7.0, spinorb=True
+)
+wse2.get_energy()
+
+with wse2.eigenstate_session() as session:
+    ops = session.spin_operator((1 / 3, 1 / 3, 0), ist0=ist1, ist1=ist1)  # valence-band top at K
+    ops.sz[0, 0].real  # <S_z>, in [-1/2, 1/2]
+\end{verbatim}
+\texttt{get\_spin\_operator(k, ist0, ist1)} is a one-off convenience wrapper around
+\texttt{eigenstate\_session()} (Part~\ref{part:eigenstates}), for a single query.
+
+\begin{thebibliography}{9}
+\bibitem{xiao2012}
+D.~Xiao, G.-B.~Liu, W.~Feng, X.~Xu and W.~Yao,
+\emph{Coupled Spin and Valley Physics in Monolayers of MoS$_2$ and Other Group-VI
+Dichalcogenides},
+Phys.\ Rev.\ Lett.\ \textbf{108}, 196802 (2012), arXiv:1112.3144.
 \end{thebibliography}
 
 \end{document}

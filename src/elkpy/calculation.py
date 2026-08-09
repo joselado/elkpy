@@ -788,7 +788,11 @@ class Calculation:
         self._add_base_blocks(f)
         f.write(subdir / "elk.in")
         proc = self.launcher.start_session(subdir)
-        return EigenstateSession(proc, subdir)
+        # nspinor=2 whenever spinpol or spinorb is set -- spinorb forces
+        # spinpol internally in Elk's own init0.f90 regardless of the
+        # elk.in spinpol value, so it alone is enough to imply nspinor=2.
+        nspinor = 2 if (self.spinpol or self.spinorb) else 1
+        return EigenstateSession(proc, subdir, nspinor=nspinor)
 
     def get_eigenstates(self, k):
         """Second-variational energies (Hartree) and eigenvectors (evecsv)
@@ -832,6 +836,18 @@ class Calculation:
         """
         with self.eigenstate_session() as session:
             return session.atom_projection(k, ist0, ist1)
+
+    def get_spin_operator(self, k, ist0, ist1):
+        """The spin operators S_x, S_y, S_z for the contiguous band window
+        [ist0, ist1], at a single k-point. A one-off convenience wrapper
+        around eigenstate_session() -- see get_eigenstates()'s docstring
+        about preferring eigenstate_session() directly for repeated
+        queries, and EigenstateSession.spin_operator() for what this
+        computes, its return shape, and why it needs spinpol=True or
+        spinorb=True.
+        """
+        with self.eigenstate_session() as session:
+            return session.spin_operator(k, ist0, ist1)
 
     def run_tasks(self, tasks, blocks=None, resume=True, label=None):
         """Escape hatch for any Elk task not covered by a named get_*

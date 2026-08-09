@@ -836,3 +836,105 @@ electronegative N pulling the bonding state's weight toward itself, the standard
 qualitative picture for h-BN's band character, and a sharp sign-of-the-effect prediction
 rather than a plausibility band, the same spirit as §13's K/K′ curvature antisymmetry check
 (`tests/test_calculation_atom_projection.py`).
+
+## 17. Spin operators ($S_x$, $S_y$, $S_z$) applicable to wavefunctions
+
+`Calculation.get_spin_operator(k, ist0, ist1)` / `EigenstateSession.spin_operator(k, ist0,
+ist1)` compute the spin operators $S_x$, $S_y$, $S_z$ (units $\hbar=1$, so eigenvalues
+$\pm\tfrac12$ for a pure spin state) as `nst`$\times$`nst` Hermitian matrices in the
+second-variational eigenbasis of one diagonalisation at $k$ — the spin-space analogue of
+§16's atom-projection operators, and, like §15's quantum metric, needing **no new Fortran
+at all**: every number this consumes (`evecsv`) is already returned by the existing
+`EIGENSTATES` query (task 9002, §14), so `src/elkpy/parsers/spin.py` is pure NumPy.
+
+**Why evecsv alone is enough.** Elk's second-variational scheme builds the full spinor
+Hilbert space as a *product* basis: the same `nstfv` first-variational (spin-independent,
+scalar-relativistic) spatial states $\{\varphi_p\}$ span both spin channels, so
+$\{|\varphi_p\rangle\otimes|{\uparrow}\rangle,\,|\varphi_p\rangle\otimes|{\downarrow}\rangle\}_{p=1}^{n_{\rm fv}}$
+is an orthonormal basis of the $2n_{\rm fv}$-dimensional spinor space (`eveqnsv.f90`'s own
+row layout: `evecsv` row `i = p + (ispn-1)*nstfv`, `ispn` $\in\{1,2\}$, confirmed directly
+against `eveqnsv.f90` and `init1.f90`'s `nstsv=nstfv*nspinor`). A spin operator
+$S_a=\mathbb 1_{\rm spatial}\otimes\tfrac12\sigma_a$ is therefore block-diagonal in $p$ in
+this basis — no radial integral, muffin-tin partition, or real-space expansion is needed
+at all, unlike every other elkpy quantity built from `wfmt`/`wfir` — and its matrix
+elements in the second-variational eigenbasis reduce to plain inner products between
+`evecsv`'s spin-up and spin-down row blocks (`parsers.spin.compute_spin_operator`; full
+derivation in `docs/physics.tex` Part VI). This is why `EigenstateSession.spin_operator()`
+issues no new session query: it calls `get_eigenstates(k)` (already implemented) and does
+the rest in Python.
+
+**Requires spin polarization.** `nstsv=nstfv*nspinor`, and $S_a$'s block split needs
+`nspinor=2` — i.e. `Calculation(spinpol=True)` or `spinorb=True` (which forces `spinpol`
+internally, per Elk's own `init0.f90`, the same forcing rule `eigenstate_session()` already
+relies on when computing `nspinor` to pass to `EigenstateSession`). `spin_operator()` raises
+`ValueError` immediately for a `nspinor=1` calculation rather than silently returning a
+zero or meaningless operator — checked before any Fortran query, so it costs nothing beyond
+opening the session.
+
+**How to use in code**:
+
+```python
+wse2 = Structure(WSE2_AVEC, WSE2_SPECIES).get_calculation(
+    "wse2", xc="PW", ngridk=(3, 3, 1), rgkmax=7.0, spinorb=True
+)
+wse2.get_energy()
+
+with wse2.eigenstate_session() as session:
+    ops = session.spin_operator((1 / 3, 1 / 3, 0), ist0=ist1, ist1=ist1)  # valence-band top at K
+    ops.sz[0, 0].real  # <S_z> for that state, in [-1/2, 1/2]
+```
+
+**Which row block is actually "up"?** Eqs. above assume `evecsv` row block 1 (rows
+`0:nstfv`) is physically spin-up, `ispn=1` in `eveqnsv.f90`'s own convention — read directly
+from the Fortran (§ above), but a *derivation from reading code* is not the same as a
+runtime check, and this one has a specific failure mode that none of Hermiticity, the
+$\mathfrak{su}(2)$ algebra, or K/K′ antisymmetry can catch: a global relabelling of the two
+blocks (swap "up" and "down" everywhere) flips the sign of every one of those checks
+*identically*, so they stay satisfied either way. Closing this needs an independent
+Fortran code path that does not go through `evecsv`-block arithmetic at all — see below.
+
+Verified against a real compiled binary: `sx`/`sy`/`sz` are Hermitian at a generic $k$-point
+(immediate from `compute_spin_operator`'s Gram-matrix-like construction, checked directly
+rather than assumed); `spin_operator()` raises `ValueError` for a non-spin-polarized
+calculation; and, on monolayer WSe2 with spin-orbit coupling (`spinorb=True`) — broken
+inversion symmetry (unlike bulk 2H stacking, a monolayer TMD has no inversion center) plus
+strong SOC locks the valence-band-top spin to the valley index, so $S_z(K)=-S_z(K')$ (Xiao,
+Liu, Feng, Xu \& Yao, *Coupled Spin and Valley Physics in Monolayers of MoS₂ and Other
+Group-VI Dichalcogenides*, Phys. Rev. Lett. 108, 196802 (2012)) — the RELATIVE sign is that
+published sign-of-the-effect prediction, the same spirit as §13's K/K′ curvature
+antisymmetry and §16's N/B atom-character checks; the ABSOLUTE sign ($S_z(K)$ specifically
+negative) is a regression pin, not itself a physics prediction — it depends on this
+structure's own conventions (chalcogen z-ordering, lattice-vector handedness) and on the
+row-block labelling discussed above. Measured: $S_z(K)\approx-0.4997$,
+$S_z(K')\approx+0.4997$ — nearly maximally spin-polarized, consistent with WSe2's unusually
+strong ($\gtrsim$400 meV) valence-band SOC splitting (`tests/test_calculation_spin.py`).
+
+**Closing the row-block question**, on collinear ferromagnetic Fe (`spinpol=True`, no SOC,
+no noncollinear magnetism): `eveqnsv.f90` takes its block-diagonalization branch in this
+case (zeroing the off-diagonal spin blocks and diagonalizing the two remaining blocks
+separately), so bands `1..nstfv` are EXACTLY pure spin-up and `nstfv+1..nstsv` EXACTLY pure
+spin-down BY CONSTRUCTION — $S_z=\pm0.5$ to machine precision (no `genolpq`
+real-space-truncation floor involved, since this feature never expands a real-space
+wavefunction at all) — a strong structural check, but still not by itself proof of which
+physical spin is which. That comes from upstream `bandstr.f90` task 23 ("spin character of
+band"), an entirely separate code path (`gendmatk`/`wfmtsv`, no `evecsv`-block arithmetic)
+whose own log message names its output columns "spin-up and spin-down characters" for
+`ispn=1,2` — i.e. Elk's own code independently labels `ispn=1` "spin-up". Checked at the
+same k-point via a 2-point `plot1d` path (same first-vertex-equals-query-k argument as
+§16's task 21 cross-check): band 1 (this feature's own "spin-up" state) is the one
+`bandstr.f90` also reports as spin-up-dominated, and band `nstfv+1` is spin-down-dominated
+(`tests/test_calculation_spin.py`). This is the same "internally consistent but possibly
+mislabelled" risk §16 already flagged for atom-projection weight (only an external
+reference computing the same number a different way closes it) — here applied to a sign
+rather than a magnitude.
+
+The synthetic-data unit tests (`tests/test_parsers_spin.py`) independently pin the
+arithmetic itself, ahead of and without needing a real diagonalisation: Hermiticity and the
+$\mathfrak{su}(2)$ commutation relation $[S_x,S_y]=iS_z$ (cyclic) hold for *any* unitary
+change of basis (a random unitary `evecsv`, not just the identity), since $S_a$ in the
+eigenbasis is exactly a similarity transform $V^\dagger(\mathbb 1\otimes\tfrac12\sigma_a)V$
+of the fixed physical operator; the spin-$\tfrac12$ Casimir
+$S_x^2+S_y^2+S_z^2=\tfrac34\mathbb 1$ holds for the same reason; and definite-$\sigma_a$
+pure states (built directly from the up/down block split, no diagonalisation involved)
+reproduce the expected $\pm\tfrac12$ diagonal expectation values and vanishing cross-axis
+ones.
