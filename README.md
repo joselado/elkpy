@@ -10,7 +10,8 @@ wraps Elk's `elk.in`/task-number workflow in a small, `pyqula`-style object mode
 per-species spin-orbit coupling scaling, the full quantum geometric tensor (Berry
 curvature/Chern numbers and the quantum metric) via a Wilson-loop method, fast
 eigenstate/wavefunction-overlap queries at arbitrary k-points, and atom-projection,
-orbital-character (s/p/d/f), and spin operators applicable to those wavefunctions.
+orbital-character (s/p/d/f), angular momentum, and spin operators applicable to those
+wavefunctions.
 
 ```python
 from elkpy.structure import Structure
@@ -51,6 +52,7 @@ python3 -m pip install -e .        # add .[ase] for Structure.from_ase()/to_ase(
 - Wavefunction overlaps $O_{ab}(\mathbf k_a,\mathbf k_b)=\langle\psi_a(\mathbf k_a)|\psi_b(\mathbf k_b)\rangle$ between two arbitrary k-points, queried interactively
 - Atom-projection operators $(P_\alpha)_{ij}=\langle\psi_i|\hat P_\alpha|\psi_j\rangle$ (muffin-tin restriction of the identity, $\sum_\alpha P_\alpha+P_{\rm interstitial}=\mathbb 1$), applicable to any wavefunction in the same band window
 - Orbital-character (s, p, d, f) operators $P_{\alpha,\ell}=\sum_{m,\sigma}\langle\psi_i|\hat P_{\alpha,\ell m\sigma}|\psi_j\rangle$, the atom-projection operator resolved by angular momentum $\ell=0,1,2,3$
+- Atomic angular momentum operators $L_x,L_y,L_z$, the same $\ell$-resolved atom-projection operator generalized from a scalar weight to the full ladder-operator matrix (reusing Elk's own `lopzflm` subroutine)
 - Spin operators $S_x,S_y,S_z$ (eigenvalues $\pm\tfrac12$) as Hermitian matrices in a band window, applicable to any wavefunction the same way
 
 ## Ground-state electronic structure ##
@@ -134,6 +136,22 @@ orb_deep.matrices[n, :, 0, 0].real  # (s, p, d, f) weight -- s dominates instead
 ```
 ![Alt text](images/hbn_orbital_projection.png?raw=true "s/p/d/f orbital character on nitrogen, valence-top vs. deep bonding band of monolayer h-BN")
 
+## Angular momentum operators: orbital valley locking in monolayer WSe2 ##
+The valence-band-top state at K/K' is a pure $d_{x^2-y^2}\mp id_{xy}=Y_2^{\mp2}$ state on
+tungsten (Xiao, Liu, Feng, Xu & Yao, PRL 108, 196802 (2012)): $L_z(K)=-L_z(K')$, with
+$|L_z^{(d)}(K)|$ exactly $2\times$ W's own d-orbital weight -- only possible for a pure
+$m=\pm2$ state, not a mixture:
+```python
+from elkpy.session import ORBITAL_LABELS
+
+d = ORBITAL_LABELS.index("d")
+w = wse2.structure.atom_index("W")
+with wse2.eigenstate_session() as session:
+    lz_k = session.angular_momentum(K, ist1, ist1).lz_orbital[w, d, 0, 0].real
+    lz_kprime = session.angular_momentum(Kprime, ist1, ist1).lz_orbital[w, d, 0, 0].real
+```
+![Alt text](images/wse2_angular_momentum.png?raw=true "Lz of monolayer WSe2's valence-band-top state at K and K', W d-channel")
+
 ## Spin operators: spin-valley locking in monolayer WSe2 ##
 Broken inversion symmetry plus strong spin-orbit coupling locks the valence-band-top spin
 to the valley index: $S_z(K)=-S_z(K')$ (Xiao, Liu, Feng, Xu & Yao, PRL 108, 196802 (2012)):
@@ -161,7 +179,7 @@ points, density = calc.get_density(grid=(24, 24, 24))  # n(r) = sum_i^occ |psi_i
 ![Alt text](images/si_density.png?raw=true "Charge density slice of bulk silicon")
 
 # Notebooks #
-Ten notebooks under [`notebooks/`](notebooks), one per feature area above, each
+Eleven notebooks under [`notebooks/`](notebooks), one per feature area above, each
 executed end-to-end against a real compiled Elk binary and checked in with its actual
 output (the DFPT phonon notebook is the exception -- left unexecuted with a note,
 since a single call takes ~11-13 minutes). Listed new-physics-first, matching
@@ -177,6 +195,7 @@ is the place to actually start:
 | [`08_atom_projection.ipynb`](notebooks/08_atom_projection.ipynb) | Atom-projection operators, N/B character of monolayer h-BN | yes |
 | [`09_spin_operators.ipynb`](notebooks/09_spin_operators.ipynb) | Spin operators, spin-valley locking in monolayer WSe2 | yes |
 | [`10_orbital_projection.ipynb`](notebooks/10_orbital_projection.ipynb) | Orbital-character (s/p/d/f) operators, p vs. s character across bands of monolayer h-BN | yes |
+| [`11_angular_momentum.ipynb`](notebooks/11_angular_momentum.ipynb) | Angular momentum operators, orbital valley locking in monolayer WSe2 | yes |
 | [`01_getting_started.ipynb`](notebooks/01_getting_started.ipynb) | Ground state, band structure, density of states | -- |
 | [`02_relaxation_forces_and_properties.ipynb`](notebooks/02_relaxation_forces_and_properties.ipynb) | Forces, relaxation, effective mass, density, `run_tasks()` | -- |
 | [`03_phonon_dispersion_and_dos.ipynb`](notebooks/03_phonon_dispersion_and_dos.ipynb) | Phonon dispersion/DOS via DFPT | -- |

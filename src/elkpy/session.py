@@ -15,6 +15,7 @@ created.
 from collections import namedtuple
 
 from .parsers.eigenstates import (
+    parse_angular_momentum_response,
     parse_eigenstates_response,
     parse_orbital_projection_response,
     parse_overlap_response,
@@ -35,6 +36,9 @@ Eigenstates = namedtuple("Eigenstates", ["k", "energies", "evecsv"])
 AtomProjection = namedtuple("AtomProjection", ["k", "matrices"])
 OrbitalProjection = namedtuple("OrbitalProjection", ["k", "matrices"])
 SpinOperator = namedtuple("SpinOperator", ["k", "sx", "sy", "sz"])
+AngularMomentum = namedtuple(
+    "AngularMomentum", ["k", "lx", "ly", "lz", "lx_orbital", "ly_orbital", "lz_orbital"]
+)
 
 
 def _fmt(x):
@@ -260,6 +264,62 @@ class EigenstateSession:
         self._send(f"ORBITAL {_fmt(k[0])} {_fmt(k[1])} {_fmt(k[2])} {int(ist0)} {int(ist1)}")
         tokens = self._read_until_sentinel()
         return OrbitalProjection(k=k, matrices=parse_orbital_projection_response(tokens))
+
+    def angular_momentum(self, k, ist0, ist1):
+        """The (orbital) angular momentum operators L_x, L_y, L_z, l-resolved
+        for l=0,1,2,3 (s, p, d, f -- ORBITAL_LABELS) and restricted to atom
+        alpha's muffin-tin sphere, for EVERY atom alpha in the cell at once,
+        in the contiguous 1-indexed second-variational band window
+        [ist0, ist1] -- via elkpy_angmomproj (src/elkpy_eigenstates.f90),
+        the vector-operator sibling of orbital_projection(): where
+        orbital_projection() reduces each l shell to a scalar weight,
+        L_x/L_y/L_z mix m within that shell (the ladder-operator structure
+        L_+-|l,m> propto |l,m+-1>), reusing upstream Elk's own lopzflm
+        subroutine (unmodified -- the same one Elk's own on-site L.S trace,
+        dmatls.f90, already uses) for the ladder-operator matrix elements.
+        This is the ORBITAL angular momentum, not spin -- see
+        spin_operator() for S_a. See docs/design.md #19 and
+        docs/physics.tex Part VIII for the physics.
+
+        Returns an AngularMomentum(k, lx, ly, lz, lx_orbital, ly_orbital,
+        lz_orbital) namedtuple. lx_orbital/ly_orbital/lz_orbital have shape
+        (natmtot, 4, nst, nst) complex (atom axis in Fortran's global
+        1-based order, l axis 0..3 = s,p,d,f); lx/ly/lz are their l=0..3 sum,
+        shape (natmtot, nst, nst) -- the headline per-atom operator, summed
+        in Python (not a separate Fortran query), so -- unlike
+        atom_projection()'s sum to Elk's own lmaxo (6 by default) -- this
+        total only covers l=0..3, the same g/h/i-excluded partiality
+        orbital_projection()'s own sum-of-four-l's already has relative to
+        atom_projection().
+
+        Each matrix is Hermitian, but -- unlike atom_projection()/
+        orbital_projection() -- NOT positive semi-definite in general (an
+        angular momentum expectation value can be negative). Two algebraic
+        identities of the analytic, untruncated (2l+1)x(2l+1) operators,
+        [L_x, L_y] = i*L_z and L_x^2 + L_y^2 + L_z^2 = l(l+1)*1, do NOT carry
+        over to these nst x nst matrices as matrix products: both require a
+        resolution of identity over every state, not just the requested
+        band window, so evaluating them directly on lx/ly/lz here will not
+        reproduce the analytic result -- expected truncation behaviour, not
+        a bug (see tests/test_parsers_angular_momentum.py, which verifies
+        the identities on the untruncated analytic matrices instead).
+        """
+        k = tuple(float(x) for x in k)
+        self._send(f"ANGMOM {_fmt(k[0])} {_fmt(k[1])} {_fmt(k[2])} {int(ist0)} {int(ist1)}")
+        tokens = self._read_until_sentinel()
+        matrices = parse_angular_momentum_response(tokens)
+        lx_orbital = matrices[:, :, 0]
+        ly_orbital = matrices[:, :, 1]
+        lz_orbital = matrices[:, :, 2]
+        return AngularMomentum(
+            k=k,
+            lx=lx_orbital.sum(axis=1),
+            ly=ly_orbital.sum(axis=1),
+            lz=lz_orbital.sum(axis=1),
+            lx_orbital=lx_orbital,
+            ly_orbital=ly_orbital,
+            lz_orbital=lz_orbital,
+        )
 
     def spin_operator(self, k, ist0, ist1):
         """The spin operators S_x, S_y, S_z (hbar=1, so eigenvalues +-1/2

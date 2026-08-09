@@ -1382,4 +1382,188 @@ method (\texttt{eigenstate\_session()}, Part~\ref{part:eigenstates});
 \texttt{get\_orbital\_projection(k, ist0, ist1)} is a one-off convenience wrapper opening
 and closing its own session, for a single query.
 
+\part{Atomic angular momentum operators applicable to wavefunctions}
+\label{part:angularmomentum}
+
+\section{From projection to angular momentum: mixing $m$ instead of summing over it}
+
+Part~\ref{part:orbitalprojection}'s $P_{\alpha,\ell}$ sums Eq.~\eqref{eq:orbitalproj} over
+$m=-\ell,\dots,\ell$, discarding the relative phase between different $m$ within one
+$\ell$ shell. The \emph{orbital angular momentum operator} $\hat{\bf L}=(L_x,L_y,L_z)$
+keeps that structure instead of discarding it: restricted to atom $\alpha$'s muffin-tin
+sphere and one $\ell$ channel, its matrix elements between two eigenstates $i,j$ of one
+diagonalization are
+\begin{equation}
+  (L_a)_{\alpha,\ell,ij} = \sum_\sigma \int_0^{R_\alpha}
+    \psi_{i,\alpha\ell\sigma}^*(r,\Omega)\,\hat L_a\,\psi_{j,\alpha\ell\sigma}(r,\Omega)\,
+    r^2\,dr\,d\Omega,
+  \qquad a\in\{x,y,z\},
+  \label{eq:angmom-continuous}
+\end{equation}
+i.e.\ Eq.~\eqref{eq:orbitalproj} with the identity operator between bra and ket replaced
+by $\hat L_a$. Because $\hat{\bf L}$ acts purely on the angular coordinate $\Omega$, not
+on $r$, it commutes with the radial quadrature entirely -- the same $w(r)=r^2$ weight
+Part~\ref{part:orbitalprojection} uses carries over unchanged, and $\hat{\bf L}$ cannot mix
+different $\ell$ (the ladder operators below map $Y_{\ell m}\to Y_{\ell,m\pm1}$, never
+changing $\ell$), so Eq.~\eqref{eq:angmom-continuous} is exactly as $\ell$-block-diagonal
+as $P_{\alpha,\ell}$ already is. What $\hat{\bf L}$ does NOT preserve is the $m$-sum: unlike
+$P_{\alpha,\ell}$, which is diagonal in $m$ (Eq.~\eqref{eq:orbitalproj}'s $\sum_m$ of
+$|c_m|^2$-like terms), $L_x$ and $L_y$ are off-diagonal in $m$ within one $\ell$ block --
+this is the entire physical content of angular momentum: it rotates a state, and $m$-states
+of fixed $\ell$ are exactly the basis such rotation mixes.
+
+\section{Discretized form: reusing upstream Elk's own ladder-operator subroutine}
+
+\texttt{wfmtsv} (Part~\ref{part:atomprojection}) returns the muffin-tin wavefunction
+expansion in exactly the basis needed to evaluate Eq.~\eqref{eq:angmom-continuous}
+cheaply: Elk's APW matching step (\texttt{match.f90}, via \texttt{genylmv}) builds
+$\psi$'s angular expansion in \emph{complex} spherical harmonics $Y_{\ell m}$ (Condon-
+Shortley phase, combined index $\ell m=\ell(\ell{+}1){+}m{+}1$, $m$ ascending
+$-\ell,\dots,\ell$) -- \texttt{wfmtsv} with \texttt{tsh=.true.} (used by
+\texttt{elkpy\_atomproj}/\texttt{elkpy\_orbitalproj}/\texttt{gendmatk.f90} alike) leaves the
+coefficients in this form rather than backward-transforming to a real-space angular grid,
+and no real-tesseral-harmonic (\texttt{rlm}) machinery is invoked anywhere in that call
+path. This is exactly the basis in which the angular momentum ladder operators have their
+textbook closed form,
+\begin{equation}
+  (L_x+iL_y)\,Y_{\ell m} = \sqrt{(\ell-m)(\ell+m+1)}\;Y_{\ell,m+1}, \qquad
+  (L_x-iL_y)\,Y_{\ell m} = \sqrt{(\ell+m)(\ell-m+1)}\;Y_{\ell,m-1}, \qquad
+  L_z\,Y_{\ell m} = m\,Y_{\ell m},
+  \label{eq:ladder}
+\end{equation}
+so no basis change and no independently-derived matrix are needed to apply $\hat{\bf L}$ to
+\texttt{wfmtsv}'s output.
+
+Rather than re-deriving Eq.~\eqref{eq:ladder} as a new elkpy matrix, \texttt{elkpy\_angmomproj}
+(\texttt{patches/0006-angular-momentum.patch}, new subroutine in
+\texttt{src/elkpy\_eigenstates.f90}) calls upstream Elk's own \texttt{lopzflm.f90}
+(unmodified, created 2004, long predating this project) to apply Eq.~\eqref{eq:ladder} to
+each radial shell's $(\ell,m)$ coefficient vector independently ($\hat{\bf L}$ does not act
+on $r$, so each shell transforms on its own, exactly the per-shell ``function''
+\texttt{lopzflm} expects). This is the same subroutine Elk's own on-site $\hat{\bf L}\cdot
+\hat{\bf S}$ density-matrix trace, \texttt{dmatls.f90}, already uses for its own orbital
+magnetic moment output -- \texttt{elkpy\_angmomproj} generalizes \texttt{dmatls.f90}'s
+pattern (apply \texttt{lopzflm} to one index of a density-matrix-like object, then a
+\texttt{wr2cmt}-weighted $\ell m$-sum collapsed to a trace) from a diagonal density matrix's
+trace to the full $i,j$ bra-ket matrix Part~\ref{part:atomprojection}/
+\ref{part:orbitalprojection} already build, and from an $\ell$-summed total to an
+$\ell$-resolved one: for each $\ell=0,1,2,3$, the SAME \texttt{wr2cmt}-weighted,
+$\ell$-masked reduction Eq.~\eqref{eq:orbitalproj-sum}'s \texttt{zgemm} construction already
+performs is applied again, but contracting the original (un-transformed) \texttt{wfmt} as
+the bra against \texttt{lopzflm}'s output as the ket, instead of \texttt{wfmt} against
+itself. No angular-momentum matrix element is derived independently anywhere in this
+codebase -- the only new arithmetic beyond Part~\ref{part:orbitalprojection}'s own masked
+reduction is calling \texttt{lopzflm} first.
+
+\section{Hermitian, not positive semi-definite; two identities lost to truncation}
+
+$(L_a)_{\alpha,\ell}$ is Hermitian by the same weighted-Gram-type argument as
+Parts~\ref{part:atomprojection}--\ref{part:orbitalprojection} ($L_x,L_y,L_z$ are each
+Hermitian on the $|\ell m\rangle$ basis, and $w(r)$ is real and $m$-independent within one
+$\ell$ shell, so the weighted contraction preserves Hermiticity of the operator sandwiched
+inside it) -- but, unlike $P_\alpha$/$P_{\alpha,\ell}$, is \textbf{not} positive
+semi-definite in general: an angular momentum expectation value can be negative.
+
+Two standard identities of the \emph{analytic}, untruncated $(2\ell{+}1)\times(2\ell{+}1)$
+operators do not survive the restriction to a finite band window $[ist_0,ist_1]$:
+\begin{equation}
+  [L_x,L_y] = iL_z \ \text{(and cyclic)}, \qquad
+  L_x^2+L_y^2+L_z^2 = \ell(\ell+1)\,\mathbb 1.
+  \label{eq:su2-and-casimir}
+\end{equation}
+Both involve, implicitly, a resolution of identity $\sum_n|\psi_n\rangle\langle\psi_n|=
+\mathbb 1$ over \emph{every} state of the full Hilbert space -- e.g.\ evaluating
+$[L_x,L_y]$ as an ordinary matrix product on the returned $\texttt{nst}\times\texttt{nst}$
+matrices computes $\Psi^\dagger L_xPL_y\Psi-\Psi^\dagger L_yPL_x\Psi$ for $P$ the projector
+onto the requested band window, not $\Psi^\dagger[L_x,L_y]\Psi=\Psi^\dagger(iL_z)\Psi$,
+because $P$ is generally incomplete ($P\ne\mathbb 1$) -- so neither identity in
+Eq.~\eqref{eq:su2-and-casimir} holds as a matrix product on
+\texttt{get\_angular\_momentum()}'s output. This is not a defect of the implementation; it
+is the same finite-band-window truncation every $\texttt{get\_*}$ method in this codebase
+already has, made concrete here because, for the first time, an identity genuinely
+\emph{would} hold exactly if the truncation were lifted. Both sides of
+Eq.~\eqref{eq:su2-and-casimir} DO hold exactly on the untruncated, analytic
+$(2\ell{+}1)\times(2\ell{+}1)$ matrices themselves -- verified in
+\texttt{tests/test\_parsers\_angular\_momentum.py} via
+\texttt{elkpy.parsers.angular\_momentum}, a pure-Python transcription of
+Eq.~\eqref{eq:ladder} used only for this synthetic pin, never in the production Fortran
+path (which calls the real \texttt{lopzflm} instead).
+
+\subsection{A bug class Hermiticity cannot catch}
+
+In the ascending-$m$ complex-harmonic basis, Eq.~\eqref{eq:ladder} makes $L_z$ real
+diagonal and $L_x$ real symmetric tridiagonal, but $L_y$ \emph{purely imaginary}
+off-diagonal. Transposing which index of a bra-ket pair an operator is sandwiched between
+sends a Hermitian matrix to its complex conjugate, $L_a\mapsto\overline{L_a}$ -- a no-op
+for the real $L_x,L_z$, but a sign flip for the purely imaginary $L_y$ -- and this is
+invisible to a Hermiticity check, since $\overline{L_a}$ is exactly as Hermitian as $L_a$
+(the same ``$\mathrm{conj}(M)$ is exactly as gauge-invariant as $M$'' blind spot
+Part~\ref{part:berry} already documents for the Wilson-loop overlap convention). The
+$\mathfrak{su}(2)$ commutator in Eq.~\eqref{eq:su2-and-casimir} is the discriminator: it
+pins $L_y$'s sign against $L_z$'s, so \texttt{tests/test\_parsers\_angular\_momentum.py}
+includes a regression pin that flips $L_y$'s sign by hand and confirms the commutator
+identity -- which holds exactly on the untruncated analytic matrices -- then fails.
+
+\section{The physical prediction: orbital angular momentum valley locking in monolayer TMDs}
+
+The same broken-inversion-symmetry argument Part~\ref{part:spin} uses for spin-valley
+locking applies to orbital character: Xiao, Liu, Feng, Xu \& Yao's $\mathbf k\cdot\mathbf p$
+model of monolayer group-VI transition-metal dichalcogenides \cite{xiao2012} additionally
+identifies the valence-band-top Bloch state at $K/K'$ as predominantly transition-metal
+$d_{x^2-y^2}\mp id_{xy}$ -- proportional (up to normalization) to $Y_2^{\mp2}$, i.e.\ a
+\emph{pure} $m=\mp2$ state within the $d$ channel, with the sign tied to the valley index.
+Since $K'=-K$ is $K$'s time-reversal partner, and Eq.~\eqref{eq:ladder}'s $L_z$ has a
+definite sign under $m\to-m$,
+\begin{equation}
+  L_z^{(d)}(K) = -L_z^{(d)}(K'),
+  \label{eq:angmom-valley-locking}
+\end{equation}
+the orbital analogue of Part~\ref{part:spin}'s Eq.~\eqref{eq:spin-valley-locking}. Because
+this is the ON-SITE muffin-tin operator Eq.~\eqref{eq:angmom-continuous} defines --
+not a Berry-curvature-derived $\mathbf k$-space ``orbital magnetization'' (a different,
+gauge-connection-based quantity this project does not compute) -- Eq.~\eqref{eq:xiao-pure-m}
+below is a direct, literal reading of \cite{xiao2012}'s stated orbital character, not an
+indirect consequence of it.
+
+\subsection{Verified}
+
+Against a real compiled binary: every returned $(L_a)_{\alpha,\ell}$ (bulk Si, generic
+$\mathbf k$-point) is Hermitian; the $\ell=0$ (s) channel -- one-dimensional, $m=0$ only --
+is identically zero for all three components, a sharp regression check on the
+inner/outer-region $\ell$-masking Part~\ref{part:orbitalprojection} already established.
+On monolayer WSe$_2$ with \texttt{spinorb=True} (the same structure
+Part~\ref{part:spin}'s spin-valley-locking check uses), $\langle L_z\rangle$ restricted to
+W's $d$ channel, on the valence-band-top state, obeys
+Eq.~\eqref{eq:angmom-valley-locking}: measured $L_z^{(d)}(K)\approx-1.1380$,
+$L_z^{(d)}(K')\approx+1.1380$. Sharper than the sign check alone: W's own $d$-weight
+$P_{W,d}(K)$ (Part~\ref{part:orbitalprojection}) measures $0.56900$ at the same point, and
+\begin{equation}
+  \big|L_z^{(d)}(K)\big| = 2\times P_{W,d}(K)
+  \label{eq:xiao-pure-m}
+\end{equation}
+to 5 decimal places. Since $L_z$'s operator norm on $\ell=2$ is exactly $2$ (the maximal
+$|m|$), Eq.~\eqref{eq:xiao-pure-m} is only possible for a genuinely \emph{pure} $m=\pm2$
+eigenstate within the $d$ channel -- any admixture of other $\ell=2$ $m$-values would give
+$|L_z^{(d)}|<2\times P_{W,d}$ strictly -- so this is a quantitative confirmation of
+\cite{xiao2012}'s stated orbital character (a pure $d_{x^2-y^2}\mp id_{xy}$ state), not
+merely its sign, and ties this feature's absolute scale to $P_{W,d}$, itself already
+cross-checked against upstream \texttt{bandstr.f90} in Part~\ref{part:orbitalprojection}
+(\texttt{tests/test\_calculation\_angular\_momentum.py}).
+
+\subsection{How to use in code}
+
+\begin{verbatim}
+from elkpy.session import ORBITAL_LABELS  # ("s", "p", "d", "f")
+
+lm = calc.get_angular_momentum((0.1, 0.2, 0.05), ist0=1, ist1=4)
+lm.lz.shape                     # (natmtot, nst, nst) complex -- l=0..3 total
+l = ORBITAL_LABELS.index("d")
+w = calc.structure.atom_index("W")
+lm.lz_orbital[w, l][0, 0].real  # <L_z> of state ist0 on W's d channel
+\end{verbatim}
+\texttt{EigenstateSession.angular\_momentum(k, ist0, ist1)} is the underlying session
+method (\texttt{eigenstate\_session()}, Part~\ref{part:eigenstates});
+\texttt{get\_angular\_momentum(k, ist0, ist1)} is a one-off convenience wrapper opening and
+closing its own session, for a single query.
+
 \end{document}

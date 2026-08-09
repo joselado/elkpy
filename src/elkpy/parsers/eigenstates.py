@@ -104,3 +104,30 @@ def parse_orbital_projection_response(tokens):
     # fastest-varying after (a, b) -- i.e. Fortran's "do ias; do lsel; do b;
     # do a" nesting, a innermost.
     return values.reshape(nst, nst, nl, natmtot, order="F").transpose(3, 2, 0, 1)
+
+
+def parse_angular_momentum_response(tokens):
+    """Parse the token stream of an ANGMOM response: nst, natmtot, nl (always
+    4: s, p, d, f), ncomp (always 3: x, y, z), then natmtot*nl*ncomp
+    consecutive nst x nst angular-momentum matrices (real/imag pairs, same
+    column-major convention as the other parsers here), in Fortran's
+    "do ias; do lsel; do comp" nesting -- atom-major, then l (l=0..3 i.e.
+    s,p,d,f), then Cartesian component (x,y,z) minor -- same global 1-based
+    atom order as parse_projection_response.
+
+    Returns an (natmtot, 4, 3, nst, nst) complex array; matrices[ias, l, c]
+    is the l-resolved angular-momentum operator (L_x, L_y or L_z, c=0,1,2)
+    for atom ias -- see EigenstateSession.angular_momentum() for what each
+    matrix element means.
+    """
+    pos = 0
+    (nst, natmtot, nl, ncomp), pos = _take(tokens, pos, 4, int)
+    flat, pos = _take(tokens, pos, 2 * nst * nst * ncomp * nl * natmtot, float)
+    reim = np.array(flat).reshape(nst * nst * ncomp * nl * natmtot, 2)
+    values = reim[:, 0] + 1j * reim[:, 1]
+    # column-major within each (ias, l, comp) block, blocks consecutive with
+    # comp fastest-varying after (a, b), then l, then ias -- i.e. Fortran's
+    # "do ias; do lsel; do comp; do b; do a" nesting, a innermost.
+    return values.reshape(nst, nst, ncomp, nl, natmtot, order="F").transpose(
+        4, 3, 2, 0, 1
+    )

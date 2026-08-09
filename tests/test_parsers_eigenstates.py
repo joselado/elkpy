@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from elkpy.parsers.eigenstates import (
+    parse_angular_momentum_response,
     parse_eigenstates_response,
     parse_orbital_projection_response,
     parse_overlap_response,
@@ -84,4 +85,26 @@ def test_parse_orbital_projection_response_round_trip():
     parsed = parse_orbital_projection_response(tokens)
 
     assert parsed.shape == (natmtot, nl, nst, nst)
+    assert parsed == pytest.approx(mats, abs=1e-12)
+
+
+def test_parse_angular_momentum_response_round_trip():
+    rng = np.random.default_rng(4)
+    nst, natmtot, nl, ncomp = 2, 3, 4, 3
+    mats = rng.normal(size=(natmtot, nl, ncomp, nst, nst)) + 1j * rng.normal(
+        size=(natmtot, nl, ncomp, nst, nst)
+    )
+
+    # src/elkpy_eigenstates.f90's ANGMOM case writes "do ias; do lsel; do
+    # comp; do b; do a" (a innermost) -- each (atom, l, comp) block
+    # column-major, blocks consecutive, comp fastest-varying after (a, b),
+    # then l, then ias.
+    tokens = [str(nst), str(natmtot), str(nl), str(ncomp)]
+    for ias in range(natmtot):
+        for lsel in range(nl):
+            for comp in range(ncomp):
+                tokens += _complex_matrix_tokens(mats[ias, lsel, comp])
+    parsed = parse_angular_momentum_response(tokens)
+
+    assert parsed.shape == (natmtot, nl, ncomp, nst, nst)
     assert parsed == pytest.approx(mats, abs=1e-12)

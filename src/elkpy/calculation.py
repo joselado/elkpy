@@ -866,6 +866,24 @@ class Calculation:
         with self.eigenstate_session() as session:
             return session.spin_operator(k, ist0, ist1)
 
+    def get_angular_momentum(self, k, ist0, ist1):
+        """The (orbital) angular momentum operators L_x, L_y, L_z,
+        l-resolved for l=0,1,2,3 (s, p, d, f), for every atom alpha in the
+        cell, restricted to the contiguous band window [ist0, ist1], at a
+        single k-point. A one-off convenience wrapper around
+        eigenstate_session() -- see get_eigenstates()'s docstring about
+        preferring eigenstate_session() directly for repeated queries, and
+        EigenstateSession.angular_momentum() for what this computes, its
+        return shape, and why the su(2)/Casimir identities don't hold
+        exactly on the returned (band-window-truncated) matrices.
+
+        `self.structure.atom_index(symbol, index)` maps a (species, index)
+        pair to this array's first axis; `elkpy.session.ORBITAL_LABELS`
+        gives the l order (s, p, d, f) of the *_orbital fields.
+        """
+        with self.eigenstate_session() as session:
+            return session.angular_momentum(k, ist0, ist1)
+
     def run_tasks(self, tasks, blocks=None, resume=True, label=None):
         """Escape hatch for any Elk task not covered by a named get_*
         method (docs/design.md #3).

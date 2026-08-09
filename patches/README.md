@@ -16,6 +16,7 @@ to make it a quick diff-checklist instead of a re-read of the raw patches.
 | [0003](0003-eigenstate-session.patch) | `src/elkpy_eigenstates.f90` | `src/elk.f90` (task dispatch `case`), `src/Makefile` (`SRC_ELKPY` var) | `elk.f90`: one new `case` arm | Task 9002 — interactive stdin/stdout eigenstate/overlap query session (`elkpy_diagonalize` factored out of patch 0002's `elkpy_wfcorner`) |
 | [0004](0004-atom-projection.patch) | — | `src/elkpy_eigenstates.f90` (elkpy's own file, added by 0003) | New `elkpy_atomproj` subroutine + a call from `elkpy_eigenstate_session`'s query loop | `PROJECTION` query on the task-9002 session — per-atom muffin-tin projection operators |
 | [0005](0005-orbital-projection.patch) | — | `src/elkpy_eigenstates.f90` (elkpy's own file, added by 0003) | New `elkpy_orbitalproj` subroutine + a call from `elkpy_eigenstate_session`'s query loop | `ORBITAL` query on the task-9002 session — per-atom, l-resolved (s/p/d/f) muffin-tin projection operators |
+| [0006](0006-angular-momentum.patch) | — | `src/elkpy_eigenstates.f90` (elkpy's own file, added by 0003) | New `elkpy_angmomproj` subroutine (reuses upstream `lopzflm.f90` unmodified) + a call from `elkpy_eigenstate_session`'s query loop | `ANGMOM` query on the task-9002 session — per-atom, l-resolved orbital angular momentum operators $L_x,L_y,L_z$ |
 
 ## Notes
 

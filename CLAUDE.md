@@ -279,6 +279,39 @@ operator, the masked-reduction construction, the s+p+d+f-vs-total inequality, wh
 isn't a valence-shell-specific projector): `docs/design.md` §18 and `docs/physics.tex`
 (Part VII).
 
+Also implemented, as the sixth entry in the Fortran patch series, and — like the spin
+operators — needing almost no new Fortran of its own:
+`Calculation.get_angular_momentum(k, ist0, ist1)` (task 9002's new `ANGMOM` query,
+`patches/0006-angular-momentum.patch`) — the atomic orbital angular momentum operators
+$L_x,L_y,L_z$, l-resolved (s,p,d,f), the vector-operator sibling of §18's
+$P_{\alpha,\ell}$: where $P_{\alpha,\ell}$ projects onto an $\ell$ channel,
+$(L_a)_{\alpha,\ell}$ mixes $m$ within it (the ladder-operator structure
+$L_\pm|\ell,m\rangle\propto|\ell,m\pm1\rangle$). Rather than deriving that matrix
+independently, `elkpy_angmomproj` calls upstream Elk's own `lopzflm.f90` (unmodified —
+the same subroutine Elk's own on-site $\hat{\bf L}\cdot\hat{\bf S}$ trace, `dmatls.f90`,
+already uses) to apply the ladder operators to each radial shell's $(\ell,m)$
+coefficients, then reuses §18's exact `wr2cmt`-weighted, $\ell$-masked `zgemm` reduction.
+$(L_a)_{\alpha,\ell}$ is Hermitian but, unlike the projection operators, not positive
+semi-definite; the su(2) commutator $[L_x,L_y]=iL_z$ and Casimir
+$L_x^2+L_y^2+L_z^2=\ell(\ell+1)\mathbb 1$ hold only on the untruncated
+$(2\ell{+}1)\times(2\ell{+}1)$ analytic matrices, not as matrix products on the
+band-window-truncated output — verified there via a pure-Python transcription of
+`lopzflm`'s formula, kept only for this synthetic pin
+(`tests/test_parsers_angular_momentum.py`), including a regression pin for the one bug
+class Hermiticity cannot catch ($L_y$ is purely imaginary off-diagonal, so a lone sign
+flip stays perfectly Hermitian but breaks the commutator). Verified against a real
+compiled binary: every returned matrix is Hermitian; the $\ell=0$ channel is identically
+zero; and on monolayer WSe$_2$ with `spinorb=True` (same structure as the spin-operator
+check), $\langle L_z\rangle$ on W's d channel at the valence-band top obeys
+$L_z(K)=-L_z(K')$ (Xiao, Liu, Feng, Xu & Yao, PRL 108, 196802 (2012) — same paper already
+cited for $S_z(K)=-S_z(K')$, whose $\mathbf k\cdot\mathbf p$ model additionally predicts
+a *pure* $m=\mp2$ valence-band state at $K/K'$) — measured $|L_z^{(d)}(K)|\approx1.1380$,
+exactly $2\times$ W's own d-weight ($0.56900$, from §18), only possible for a pure
+$m=\pm2$ state, a quantitative confirmation rather than just a sign check
+(`tests/test_calculation_angular_momentum.py`). Physics writeup (the ladder-operator
+formula, the `lopzflm` reuse, the truncation caveat, the valley-locking derivation):
+`docs/design.md` §19 and `docs/physics.tex` (Part VIII).
+
 ## Architecture
 
 - `src/elkpy/structure.py` — `Structure`: lattice vectors (`avec`, Bohr) + species, each atom either a

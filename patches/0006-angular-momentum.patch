@@ -1,0 +1,241 @@
+--- a/src/elkpy_eigenstates.f90
++++ b/src/elkpy_eigenstates.f90
+@@ -337,6 +337,169 @@
+ !EOC
+ 
+ !BOP
++! !ROUTINE: elkpy_angmomproj
++! !INTERFACE:
++subroutine elkpy_angmomproj(vpl,ias,nst,idx,lmat)
++! !USES:
++use modmain
++! !DESCRIPTION:
++!   The (orbital) angular momentum operator $\hat{\bf L}=(L_x,L_y,L_z)$,
++!   restricted to atom {\tt ias}'s muffin-tin sphere and resolved by
++!   $\ell=0,1,2,3$ (s, p, d, f), as {\tt nst}$\times${\tt nst} Hermitian
++!   matrices in the orthonormal second-variational eigenbasis of ONE fresh
++!   on-the-fly diagonalisation -- the vector-operator sibling of
++!   {\tt elkpy\_orbitalproj}'s $P_{\alpha,\ell}$ (which projects onto an
++!   $\ell$ channel; this instead applies the angular momentum operator
++!   within it). Reuses the SAME {\tt wfmtsv} muffin-tin expansion, but where
++!   {\tt elkpy\_orbitalproj} reduces each radial shell's $(\ell,m)$
++!   coefficients to a scalar weight ({\tt wr2cmt}, diagonal in $m$), this
++!   routine first applies upstream {\tt lopzflm} (unmodified -- the exact
++!   subroutine Elk's own on-site $\hat{\bf L}\cdot\hat{\bf S}$ density-matrix
++!   trace, {\tt dmatls.f90}, already uses) to each radial shell's coefficient
++!   vector, which mixes $m$ within one $\ell$ block (the ladder-operator
++!   structure $L_\pm|\ell,m\rangle\propto|\ell,m\pm1\rangle$; $L$ does not
++!   act on the radial coordinate, so each shell transforms independently),
++!   before the same {\tt wr2cmt}-weighted, $\ell$-masked {\tt zgemm}
++!   reduction {\tt elkpy\_orbitalproj} already does -- contracting the
++!   ORIGINAL (unweighted, un-$L$-applied) {\tt wfmt} as the bra against the
++!   $L$-applied, weighted array as the ket. No angular-momentum matrix
++!   element is derived independently here; the analytic ladder-operator
++!   coefficients come entirely from {\tt lopzflm}, unchanged.
++!
++!   $(L_a)_{\alpha,\ell}$ is Hermitian (a weighted Gram-type contraction
++!   against a Hermitian kernel -- $L_x,L_y,L_z$ are each Hermitian on the
++!   $|\ell,m\rangle$ basis, and {\tt wr2cmt} is real and $m$-independent
++!   within one $\ell$ shell) but, unlike $P_{\alpha,\ell}$, NOT positive
++!   semi-definite in general -- an angular momentum expectation value can be
++!   negative. Two identities among the analytic $\ell$-block matrices,
++!   $[L_x,L_y]=iL_z$ and $L_x^2+L_y^2+L_z^2=\ell(\ell+1)\mathbb{1}$, involve a
++!   resolution of identity over ALL states that this routine's {\tt nst}-band
++!   truncation does not provide, so they do NOT hold as matrix products on
++!   the returned {\tt nst}$\times${\tt nst} matrices -- only in their LINEAR
++!   form against the untruncated $(2\ell+1)\times(2\ell+1)$ analytic
++!   matrices (docs/design.md \S19), which is where they are verified
++!   ({\tt tests/test\_parsers\_angular\_momentum.py}), not here.
++!
++! !REVISION HISTORY:
++!   Created 2026 (elkpy)
++!EOP
++!BOC
++implicit none
++! arguments
++real(8), intent(in) :: vpl(3)
++integer, intent(in) :: ias,nst,idx(*)
++complex(8), intent(out) :: lmat(nst,nst,3,0:3)
++! local variables
++integer ispn,nmatp,is,irc,nrc,nrci,np,p0,lsel,lma,lmb,ist,comp,lm0
++real(8) vl(3),vc(3)
++! automatic arrays
++integer ngp(nspnfv),igpig(ngkmax,nspnfv)
++real(8) vgpl(3,ngkmax,nspnfv),vgpc(3,ngkmax),gpc(ngkmax)
++real(8) evalfv(nstfv,nspnfv),evalsv_(nstsv)
++complex(8) zlflm(lmmaxo,3)
++! allocatable arrays
++complex(8), allocatable :: sfacgp(:,:),apwalm(:,:,:,:,:)
++complex(8), allocatable :: evecfv(:,:,:),evecsv(:,:)
++complex(8), allocatable :: wfmt(:,:,:),lwfmt(:,:,:,:),lwfmtw(:,:,:)
++real(8), allocatable :: wgt(:)
++if (spinsprl) then
++  write(*,*)
++  write(*,'("Error(elkpy_angmomproj): spin-spirals not supported by the elkpy &
++   &angular-momentum task")')
++  write(*,*)
++  stop
++end if
++is=idxis(ias)
++allocate(sfacgp(ngkmax,natmtot))
++allocate(apwalm(ngkmax,apwordmax,lmmaxapw,natmtot,nspnfv))
++allocate(evecfv(nmatmax,nstfv,nspnfv),evecsv(nstsv,nstsv))
++! fresh on-the-fly diagonalisation, same pattern as elkpy_atomproj/
++! elkpy_orbitalproj (kept as its own copy rather than a shared call, per this
++! file's existing convention)
++do ispn=1,nspnfv
++  vl(1:3)=vpl(1:3)
++  vc(1:3)=bvec(1:3,1)*vpl(1)+bvec(1:3,2)*vpl(2)+bvec(1:3,3)*vpl(3)
++  call gengkvec(ngvc,ivg,vgc,vl,vc,gkmax,ngkmax,ngp(ispn),igpig(:,ispn), &
++   vgpl(:,:,ispn),vgpc,gpc)
++  call gensfacgp(ngp(ispn),vgpc,ngkmax,sfacgp)
++  call match(ngp(ispn),vgpc,gpc,sfacgp,apwalm(:,:,:,:,ispn))
++  nmatp=ngp(ispn)+nlotot
++  call eveqnfv(nmatp,ngp(ispn),igpig(:,ispn),vc,vgpc,apwalm(:,:,:,:,ispn), &
++   evalfv(:,ispn),evecfv(:,:,ispn))
++end do
++deallocate(sfacgp)
++call eveqnsv(ngp(1),igpig(:,1),vgpc,apwalm,evalfv,evecfv,evalsv_,evecsv)
++! second-variational muffin-tin wavefunction of atom ias, in (l,m)-harmonic
++! form (tsh=.true., same as elkpy_atomproj/elkpy_orbitalproj)
++allocate(wfmt(npcmtmax,nspinor,nst))
++call wfmtsv(.true.,lradstp,is,ias,nst,idx,ngp,apwalm,evecfv,evecsv,npcmtmax, &
++ wfmt)
++deallocate(apwalm,evecfv,evecsv)
++nrci=nrcmti(is)
++nrc=nrcmt(is)
++np=npcmt(is)
++! apply the angular momentum operator to every radial shell's (l,m)
++! coefficient vector independently (L acts purely angularly -- exactly the
++! per-shell "function" lopzflm expects), using the SAME upstream subroutine
++! dmatls.f90 uses for Elk's own on-site L.S trace, unmodified;
++! lwfmt(:,:,:,1:3) = (Lx,Ly,Lz) applied to wfmt. The inner region's own
++! angular basis only extends to lmaxi (mirroring elkpy_orbitalproj/
++! gendmatk.f90), so lopzflm is called with lmaxi there and lmaxo in the
++! outer region -- not a fixed lmaxo throughout.
++allocate(lwfmt(npcmtmax,nspinor,nst,3))
++lwfmt(:,:,:,:)=zzero
++do ist=1,nst
++  do ispn=1,nspinor
++    do irc=1,nrci
++      lm0=(irc-1)*lmmaxi
++      call lopzflm(lmaxi,wfmt(lm0+1:lm0+lmmaxi,ispn,ist),lmmaxo,zlflm)
++      lwfmt(lm0+1:lm0+lmmaxi,ispn,ist,1:3)=zlflm(1:lmmaxi,1:3)
++    end do
++    p0=npcmti(is)
++    do irc=nrci+1,nrc
++      call lopzflm(lmaxo,wfmt(p0+1:p0+lmmaxo,ispn,ist),lmmaxo,zlflm)
++      lwfmt(p0+1:p0+lmmaxo,ispn,ist,1:3)=zlflm(1:lmmaxo,1:3)
++      p0=p0+lmmaxo
++    end do
++  end do
++end do
++! same wr2cmt-weighted, l-masked reduction as elkpy_orbitalproj, but
++! contracting wfmt (bra, unweighted) against lwfmt (ket, L-applied and
++! weighted) instead of wfmt against itself -- one zgemm per spin channel,
++! per l, per Cartesian component
++allocate(wgt(np),lwfmtw(npcmtmax,nspinor,nst))
++do lsel=0,3
++  lma=lsel**2+1
++  lmb=lma+2*lsel
++  wgt(:)=0.d0
++  if (lsel <= lmaxi) then
++    do irc=1,nrci
++      wgt((irc-1)*lmmaxi+lma:(irc-1)*lmmaxi+lmb)=wr2cmt(irc,is)
++    end do
++  end if
++  if (lsel <= lmaxo) then
++    p0=npcmti(is)
++    do irc=nrci+1,nrc
++      wgt(p0+lma:p0+lmb)=wr2cmt(irc,is)
++      p0=p0+lmmaxo
++    end do
++  end if
++  do comp=1,3
++    do ispn=1,nspinor
++      lwfmtw(1:np,ispn,1:nst)=lwfmt(1:np,ispn,1:nst,comp)*spread(wgt(1:np),2,nst)
++    end do
++    lmat(:,:,comp,lsel)=zzero
++    do ispn=1,nspinor
++      call zgemm('C','N',nst,nst,np,zone,wfmt(1,ispn,1),npcmtmax*nspinor, &
++       lwfmtw(1,ispn,1),npcmtmax*nspinor,zone,lmat(1,1,comp,lsel),nst)
++    end do
++  end do
++end do
++deallocate(wfmt,lwfmt,lwfmtw,wgt)
++end subroutine
++!EOC
++
++!BOP
+ ! !ROUTINE: elkpy_eigenstate_session
+ ! !INTERFACE:
+ subroutine elkpy_eigenstate_session
+@@ -384,6 +547,12 @@
+ !    of one atom share the same {\tt wfmtsv} call too); across atoms this
+ !    relies on the same diagonalisation-reproducibility argument
+ !    {\tt PROJECTION} already does.
++!   \item {\tt ANGMOM k1 k2 k3 ist0 ist1} -- the $\ell$-resolved orbital
++!    angular momentum operators $(L_x)_{\alpha,\ell}$, $(L_y)_{\alpha,\ell}$,
++!    $(L_z)_{\alpha,\ell}$ for $\ell=0,1,2,3$ (see {\tt elkpy\_angmomproj}),
++!    for every atom $\alpha$ in the cell at once, restricted to the
++!    contiguous band window $[ist0,ist1]$. Same one-diagonalisation,
++!    one-{\tt wfmtsv}-call sharing as {\tt ORBITAL}.
+ !   \end{itemize}
+ !
+ !   Kept alive across many queries rather than one query per subprocess (as
+@@ -429,8 +598,8 @@
+ complex(8), allocatable :: wfmt1(:,:,:,:),wfir1(:,:,:),wfgp1(:,:,:)
+ complex(8), allocatable :: wfmt2(:,:,:,:),wfir2(:,:,:),wfgp2(:,:,:)
+ complex(8), allocatable :: expqmt(:,:),oq(:,:),moverlap(:,:)
+-complex(8), allocatable :: pmat(:,:,:),opmat(:,:,:,:)
+-integer lsel
++complex(8), allocatable :: pmat(:,:,:),opmat(:,:,:,:),lmat(:,:,:,:,:)
++integer lsel,comp
+ if (spinsprl) then
+   write(*,*)
+   write(*,'("Error(elkpy_eigenstate_session): spin-spirals not supported by &
+@@ -595,6 +764,44 @@
+     call flush(6)
+     deallocate(idx,opmat)
+ 
++  case('ANGMOM')
++    read(line,*,iostat=ios) cmd,vpl(1),vpl(2),vpl(3),ist0,ist1
++    if (ios /= 0) then
++      write(*,'("ELKPY_SESSION_ERROR malformed ANGMOM command")')
++      call flush(6)
++      cycle
++    end if
++    if ((ist0 < 1).or.(ist1 > nstsv).or.(ist1 < ist0)) then
++      write(*,'("ELKPY_SESSION_ERROR invalid band window (ist0,ist1,nstsv) : ", &
++       &3I8)') ist0,ist1,nstsv
++      call flush(6)
++      cycle
++    end if
++    nst=ist1-ist0+1
++    allocate(idx(nst))
++    do a=1,nst
++      idx(a)=ist0+a-1
++    end do
++    allocate(lmat(nst,nst,3,0:3,natmtot))
++    do ias=1,natmtot
++      call elkpy_angmomproj(vpl,ias,nst,idx,lmat(:,:,:,:,ias))
++    end do
++    write(*,*) nst,natmtot,4,3
++    do ias=1,natmtot
++      do lsel=0,3
++        do comp=1,3
++          do b=1,nst
++            do a=1,nst
++              write(*,*) dble(lmat(a,b,comp,lsel,ias)),aimag(lmat(a,b,comp,lsel,ias))
++            end do
++          end do
++        end do
++      end do
++    end do
++    write(*,'("ELKPY_SESSION_END")')
++    call flush(6)
++    deallocate(idx,lmat)
++
+   case default
+     write(*,'("ELKPY_SESSION_ERROR unknown command: ",A)') trim(cmd)
+     call flush(6)

@@ -1033,3 +1033,99 @@ p-channel-dominated ($p\approx0.522$, s/d/f $\approx0$) while a much deeper
 atom, a sharp sign-of-the-effect prediction (not a plausibility band), the same spirit
 as §16's N/B atom-character check and §13's K/K′ curvature antisymmetry
 (`tests/test_calculation_orbital_projection.py`).
+
+## 19. Atomic angular momentum operators ($L_x$, $L_y$, $L_z$) applicable to wavefunctions
+
+`Calculation.get_angular_momentum(k, ist0, ist1)` (task 9002's `ANGMOM` query,
+`patches/0006-angular-momentum.patch`, `elkpy_angmomproj` in `src/elkpy_eigenstates.f90`)
+computes the (orbital) angular momentum operators $L_x,L_y,L_z$, restricted to atom
+$\alpha$'s muffin-tin sphere and resolved by $\ell=0,1,2,3$ (s, p, d, f —
+`elkpy.session.ORBITAL_LABELS`), for every atom $\alpha$ in the cell at once — the
+vector-operator sibling of §18's $P_{\alpha,\ell}$: where $P_{\alpha,\ell}$ *projects*
+onto an $\ell$ channel, $(L_a)_{\alpha,\ell}$ *applies the angular momentum operator
+within it*, mixing $m$ instead of summing over it. Full derivation in
+`docs/physics.tex` Part VIII.
+
+**Reusing upstream Elk, not deriving a new operator.** The muffin-tin wavefunction
+expansion `wfmtsv` returns (§16) is already in the complex spherical-harmonic basis
+Elk's own APW matching step (`match.f90`, via `genylmv`) builds — the exact basis in
+which the angular momentum ladder operators have their standard, simple matrix form.
+Rather than deriving that matrix independently, `elkpy_angmomproj` calls upstream
+`lopzflm.f90` (unmodified) — the same subroutine Elk's own on-site $\hat{\bf L}\cdot
+\hat{\bf S}$ density-matrix trace, `dmatls.f90`, already uses for its own orbital-moment
+output — to apply $L_x,L_y,L_z$ to each radial shell's $(\ell,m)$ coefficient vector
+($L$ acts purely angularly, so each shell transforms independently), using the
+identities `lopzflm`'s own docstring states:
+$$ (L_x+iL_y)Y_{\ell m}=\sqrt{(\ell-m)(\ell+m+1)}\,Y_{\ell,m+1},\quad
+   (L_x-iL_y)Y_{\ell m}=\sqrt{(\ell+m)(\ell-m+1)}\,Y_{\ell,m-1},\quad
+   L_zY_{\ell m}=mY_{\ell m}. $$
+The result is then contracted against the original (unweighted) `wfmt` as the bra,
+`wr2cmt`-weighted and $\ell$-masked exactly as §18's `zgemm` reduction already is —
+mirroring `dmatls.f90`'s own pattern (`lopzflm` applied to one index of a density-
+matrix-like object, then a `wr2cmt`-weighted lm-sum) but generalised from a trace over
+a single diagonal density matrix to the full `nst`$\times$`nst` bra-ket matrix §16/§18
+already build, and from an $\ell$-summed total to an $\ell$-resolved breakdown.
+Consequently no angular-momentum matrix element is derived independently in this
+codebase — the only new arithmetic is the `wr2cmt`-weighted, $\ell$-masked contraction
+already established by §18, applied to `lopzflm`'s output instead of to `wfmt` itself.
+
+**Hermitian, not positive semi-definite; two identities that do not survive truncation.**
+$(L_a)_{\alpha,\ell}$ is Hermitian by the same weighted-Gram-type argument as §16/§18
+($L_x,L_y,L_z$ are each Hermitian on the $|\ell,m\rangle$ basis, and `wr2cmt` is real and
+$m$-independent within one $\ell$ shell) — but, unlike $P_{\alpha,\ell}$, is NOT positive
+semi-definite in general: an angular momentum expectation value can be negative. Two
+standard identities of the *analytic*, untruncated $(2\ell{+}1)\times(2\ell{+}1)$
+operators, $[L_x,L_y]=iL_z$ (and cyclic) and $L_x^2+L_y^2+L_z^2=\ell(\ell{+}1)\mathbb{1}$,
+do **not** carry over to the returned `nst`$\times$`nst` matrices as matrix products:
+both require a resolution of identity over every state of the full Hilbert space, not
+just the requested band window (`Ψ P L_a P L_b P Ψ ≠ Ψ P L_a L_b P Ψ` when $P$, the
+band-window projector, is incomplete) — the same truncation gap this project has
+already flagged for $[S_x,S_y]$ if it were checked on a restricted window, made concrete
+here because it *is* checked, on the untruncated analytic matrices only
+(`tests/test_parsers_angular_momentum.py`, via `elkpy.parsers.angular_momentum`, a pure
+-Python transcription of `lopzflm.f90`'s formula used only for this pin, never in the
+production Fortran path).
+
+**The one bug class Hermiticity cannot catch.** In the ascending-$m$ complex-harmonic
+basis, $L_z$ is real diagonal, $L_x$ is real symmetric tridiagonal, and $L_y$ is
+*purely imaginary* off-diagonal. Swapping which index of a bra-ket pair an operator
+acts on sends a matrix to its transpose, i.e. $L_a\to L_a^{\!\top}=\overline{L_a}$ for
+Hermitian $L_a$ — a no-op for the real $L_x,L_z$ but a sign flip for the purely
+imaginary $L_y$ — and Hermiticity cannot see it ($\overline{L_a}$ is exactly as
+Hermitian as $L_a$), the same "$\mathrm{conj}(M)$ is exactly as gauge-invariant as $M$"
+blind spot §13 already documents for Berry curvature's sign. The su(2) commutator is
+the discriminator (it pins $L_y$'s sign against $L_z$'s), so
+`tests/test_parsers_angular_momentum.py` includes a regression pin that flips $L_y$'s
+sign by hand and confirms the commutator identity — which does hold exactly on the
+untruncated analytic matrices — breaks.
+
+**How to use in code**:
+
+```python
+from elkpy.session import ORBITAL_LABELS  # ("s", "p", "d", "f")
+
+lm = calc.get_angular_momentum((0.1, 0.2, 0.05), ist0=1, ist1=4)
+lm.lz.shape                           # (natmtot, nst, nst) complex -- l=0..3 total
+l = ORBITAL_LABELS.index("d")
+w = calc.structure.atom_index("W")
+lm.lz_orbital[w, l][0, 0].real        # <Lz> of state ist0 on W's d channel
+```
+
+Verified against a real compiled binary: every returned matrix (per atom, per $\ell$,
+and the Python-side $\ell=0..3$ total) is Hermitian; the $\ell=0$ (s) channel is
+identically zero for $L_x,L_y,L_z$ (a one-dimensional, $m=0$-only space); and on
+monolayer WSe$_2$ with `spinorb=True` — the same structure §17's spin-valley-locking
+check uses — $\langle L_z\rangle$ restricted to W's d channel, on the valence-band-top
+state, is large and of opposite sign at $K$ vs. $K'$ (Xiao, Liu, Feng, Xu & Yao, *Coupled
+Spin and Valley Physics in Monolayers of MoS$_2$ and Other Group-VI Dichalcogenides*,
+PRL 108, 196802 (2012) — the same paper §17 already cites for $S_z(K)=-S_z(K')$, whose
+$\mathbf{k}\cdot\mathbf{p}$ model additionally identifies the valence-band Bloch state as
+predominantly $d_{x^2-y^2}\mp id_{xy}=Y_2^{\mp2}$, i.e. a *pure* $m=\mp2$ state within the
+d-channel at $K/K'$). Measured: $L_z^{(d)}(K)\approx-1.1380$, $L_z^{(d)}(K')\approx
++1.1380$, and W's own d-weight $P_{W,d}(K)$ (§18) is $0.56900$ — to 5 decimal places,
+$|L_z^{(d)}(K)|=2\times P_{W,d}(K)$ exactly, sharper than "large and sign-flipped": since
+$L_z$'s operator norm on $\ell=2$ is $2$, this equality is only possible for a pure
+$m=\pm2$ eigenstate, not a mixture of $\ell=2$ $m$-values — confirming the cited
+$\mathbf{k}\cdot\mathbf{p}$ model's orbital character quantitatively, and tying this
+feature's absolute scale to $P_{W,d}$, itself already cross-checked against upstream
+`bandstr.f90` in §18 (`tests/test_calculation_angular_momentum.py`).
