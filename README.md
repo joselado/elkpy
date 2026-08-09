@@ -7,9 +7,9 @@ $v_{\rm eff}=v_{\rm ext}+v_H[n]+v_{xc}[n]$ is solved self-consistently in the el
 density $n(\mathbf r)=\sum_{i\mathbf k}^{\rm occ}|\psi_{i\mathbf k}(\mathbf r)|^2$. elkpy
 wraps Elk's `elk.in`/task-number workflow in a small, `pyqula`-style object model
 (`Structure`, `Calculation`), and adds physics Elk itself does not provide on top:
-per-species spin-orbit coupling scaling, Berry curvature/Chern numbers via a
-Wilson-loop method, and fast eigenstate/wavefunction-overlap queries at arbitrary
-k-points.
+per-species spin-orbit coupling scaling, the full quantum geometric tensor (Berry
+curvature/Chern numbers and the quantum metric) via a Wilson-loop method, and fast
+eigenstate/wavefunction-overlap queries at arbitrary k-points.
 
 ```python
 from elkpy.structure import Structure
@@ -41,6 +41,9 @@ python3 -m pip install -e .        # add .[ase] for Structure.from_ase()/to_ase(
 ## Topological characterization ##
 - Berry curvature $F_{12}(\mathbf k)=\partial_1A_2-\partial_2A_1$ and Chern numbers $c_n=\frac1{2\pi i}\int_{T^2}\!d^2k\,F_{12}\in\mathbb Z$, via a gauge-invariant Wilson-loop discretization
 - Berry curvature at an arbitrary k-point with no periodic mesh required, e.g. to resolve individual valleys of a 2D material
+
+## Quantum geometry ##
+- The full quantum geometric tensor $Q_{ab}=g_{ab}-\tfrac i2F_{ab}$ at an arbitrary k-point: Berry curvature $F_{ab}$ *and* the quantum metric $g_{ab}$ (Fubini-Study distance between neighbouring Bloch states), from the same wavefunction-overlap queries used for eigenstates below
 
 ## Eigenstates and wavefunction overlaps ##
 - Second-variational energies and eigenvectors at an arbitrary k-point
@@ -83,6 +86,16 @@ omega_K = hbn.get_berry_curvature_path([(1/3, 1/3, 0)], 1, 4, dk=0.01)[0]["curva
 ```
 ![Alt text](images/hbn_berry_curvature.png?raw=true "Berry curvature of monolayer h-BN along Gamma-K-M-Gamma")
 
+## Quantum metric alongside Berry curvature, along Gamma-K-M-K'-Gamma of monolayer h-BN ##
+Time-reversal symmetry requires $g_{ab}(K)=g_{ab}(K')$ even though $\Omega(K')=-\Omega(K)$ --
+a genuinely new prediction about the metric, not derivable from curvature alone:
+```python
+result = hbn.get_quantum_geometry(path, ist0, ist1, directions=(1, 2), dk=0.01)
+result[0]["g"]                # (2,2) quantum metric [[g11,g12],[g12,g22]], Bohr^2
+result[0]["berry_curvature"]  # Bohr^-2, same convention as get_berry_curvature_path
+```
+![Alt text](images/hbn_quantum_geometry.png?raw=true "Quantum metric and Berry curvature of monolayer h-BN along Gamma-K-M-K'-Gamma")
+
 ## Eigenstates and wavefunction overlaps at arbitrary k-points ##
 ```python
 with calc.eigenstate_session() as session:              # one warm Elk process
@@ -106,7 +119,7 @@ points, density = calc.get_density(grid=(24, 24, 24))  # n(r) = sum_i^occ |psi_i
 ![Alt text](images/si_density.png?raw=true "Charge density slice of bulk silicon")
 
 # Notebooks #
-Six notebooks under [`notebooks/`](notebooks), one per feature area above, each
+Seven notebooks under [`notebooks/`](notebooks), one per feature area above, each
 executed end-to-end against a real compiled Elk binary and checked in with its actual
 output (the DFPT phonon notebook is the exception -- left unexecuted with a note,
 since a single call takes ~11-13 minutes). Listed new-physics-first, matching
@@ -118,6 +131,7 @@ is the place to actually start:
 | [`04_per_species_soc_scaling.ipynb`](notebooks/04_per_species_soc_scaling.ipynb) | Per-species spin-orbit coupling scaling | yes |
 | [`05_berry_curvature.ipynb`](notebooks/05_berry_curvature.ipynb) | Berry curvature/Chern number, K/K' valleys of monolayer h-BN | yes |
 | [`06_eigenstate_session.ipynb`](notebooks/06_eigenstate_session.ipynb) | Eigenstates and wavefunction overlaps | yes |
+| [`07_quantum_geometry.ipynb`](notebooks/07_quantum_geometry.ipynb) | Quantum metric and Berry curvature along Gamma-K-M-K'-Gamma of monolayer h-BN | yes |
 | [`01_getting_started.ipynb`](notebooks/01_getting_started.ipynb) | Ground state, band structure, density of states | -- |
 | [`02_relaxation_forces_and_properties.ipynb`](notebooks/02_relaxation_forces_and_properties.ipynb) | Forces, relaxation, effective mass, density, `run_tasks()` | -- |
 | [`03_phonon_dispersion_and_dos.ipynb`](notebooks/03_phonon_dispersion_and_dos.ipynb) | Phonon dispersion/DOS via DFPT | -- |

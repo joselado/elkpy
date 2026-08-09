@@ -11,10 +11,12 @@ import json
 import shutil
 from pathlib import Path
 
+import numpy as np
+
 from . import config, spec
 from .inputfile import InputFile
 from .launcher import LocalLauncher
-from .parsers import band, berry, dos, effmass, forces, geometry, info, totenergy, volumetric
+from .parsers import band, berry, dos, effmass, forces, geometry, info, quantum_geometry, totenergy, volumetric
 from .session import EigenstateSession
 
 MANIFEST_NAME = ".elkpy_manifest.json"
@@ -343,6 +345,20 @@ class Calculation:
         distances, _special_x, _special_labels = bandpath.get_linear_kpoint_axis()
         return [tuple(k) for k in bandpath.kpts], list(distances)
 
+    def _reciprocal_vectors(self):
+        """Cartesian reciprocal lattice vectors (rows, Bohr^-1), computed
+        directly from self.structure.avec by the identical formula Elk's
+        own src/reciplat.f90 uses (b1=2pi(a2xa3)/s, b2=2pi(a3xa1)/s,
+        b3=2pi(a1xa2)/s, s=a1.(a2xa3), dividing by the signed s, not
+        abs(s)) -- kept in Python rather than exported from a run so
+        get_quantum_geometry() needs no new Fortran at all (unlike
+        parsers.berry, which reads bvec back out of an Elk-written file)."""
+        avec = np.array(self.structure.avec)
+        a1, a2, a3 = avec
+        s = np.dot(a1, np.cross(a2, a3))
+        twopi = 2 * np.pi
+        return np.array([twopi * np.cross(a2, a3) / s, twopi * np.cross(a3, a1) / s, twopi * np.cross(a1, a2) / s])
+
     def get_energy(self):
         """Total energy in Hartree (task 0/1, TOTENERGY.OUT)."""
         self.ensure_ground_state()
@@ -645,6 +661,96 @@ class Calculation:
             for point, distance in zip(result, distances):
                 point["distance"] = float(distance)
         return result
+
+    def get_quantum_geometry(
+        self,
+        kpoints=None,
+        ist0=None,
+        ist1=None,
+        directions=(1, 2),
+        dk=0.005,
+        kpath=None,
+        npoints=100,
+        label="quantum_geometry",
+    ):
+        """Quantum geometric tensor (Berry curvature *and* quantum metric)
+        at an arbitrary, explicit list of k-points -- the metric-carrying
+        companion to get_berry_curvature_path(), built from the same small
+        loop of neighbouring k-points but entirely in Python, driven by
+        EigenstateSession.overlap() queries (task 9002) rather than a new
+        Fortran task: the loop's corner-to-corner overlaps
+        get_berry_curvature_path() already needs for curvature, plus each
+        corner's own self-overlap <psi(k)|psi(k)> (needed to
+        Loewdin-normalize the metric -- see
+        parsers.quantum_geometry._normalize_overlap()), are already exposed
+        by the existing eigenstate/overlap session. See docs/design.md #15
+        and docs/physics.tex Part IV for the physics (quantum metric,
+        Fubini-Study distance, why the metric needs normalizing but
+        curvature doesn't) this implements.
+
+        Same kpoints=/kpath=/ist0/ist1/directions/dk/npoints conventions as
+        get_berry_curvature_path() -- see its docstring for what each means
+        (including the dk convergence-plateau caveat, which applies here
+        too). `ist0`/`ist1` is not gap-checked here either, for the same
+        reason (no eigenvalues exported by an overlap-only query).
+
+        Unlike get_berry_curvature_path() (one Elk subprocess launch per
+        point, via task 9001's fresh corner diagonalisation), this opens
+        ONE eigenstate_session() and issues 9 overlap queries per point (4
+        self-overlaps + 5 cross overlaps) -- reusing the persistent
+        session's "stay warm" setup (docs/design.md #14) rather than
+        re-paying it 9 times per point.
+
+        Returns a list of dicts, one per requested k-point, in the order
+        given: {"k": (kx,ky,kz) fractional, "g": (2,2) array
+        [[g11,g12],[g12,g22]] (quantum metric, Bohr^2), "berry_curvature":
+        float (Bohr^-2, identical convention/value to
+        get_berry_curvature_path()'s "curvature" -- see
+        test_curvature_matches_berry_curvature_path_on_identical_corners), "Q": (2,2)
+        complex array, Q = g - (i/2)*berry_curvature*[[0,1],[-1,0]]}, plus a
+        "distance" entry when `kpath` was used.
+        """
+        if (kpoints is None) == (kpath is None):
+            raise ValueError("pass exactly one of kpoints= or kpath=")
+        if ist0 is None or ist1 is None:
+            raise ValueError("ist0 and ist1 are required")
+        distances = None
+        if kpath is not None:
+            kpoints, distances = self._kpath_to_points(kpath, npoints)
+        kpoints = [tuple(k) for k in kpoints]
+
+        bvec = self._reciprocal_vectors()
+        v1 = dk * bvec[directions[0] - 1]
+        v2 = dk * bvec[directions[1] - 1]
+
+        def shift(k, direction):
+            k = list(k)
+            k[direction - 1] += dk
+            return tuple(k)
+
+        results = []
+        with self.eigenstate_session(label=label) as session:
+            for k0 in kpoints:
+                k1 = shift(k0, directions[0])
+                k2 = shift(k0, directions[1])
+                k12 = shift(k1, directions[1])
+                overlaps = {
+                    "s0": session.overlap(k0, k0, ist0, ist1),
+                    "s1": session.overlap(k1, k1, ist0, ist1),
+                    "s2": session.overlap(k2, k2, ist0, ist1),
+                    "s12": session.overlap(k12, k12, ist0, ist1),
+                    "m1": session.overlap(k0, k1, ist0, ist1),
+                    "m2": session.overlap(k0, k2, ist0, ist1),
+                    "m12": session.overlap(k0, k12, ist0, ist1),
+                    "edge_b": session.overlap(k1, k12, ist0, ist1),
+                    "edge_c": session.overlap(k2, k12, ist0, ist1),
+                }
+                result = quantum_geometry.compute_quantum_geometry(overlaps, v1, v2)
+                results.append({"k": k0, **result})
+        if distances is not None:
+            for point, distance in zip(results, distances):
+                point["distance"] = float(distance)
+        return results
 
     def eigenstate_session(self, label="eigenstates"):
         """Start an interactive eigenstate/overlap query session (task

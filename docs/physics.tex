@@ -654,6 +654,241 @@ with calc.eigenstate_session() as session:
 \texttt{get\_eigenstates(k)}/\texttt{get\_overlap(k\_a, k\_b, ist0, ist1)} are one-off
 convenience wrappers around a short-lived session, for a single query.
 
+\part{Quantum geometry: the quantum metric, alongside Berry curvature}
+\label{part:quantumgeometry}
+
+\section{Setting: the quantum geometric tensor}
+
+Berry curvature (Part~\ref{part:berry}, Eq.~\eqref{eq:berry}) is only half of the local
+geometric information carried by a family of Bloch states $\psi(\mathbf k) =
+(|n_1(\mathbf k)\rangle,\dots,|n_J(\mathbf k)\rangle)$ (a non-degenerate band, or a gapped
+$J$-band manifold). The full object is the quantum geometric tensor (Provost \& Vallee,
+\emph{Riemannian structure on manifolds of quantum states}, Commun.\ Math.\ Phys.\
+\textbf{76}, 289 (1980)),
+\begin{equation}
+  Q_{ab}(\mathbf k) = \mathrm{Tr}\bigl[\partial_a P(\mathbf k)\, Q(\mathbf k)\,
+    \partial_b P(\mathbf k)\bigr], \qquad
+  P(\mathbf k) = \psi(\mathbf k)\,\psi^\dagger(\mathbf k), \quad Q = \mathbb 1 - P,
+  \label{eq:qgt}
+\end{equation}
+the projector onto the $J$-dimensional manifold and its complement. $Q_{ab}$ decomposes
+into a real symmetric part and an imaginary antisymmetric part,
+\begin{equation}
+  Q_{ab}(\mathbf k) = g_{ab}(\mathbf k) - \tfrac{i}{2} F_{ab}(\mathbf k), \qquad
+  g_{ab} = \mathrm{Re}\,Q_{ab}, \quad F_{ab} = -2\,\mathrm{Im}\,Q_{ab},
+  \label{eq:qgt-decomp}
+\end{equation}
+where $F_{ab}$ is exactly the (non-Abelian) Berry curvature of Eq.~\eqref{eq:berry}, and
+$g_{ab}$ is the \emph{quantum metric} (Fubini-Study metric restricted to the manifold): a
+genuinely distinct, gauge-invariant observable, not derivable from $F_{ab}$ alone. Where
+$F_{ab}$ measures the manifold's holonomy (a phase acquired going around a loop),
+$g_{ab}$ measures how much the manifold itself \emph{rotates} in Hilbert space between
+$\mathbf k$ and $\mathbf k+d\mathbf k$ -- physically, it sets the quantum (Fubini-Study)
+distance between neighbouring Bloch states, and appears directly in e.g.\ the
+lower bound on the spread of maximally localized Wannier functions, the semiclassical
+correction to the density of states in a strong field, and superfluid weight/quantum-metric
+contributions to flat-band superconductivity.
+
+A direct consequence of Eq.~\eqref{eq:qgt}, worth stating since it becomes a concrete
+verification check below: $Q_{ab} = \sum_{n=1}^J \langle\partial_a n(\mathbf k)|\,Q(\mathbf
+k)\,|\partial_b n(\mathbf k)\rangle$ (sum over the $J$ states spanning the manifold) is a
+sum of Gram-matrix-like terms $\langle u_a|Q|u_b\rangle$, each individually positive
+semi-definite as a $2\times2$ Hermitian matrix in the direction indices $(a,b)$ (since
+$Q=Q^\dagger=Q^2$), and a sum of PSD matrices is PSD. A $2\times2$ Hermitian PSD matrix has
+non-negative determinant, so with Eq.~\eqref{eq:qgt-decomp},
+\begin{equation}
+  \det Q(\mathbf k) = g_{11}g_{22} - g_{12}^2 - \bigl(F_{12}/2\bigr)^2 \ge 0
+  \quad\Longrightarrow\quad
+  \det g(\mathbf k) \ge \Bigl(\frac{F_{12}(\mathbf k)}{2}\Bigr)^{\!2},
+  \label{eq:qgt-psd-bound}
+\end{equation}
+an exact inequality, not an order-of-magnitude estimate -- the metric can never be "too
+small" for the curvature it accompanies at the same point. Both $g_{ab}$ and $F_{ab}$ are invariant
+under $\psi(\mathbf k)\to\psi(\mathbf k)\,U(\mathbf k)$ for any $\mathbf k$-dependent
+$U(J)$ gauge rotation of the manifold, since Eq.~\eqref{eq:qgt} is built entirely from the
+gauge-invariant projector $P$, never from $\psi$ directly.
+
+\section{Discretization from nearest-neighbour overlaps}
+
+As in Part~\ref{part:berry}, $\psi(\mathbf k)$ is only ever known up to an arbitrary,
+numerically-determined per-$\mathbf k$-point gauge, so Eq.~\eqref{eq:qgt} cannot be
+evaluated by literally differentiating $P(\mathbf k)$. The discretized quantum metric
+used here is the one already implicit in Marzari \& Vanderbilt's gauge-invariant
+Wannier spread functional (PRB \textbf{56}, 12847 (1997), Eqs.~27, 30; reviewed in
+Marzari, Mostofi, Yates, Souza \& Vanderbilt, Rev.\ Mod.\ Phys.\ \textbf{84}, 1419
+(2012) \S II.C) -- the same overlap matrix
+\begin{equation}
+  M_{ab}(\mathbf k, \mathbf k+\mathbf v) = \langle n_a(\mathbf k) | n_b(\mathbf
+  k+\mathbf v) \rangle
+  \label{eq:qg-overlap}
+\end{equation}
+that Eq.~\eqref{eq:link}'s link variable is built from, but now entering through its
+\emph{modulus} rather than its phase:
+\begin{equation}
+  D(\mathbf v) \equiv J - \mathrm{Re}\,\mathrm{Tr}\bigl[M(\mathbf k,\mathbf k+\mathbf v)\,
+    M(\mathbf k,\mathbf k+\mathbf v)^\dagger\bigr]
+  = J - \mathrm{Tr}\bigl[P(\mathbf k)\,P(\mathbf k+\mathbf v)\bigr].
+  \label{eq:qdist}
+\end{equation}
+The second equality is Resta's projector form: $M M^\dagger$ has matrix elements
+$\langle n_a(\mathbf k)|P(\mathbf k+\mathbf v)|n_{a'}(\mathbf k)\rangle$, so its trace is
+$\mathrm{Tr}[P(\mathbf k)P(\mathbf k+\mathbf v)]$ directly, and
+$D(\mathbf v) = \mathrm{Tr}[P(\mathbf k)\,Q(\mathbf k+\mathbf v)]$ -- the same bracket
+Marzari-Vanderbilt sum over neighbour shells (weighted by their finite-difference
+weights $w_{\mathbf v}$) to get the gauge-invariant part of the total spread, $\Omega_I
+= \sum_{\mathbf k,\mathbf v} w_{\mathbf v}\, D(\mathbf v)$.
+
+$D(\mathbf v)$ is exactly the quadratic form of the metric on $\mathbf v$: expanding
+$P(\mathbf k+\mathbf v) = P + v^a\partial_a P + \tfrac12 v^av^b\partial_a\partial_b P +
+O(v^3)$ and using idempotency ($P^2=P$, so $\mathrm{Tr}[P\partial_a P]=0$ and
+$\mathrm{Tr}[P\,\partial_a\partial_b P] = -\mathrm{Tr}[\partial_a P\,\partial_b P]$, both
+derived by differentiating $P^2=P$ once and twice and tracing) gives
+\begin{equation}
+  \mathrm{Tr}[P(\mathbf k)P(\mathbf k+\mathbf v)] = J - \tfrac12 v^a v^b\,
+    \mathrm{Tr}[\partial_a P\,\partial_b P] + O(v^3),
+\end{equation}
+and a second idempotency identity, $\mathrm{Tr}[P\,\partial_aP\,\partial_bP] +
+\mathrm{Tr}[P\,\partial_bP\,\partial_aP] = \mathrm{Tr}[\partial_aP\,\partial_bP]$
+(differentiate $P\partial_aP+\partial_aP\,P=\partial_aP$ appropriately), shows the
+symmetric combination $\tfrac12\mathrm{Tr}[\partial_aP\partial_bP]$ equals
+$\mathrm{Tr}[P\,\partial_aP\,\partial_bP]$ symmetrized in $(a,b)$ -- i.e.\ exactly
+$g_{ab}$ of Eq.~\eqref{eq:qgt-decomp} (using $Q\partial_bP = \partial_bP - P\partial_bP$
+and idempotency once more to rewrite $\mathrm{Tr}[\partial_aP\,Q\,\partial_bP]$ in this
+form). So, to leading order in $|\mathbf v|$,
+\begin{equation}
+  D(\mathbf v) = g_{ab}(\mathbf k)\, v^a v^b + O(|\mathbf v|^3).
+  \label{eq:qdist-quadratic}
+\end{equation}
+Evaluating $D$ along the two loop directions $\mathbf v_1=\texttt{dk}\,\mathbf b_1$,
+$\mathbf v_2=\texttt{dk}\,\mathbf b_2$ gives the diagonal components directly,
+$g_{11}=D(\mathbf v_1)/|\mathbf v_1|^2$, $g_{22}=D(\mathbf v_2)/|\mathbf v_2|^2$; the
+off-diagonal component follows from the polarization identity for the bilinear form
+$D$,
+\begin{equation}
+  g_{12} = \frac{D(\mathbf v_1+\mathbf v_2) - D(\mathbf v_1) - D(\mathbf v_2)}
+    {2\,|\mathbf v_1|\,|\mathbf v_2|},
+  \label{eq:g12-polarization}
+\end{equation}
+needing one extra overlap, $M(\mathbf k,\mathbf k+\mathbf v_1+\mathbf v_2)$, beyond the
+four already needed for $F_{12}$'s closed loop (Eq.~\eqref{eq:link}, corners $\mathbf k$,
+$\mathbf k+\mathbf v_1$, $\mathbf k+\mathbf v_1+\mathbf v_2$, $\mathbf k+\mathbf v_2$,
+anchored rather than centered, the same convention \texttt{parsers.berry}'s mesh mode --
+not its centered path mode -- uses). Because $\det(S^{-1/2})$ for any Hermitian
+positive-definite $S$ is real and positive (\S~below), this construction leaves $F_{12}$
+computed from the same corners numerically identical to Part~\ref{part:berry}'s
+Eq.~\eqref{eq:fieldstrength}.
+
+\section{elkpy's implementation: Löwdin normalization, and why curvature didn't need it}
+
+Elk's \texttt{genolpq} overlap (Part~\ref{part:eigenstates}, Eq.~\eqref{eq:overlap-integral})
+carries a real-space truncation floor of order $10^{-3}$: $O(\mathbf k,\mathbf k)$ is the
+identity only to that tolerance, not exactly (\S14 of \texttt{docs/design.md}). Write the
+true overlap as $M = (1-\epsilon)M_{\rm exact}$ for a small common-mode deficiency
+$\epsilon$. Part~\ref{part:berry}'s curvature is immune to this: $\arg\det[(1-\epsilon)
+M_{\rm exact}] = \arg\det M_{\rm exact}$ exactly, since $(1-\epsilon)^{J}$ is a positive
+real scalar and cannot shift an argument. Eq.~\eqref{eq:qdist} is not: $D(\mathbf v) =
+J - (1-\epsilon)^2\,\mathrm{Tr}[M_{\rm exact}M_{\rm exact}^\dagger] \approx 2\epsilon J +
+g_{ab}v^av^b$ to first order in $\epsilon$ -- a constant offset that does not shrink with
+$\mathbf v$, so it \emph{dominates} the genuine $O(|\mathbf v|^2)$ metric signal as
+\texttt{dk}$\,\to 0$, the opposite of a numerical artifact that simply averages out.
+Measured directly (bulk Si, generic k-point): the raw (unnormalized) $g_{11}$ at
+\texttt{dk} = 0.05, 0.02, 0.01, 0.005, 0.002 comes out 40.5, 48.2, 52.5, 62.9, 131.8 Bohr$^2$
+-- diverging, the $1/\texttt{dk}^2$ signature of an uncorrected constant offset -- while
+the value below (Löwdin-normalized) comes out 40.5, 47.6, 49.7, 50.5, 51.0, converging.
+
+The fix is Löwdin symmetric normalization: query each loop corner's own self-overlap
+$S(\mathbf c) = O(\mathbf c,\mathbf c)$ (already meaningful and available via
+\texttt{EigenstateSession.overlap()} with $\mathbf k_a=\mathbf k_b$ -- the one new
+ingredient curvature alone never needed a name for) and replace every cross overlap by
+\begin{equation}
+  \tilde M(\mathbf c_1,\mathbf c_2) = S(\mathbf c_1)^{-1/2}\, M(\mathbf c_1,\mathbf c_2)\,
+    S(\mathbf c_2)^{-1/2}
+  \label{eq:lowdin}
+\end{equation}
+before using it in Eq.~\eqref{eq:qdist} or Eq.~\eqref{eq:link}. This is exact by
+construction, not a leading-order correction: the normalized self-overlap
+$S^{-1/2}SS^{-1/2}=\mathbb 1$ identically at every corner, whatever $\epsilon$ actually
+is at that corner (it need not even be the same at every corner, unlike the illustrative
+common-mode $\epsilon$ above). It is inert for curvature: $S^{-1/2}$ is Hermitian
+positive-definite, so $\det(S^{-1/2})$ is real and positive, and
+$\arg\det\tilde M = \arg\det M$ exactly -- Eq.~\eqref{eq:lowdin} is applied uniformly to
+both quantities in \texttt{parsers.quantum\_geometry.compute\_quantum\_geometry()}
+purely for uniformity, not because curvature needs it.
+
+No new Fortran task was needed for any of this (unlike Parts~\ref{part:berry}--
+\ref{part:eigenstates}, each of which added one): every ingredient --
+Eq.~\eqref{eq:qg-overlap}'s cross overlaps and now also each corner's self-overlap -- is
+already exposed by the task 9002 interactive session (Part~\ref{part:eigenstates}), so
+\texttt{Calculation.get\_quantum\_geometry()} drives everything above purely from
+Python-side \texttt{EigenstateSession.overlap()} calls (9 per requested k-point: 4
+self-overlaps, 5 cross overlaps) plus the discretization arithmetic in
+\texttt{parsers/quantum\_geometry.py}, independently unit-testable against synthetic
+data with no Elk run at all
+(\texttt{tests/test\_quantum\_geometry\_gauge\_invariance.py}), the same way
+\texttt{parsers/berry.py} is.
+
+A remaining discretization subtlety worth stating plainly, not a bug: $g_{12}$
+(Eq.~\eqref{eq:g12-polarization}) is a difference of three comparable-magnitude
+$D$ values, so its own $O(\texttt{dk})$ discretization error is amplified relative to
+its $O(\texttt{dk}^2)$ signal in a way $g_{11}$/$g_{22}$'s direct evaluation is not --
+observed on monolayer h-BN's K/K$'$ valleys (\S~below): $g_{12}(K)$ and $g_{12}(K')$,
+required equal in the $\texttt{dk}\to 0$ limit by time-reversal symmetry ($g_{ab}(-\mathbf
+k)=g_{ab}(\mathbf k)$, the same argument Part~\ref{part:berry} uses for curvature's sign
+flip, applied here to a quantity that does \emph{not} flip sign), only visibly converge
+toward each other as \texttt{dk} is refined, unlike $g_{11}$/$g_{22}$, which already
+agree to $<0.1\%$ at a single practical \texttt{dk}.
+
+\subsection{Verified}
+
+On synthetic data (no Elk run): $g_{ab}$, $F_{ab}$ and $Q_{ab}$ are invariant under a
+random \emph{non-diagonal} $U(J)$ gauge mixing at every loop corner -- the non-Abelian
+generalization of Part~\ref{part:berry}'s diagonal-only gauge check; that Löwdin
+normalization exactly removes a synthetic uniform truncation deficiency applied to
+otherwise-identical states (the true metric is exactly zero in that construction, and
+only the normalized result recovers it); and, pinning the \emph{absolute} normalization
+(not just invariance) against an analytically known case -- the spin coherent state
+$|n(\theta,\phi)\rangle = (\cos\tfrac\theta2, e^{i\phi}\sin\tfrac\theta2)$, Provost \&
+Vallee's own original worked example -- the metric converges to the exact round-sphere
+result $g = \tfrac14\,\mathrm{diag}(1,\sin^2\theta)$ and the curvature to
+$F_{\theta\phi}=\tfrac12\sin\theta$ (the sign this module's overlap-matrix convention
+produces; magnitude is the solid-angle/2 result standard for a spin-1/2)
+(\texttt{tests/test\_quantum\_geometry\_gauge\_invariance.py}).
+
+Against a real compiled binary: the $\texttt{dk}$ divergence-vs-convergence contrast
+above (bulk Si); that curvature from \texttt{get\_quantum\_geometry()} agrees with
+\texttt{get\_berry\_curvature\_path()} (task 9001) on literally identical loop corners
+(anchoring this method's loop at task 9001's own corner 1, with double the step size,
+walks the same four points in the same cyclic order -- Part~\ref{part:berry}'s own
+path/mesh cross-check applied one level up), confirming the new Python-level loop
+construction introduces no sign/corner-order bug independent of the already-verified FHS
+arithmetic it reuses; and, on monolayer h-BN's occupied valence manifold (same structure
+as Part~\ref{part:berry}'s K/K$'$ verification): the quantum metric is positive
+semi-definite at $\Gamma$, K, M, K$'$; curvature vanishes (to $<1\%$ of the valley scale)
+at the time-reversal-invariant momenta $\Gamma$ and M and is K/K$'$-antisymmetric,
+reproducing Part~\ref{part:berry}'s own finding via an entirely independent Python code
+path (\texttt{EigenstateSession.overlap()} rather than task 9001's dedicated corners);
+$g_{11}$/$g_{22}$ are K/K$'$-symmetric to $<1\%$ at $\texttt{dk}=0.01$; and, at all four
+points, the exact bound Eq.~\eqref{eq:qgt-psd-bound} holds -- with comfortable margin at
+K/K$'$ ($\det g$ about twice the bound) and trivially at $\Gamma$/M (both sides
+near zero) -- tying the new metric's absolute scale to the already-trusted curvature
+value at the same point without dividing by a curvature that vanishes at two of the four
+points (\texttt{tests/test\_calculation\_quantum\_geometry.py}).
+
+\subsection{How to use in code}
+
+\begin{verbatim}
+result = calc.get_quantum_geometry(
+    [(0.0, 0.0, 0.0), (1 / 3, 1 / 3, 0.0)],  # Gamma, K -- fractional coordinates
+    1, 4, directions=(1, 2), dk=0.01,
+)
+result[1]["g"]                # (2,2) real array [[g11,g12],[g12,g22]], Bohr^2
+result[1]["berry_curvature"]  # Bohr^-2, identical convention to get_berry_curvature_path
+result[1]["Q"]                # (2,2) complex array, Q = g - (i/2)*berry_curvature*[[0,1],[-1,0]]
+\end{verbatim}
+Same \texttt{kpoints=}/\texttt{kpath=}/\texttt{ist0}/\texttt{ist1}/\texttt{directions}/
+\texttt{dk}/\texttt{npoints} conventions as \texttt{get\_berry\_curvature\_path()}
+(Part~\ref{part:berry}), including symbolic \texttt{kpath="GKMK'G"}-style paths.
+
 \begin{thebibliography}{9}
 \bibitem{koelling1977}
 D.~D.~Koelling and B.~N.~Harmon,

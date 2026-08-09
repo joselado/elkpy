@@ -639,3 +639,119 @@ isn't meaningful (confirmed empirically: bands 1-2 agree to the same ~1e-3 floor
 the two methods, bands 3-4 do not, consistent with an arbitrary within-subspace unitary
 mixing rather than a convention bug). Only gauge-invariant quantities built from a whole
 degenerate window (e.g. §13's FHS flux) are safe to compare that way.
+
+## 15. Quantum geometry: the quantum metric, alongside Berry curvature
+
+`Calculation.get_quantum_geometry(kpoints, ist0, ist1, directions=(1, 2), dk=0.005,
+kpath=None, npoints=100)` computes the full quantum geometric tensor $Q_{ab} = g_{ab} -
+\tfrac{i}{2}F_{ab}$ of a band window — Berry curvature $F_{ab}$ (§13) *and* the quantum
+metric $g_{ab}$ (Fubini-Study/Provost-Vallee metric) it had been missing — at an
+arbitrary, explicit list of k-points, the same interface shape as
+`get_berry_curvature_path()`. Full physics writeup (the quantum metric, why it's a
+distinct observable from curvature, the Marzari-Vanderbilt/Resta discretization, the
+Löwdin-normalization fix and its derivation): `docs/physics.tex` Part IV.
+
+**No new Fortran task.** Every overlap this needs — including each loop corner's own
+self-overlap $\langle\psi(\mathbf k)|\psi(\mathbf k)\rangle$, the one new ingredient
+curvature-alone never needed — is already exposed by the task 9002 interactive session
+(§14): `EigenstateSession.overlap(k_a, k_b, ist0, ist1)` with `k_a=k_b` for a
+self-overlap, or `k_a != k_b` for a cross overlap. `get_quantum_geometry()` opens one
+`eigenstate_session()` and, per requested point, walks a small rectangular loop anchored
+at that point — corners $\mathbf k$, $\mathbf k+\mathbf v_1$, $\mathbf k+\mathbf
+v_1+\mathbf v_2$, $\mathbf k+\mathbf v_2$ ($\mathbf v_\mu = \texttt{dk}\times
+\mathbf b_{\mu}$, $\mathbf b_\mu$ a Cartesian reciprocal lattice vector computed directly
+from `self.structure.avec` by `_reciprocal_vectors()` — the exact formula Elk's own
+`src/reciplat.f90` uses, kept in Python rather than read back from an Elk-written file,
+unlike `parsers.berry`'s `bvec`) — issuing 9 overlap queries (4 self-overlaps, 5 cross
+overlaps) and handing them to `parsers.quantum_geometry.compute_quantum_geometry()`,
+pure Python, unit-testable without an Elk run
+(`tests/test_quantum_geometry_gauge_invariance.py`) the same way `parsers.berry` is.
+This was an explicit design choice over adding a new task analogous to 9001 (a
+dedicated `elkpy_quantum_geometry.f90` exporting the same 9 matrices in one subprocess
+launch instead of 9 round-trips over an already-open pipe) — see docs/physics.tex Part
+IV for why the metric's dominant error source is much cheaper to fix in Python than in
+Fortran, which is the actual reason no new Fortran was needed here, not merely that it
+was avoidable.
+
+**Why the metric needs an extra step curvature never did.** `parsers.berry`'s Wilson-loop
+curvature is built from $\arg(\det M)$ around a *closed* loop — Elk's `genolpq` overlap
+carries a real-space truncation floor of order $10^{-3}$ (§14: `overlap(k,k,...)` is the
+identity only to that tolerance), but a common-mode modulus deficiency in every link
+variable cancels exactly in that closed-loop phase product, which is why §13 never needed
+to worry about it. The quantum metric is built directly from $|M|^2$
+(`quantum_distance()` = $J - \mathrm{Re}\,\mathrm{Tr}[MM^\dagger]$, $J$ = band-window
+size) and is *not* protected the same way: an overlap deficient by a relative factor
+$(1-\epsilon)$ contributes $\sim 2\epsilon J$ to `quantum_distance()`, a constant offset
+independent of the true metric, that *grows* relative to the true $O(\texttt{dk}^2)$
+metric signal as `dk` shrinks — confirmed on a real compiled binary (bulk Si, generic
+k-point): raw (unnormalized) $g_{11}$ at `dk` = 0.05, 0.02, 0.01, 0.005, 0.002 goes
+40.5, 48.2, 52.5, 62.9, 131.8 (diverging), while the fixed (Löwdin-normalized) value
+goes 40.5, 47.6, 49.7, 50.5, 51.0 (converging) — the concrete, measured version of the
+$1/\texttt{dk}^2$ blowup this section's fix removes
+(`tests/test_calculation_quantum_geometry.py::test_normalization_prevents_truncation_divergence`).
+`parsers.quantum_geometry._normalize_overlap()` applies the standard Löwdin symmetric
+normalization, $M \to S_a^{-1/2} M S_b^{-1/2}$ using each corner's own self-overlap $S$,
+before computing anything from it — exact by construction (it forces the normalized
+self-overlap to be the identity at every corner, not just approximately), and provably
+inert for curvature (§ above; $S^{-1/2}$ is Hermitian positive-definite, so
+$\det(S^{-1/2})$ is real and positive and cannot shift $\arg(\det M)$), so it's applied
+uniformly rather than only where it matters.
+
+**A genuine remaining discretization subtlety, not a bug**: the metric's off-diagonal
+component $g_{12}$ converges markedly more slowly with `dk` than $g_{11}/g_{22}$ or the
+curvature — it's built from a *difference* of three comparable-magnitude
+`quantum_distance()` values via the polarization identity ($g_{12} = [D(\mathbf
+v_1+\mathbf v_2) - D(\mathbf v_1) - D(\mathbf v_2)] / (2\,\texttt{dk}_1\texttt{dk}_2)$),
+so its own $O(\texttt{dk})$ discretization error is amplified relative to its
+$O(\texttt{dk}^2)$ signal in a way the diagonal terms' direct evaluation isn't. Observed
+directly on monolayer h-BN's K/K′ valleys (structure and occupied-window convention as
+in §13's path-mode verification): $g_{11}(K)$/$g_{11}(K')$ already agree to $<0.1\%$ at
+`dk=0.01`, matching the tight discretization curvature already achieves at that `dk`
+(§13), while $g_{12}(K)$/$g_{12}(K')$ — which time-reversal symmetry ($g_{ab}(-\mathbf
+k)=g_{ab}(\mathbf k)$, the same argument §13 uses for curvature's sign, applied to the
+metric instead) requires to agree in the `dk`$\,\to 0$ limit — only visibly converge
+toward each other as `dk` is refined (`tests/test_calculation_quantum_geometry.py::
+test_hbn_metric_offdiagonal_parity_improves_with_smaller_dk`), rather than already
+agreeing tightly at a single practical `dk`. Anyone reaching for $g_{12}$ specifically
+(not just $g_{11}$/$g_{22}$/curvature) should check its own `dk`-convergence before
+trusting a single value, the same discipline `get_berry_curvature_path()`'s own
+docstring already asks for regarding curvature.
+
+**How to use in code**:
+
+```python
+result = calc.get_quantum_geometry(
+    [(0.0, 0.0, 0.0), (1 / 3, 1 / 3, 0.0)],  # Gamma, K -- fractional coordinates
+    1, 4, directions=(1, 2), dk=0.01,
+)
+result[1]["g"]                # (2,2) real array [[g11,g12],[g12,g22]], Bohr^2
+result[1]["berry_curvature"]  # Bohr^-2, identical convention to get_berry_curvature_path
+result[1]["Q"]                # (2,2) complex array, Q = g - (i/2)*berry_curvature*[[0,1],[-1,0]]
+```
+
+Same `kpoints=`/`kpath=`/`ist0`/`ist1`/`directions`/`dk`/`npoints` conventions as
+`get_berry_curvature_path()` — including its `kpath=` disconnected-`,`-path support (each
+point independently evaluated) and the caveat that `ist0`/`ist1` isn't gap-checked here
+either (no eigenvalues exported by an overlap-only query).
+
+Verified against a real compiled binary: bulk Si's `dk` divergence/convergence contrast
+above; that curvature from `get_quantum_geometry()` matches `get_berry_curvature_path()`
+(task 9001) on literally identical loop corners (anchoring this method's non-centered
+loop at `get_berry_curvature_path()`'s corner 1, with double the step size, visits the
+same four points in the same cyclic order — the same reasoning as §13's own path/mesh
+agreement test), confirming this Python-level loop construction didn't introduce a
+sign/corner-order bug independent of the already-verified FHS arithmetic it reuses; and,
+on monolayer h-BN (same structure as §13's K/K′ verification), the occupied manifold's
+quantum metric is positive semi-definite at Γ, K, M, K′, its diagonal is K/K′-symmetric
+to $<1\%$ at `dk=0.01` (as time-reversal requires), curvature vanishes at the
+time-reversal-invariant points Γ and M and is K/K′-antisymmetric (reproducing §13's own
+finding via an entirely independent Python code path — `EigenstateSession.overlap()`
+rather than task 9001's dedicated Fortran corners); and, at all four points, $\det g \ge
+(F_{12}/2)^2$ — not a loose plausibility band but an exact theorem ($Q_{ab}$ is positive
+semi-definite as a 2x2 Hermitian matrix in the direction indices, being a sum over band
+indices of Gram-matrix-like $\langle\cdot|Q|\cdot\rangle$ terms, and $\det Q\ge0$ for a
+PSD 2x2 Hermitian matrix is exactly this inequality) tying the metric's absolute scale to
+the already-trusted curvature value at the same point without dividing by a curvature
+that's near zero at Γ/M — holds with comfortable margin at K/K′ ($\det g \approx 2\times$
+the bound) and trivially at Γ/M
+(`tests/test_calculation_quantum_geometry.py::test_hbn_gkm_valley_quantum_geometry`).

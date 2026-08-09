@@ -101,6 +101,52 @@ LAPW generalized eigenproblem, why `evecfv` isn't a valid raw-overlap basis but 
 — only within one diagonalisation — and the cross-k overlap integral): `docs/design.md` §14
 and `docs/physics.tex` (Part III).
 
+Also implemented, and — unlike the three entries above — needing no new Fortran at all:
+`Calculation.get_quantum_geometry(kpoints, ist0, ist1, directions=(1, 2), dk=)` — the full
+quantum geometric tensor $Q_{ab}=g_{ab}-\tfrac i2 F_{ab}$ of a band window at an arbitrary
+k-point: Berry curvature $F_{ab}$ (already covered by `get_berry_curvature_path()`) *and*
+the quantum metric $g_{ab}$ (Fubini-Study/Provost-Vallee metric) it had been missing. Every
+overlap this needs — including each loop corner's own self-overlap
+`session.overlap(k, k, ...)`, the one new ingredient curvature alone never needed a name
+for — is already exposed by the task 9002 interactive session, so this is driven entirely
+from Python-side `EigenstateSession.overlap()` queries (9 per k-point) plus discretization
+arithmetic in `parsers/quantum_geometry.py`; no `elkpy_quantum_geometry.f90`, no new task
+number. The one real subtlety: Elk's `genolpq` overlap carries a ~1e-3 real-space
+truncation floor that Berry curvature is immune to (it survives only in a closed-loop phase
+product, which cancels a common-mode modulus deficiency exactly) but the quantum metric,
+built directly from `1 - |overlap|^2`, is not — left uncorrected, this swamps the metric's
+genuine `O(dk^2)` signal with a spurious offset that *diverges* as `dk` shrinks (measured
+directly: raw g11 at dk=0.05→0.002 goes 40.5, 48.2, 52.5, 62.9, 131.8, i.e. blowing up).
+The fix is exact Löwdin symmetric normalization (`M -> S_a^{-1/2} M S_b^{-1/2}` using each
+corner's own self-overlap `S`) before computing anything from the raw overlaps — provably
+inert for curvature (`S^{-1/2}` is Hermitian positive-definite, so it cannot shift
+`arg(det M)`), and confirmed to fix the metric (same dk sweep, normalized: 40.5, 47.6,
+49.7, 50.5, 51.0 — converging). Verified against a real compiled binary: that dk
+divergence/convergence contrast on bulk Si; that curvature from `get_quantum_geometry()`
+matches `get_berry_curvature_path()` on literally identical loop corners (task 9001's
+corner-1 anchor, double the step size); and on monolayer h-BN (same structure as the Berry
+curvature K/K′ check above), the metric is positive semi-definite at Γ/K/M/K′, its
+diagonal is K/K′-symmetric to <1% (time-reversal symmetry, $g_{ab}(-k)=g_{ab}(k)$, unlike
+curvature's sign flip), curvature reproduces the existing K/K′ antisymmetry via an entirely
+independent Python code path, and at all four points $\det g \geq (F_{12}/2)^2$ — an exact
+theorem ($Q_{ab}=g_{ab}-\tfrac i2F_{ab}$ is PSD as a 2x2 Hermitian matrix, being a sum of
+Gram-matrix-like $\langle\cdot|Q|\cdot\rangle$ terms, so $\det Q\geq0$), not a loose
+plausibility band — holds with margin at K/K′ and trivially at Γ/M, tying the new metric's
+scale to the already-trusted curvature value without dividing by a curvature that
+vanishes at two of the four points
+(`tests/test_calculation_quantum_geometry.py`,
+`tests/test_quantum_geometry_gauge_invariance.py`). Also pinned against an analytically
+known case, the spin coherent state / CP¹ Fubini-Study metric (Provost & Vallée 1980's own
+worked example): converges to the exact $g=\tfrac14\mathrm{diag}(1,\sin^2\theta)$ and
+$F_{\theta\phi}=\tfrac12\sin\theta$. One genuine remaining wrinkle, not a bug: the metric's
+off-diagonal component $g_{12}$ (built from a polarization-identity difference of three
+comparable-magnitude quantities) converges markedly more slowly with `dk` than $g_{11}$,
+$g_{22}$, or curvature — worth checking its own dk-convergence before trusting a single
+value, same discipline `get_berry_curvature_path()` already asks for regarding curvature
+generally. Physics writeup (the quantum geometric tensor, the Marzari-Vanderbilt/Resta
+discretization, the `Tr[P∂P∂P]` derivation, the Löwdin-normalization fix):
+`docs/design.md` §15 and `docs/physics.tex` (Part IV).
+
 ## Architecture
 
 - `src/elkpy/structure.py` — `Structure`: lattice vectors (`avec`, Bohr) + species, each atom either a
@@ -156,11 +202,16 @@ extra functionality that Elk itself does not provide.
 
 ## Development practices
 
-When implementing new physics (a new Fortran capability, a new formula, a new numerical scheme —
-not routine wrapping of an existing Elk task), checking arXiv for the relevant method/paper is
-encouraged where it fits the task, to ground the implementation in the actual published formalism
-(e.g. matching sign/normalization conventions, confirming which approximation a term corresponds
-to) rather than guessing from the code alone.
+Whenever the user asks for a new piece of functionality to be implemented, checking arXiv for a
+relevant paper is encouraged where it plausibly helps — not limited to new physics — to ground the
+implementation in an actual published source (method, formalism, convention, algorithm) rather than
+guessing. This is a standing option to reach for, not something that needs to be requested each time.
+
+This applies with the most force to new physics (a new Fortran capability, a new formula, a new
+numerical scheme — not routine wrapping of an existing Elk task): checking arXiv for the relevant
+method/paper is encouraged where it fits the task, to ground the implementation in the actual
+published formalism (e.g. matching sign/normalization conventions, confirming which approximation a
+term corresponds to) rather than guessing from the code alone.
 
 Whenever a new formalism is added or an existing one is modified (new physics, a changed formula, a
 different numerical scheme — not routine wrapping of an existing Elk task), update the documentation
