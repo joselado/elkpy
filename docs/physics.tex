@@ -1226,4 +1226,160 @@ Dichalcogenides},
 Phys.\ Rev.\ Lett.\ \textbf{108}, 196802 (2012), arXiv:1112.3144.
 \end{thebibliography}
 
+\part{Orbital-character (s, p, d, f) projection operators}
+\label{part:orbitalprojection}
+
+\section{Resolving the atom-projection operator by angular momentum}
+
+Part~\ref{part:atomprojection}'s atom-projection operator $P_\alpha$ sums the
+muffin-tin-restricted overlap Eq.~\eqref{eq:atomproj-discrete} over every angular-momentum
+channel $(\ell,m)$ up to Elk's own $\ell_{\rm max}^{\rm o}$ (6 by default). Splitting that
+sum by $\ell$ before summing $m$ defines the $\ell$-resolved atom-projection operator,
+\begin{equation}
+  (P_{\alpha,\ell})_{ij} = \sum_{m=-\ell}^{\ell}\sum_\sigma\int_0^{R_\alpha}
+    \psi_{i,\ell m\sigma}^*(r)\,\psi_{j,\ell m\sigma}(r)\,w(r)\,dr,
+  \label{eq:orbitalproj}
+\end{equation}
+so that
+\begin{equation}
+  P_\alpha = \sum_{\ell=0}^{\ell_{\rm max}^{\rm o}} P_{\alpha,\ell},
+  \qquad
+  \sum_{\ell=0}^{3} P_{\alpha,\ell} \;\preceq\; P_\alpha,
+  \label{eq:orbitalproj-sum}
+\end{equation}
+the inequality in the Loewner order (the g/h/i, $\ell\ge4$, remainder $P_\alpha -
+\sum_{\ell=0}^3 P_{\alpha,\ell}$ is itself Hermitian PSD, by the same weighted-Gram-matrix
+argument as Eq.~\eqref{eq:atomproj-discrete}, since it is just the same construction with
+the $\ell$ sum restricted to $\ell\ge4$ instead). $\ell=0,1,2,3$ is the s/p/d/f
+convention this Part implements -- not a special truncation invented for elkpy, but
+literally Elk's own default cutoff for atom/$\ell$-resolved band character
+(\texttt{bandstr.f90}'s \texttt{lmaxdb=3}, Sec.~\ref{sec:orbitalproj-verify} below), which
+is how this Part's implementation is checked against an independent code path.
+
+As with $P_\alpha$ itself, each $P_{\alpha,\ell}$ is Hermitian and positive
+semi-definite -- Eq.~\eqref{eq:orbitalproj} is still $\Psi_\ell^\dagger W \Psi_\ell$ for
+$\Psi_\ell$ the coefficient matrix restricted to shells/rows with that $\ell$'s
+$(m,\sigma)$ index, $W\succeq0$ the same quadrature weight. Diagonal entries
+$(P_{\alpha,\ell})_{ii}\in[0,1]$ are state $i$'s fractional weight on atom $\alpha$,
+angular-momentum channel $\ell$ -- the familiar "orbital character" of a band (is this
+state $s$-like, $p$-like, \ldots, on this atom), generalized here (as in
+Part~\ref{part:atomprojection}) to off-diagonal matrix elements between different
+eigenstates of one diagonalization, applicable to an arbitrary superposition in the same
+band window, not only to a single basis state's own weight.
+
+\paragraph{What this is, and is not.} $P_{\alpha,\ell}$ projects onto an
+angular-momentum \emph{channel} inside atom $\alpha$'s muffin-tin sphere: every radial
+shell sharing that $\ell$, not a specific atomic orbital's own radial wavefunction. The
+everyday chemistry notion of "the outer/valence $d$ shell" of a transition-metal atom, as
+distinct from its filled semicore $d$ states, is a different, narrower object -- it would
+need a reference radial function (e.g.\ from a free-atom calculation) to separate
+semicore from valence within one $\ell$, which this operator does not attempt. The two
+notions coincide whenever a cell has no semicore state of that $\ell$ close in energy to
+the states being examined -- true for the light, $sp$-bonded systems verified below, where
+"$\ell=1$ weight" and "$p$-shell weight" are the same thing -- but they are not identical
+in general, and the API is named for the angular-momentum-channel meaning it actually
+computes.
+
+\section{Discretized form: masking \texttt{wfmtsv}'s output, not recomputing it}
+
+\texttt{elkpy\_orbitalproj} (\texttt{patches/0005-orbital-projection.patch}, new
+subroutine in \texttt{src/elkpy\_eigenstates.f90}) computes all four $P_{\alpha,\ell}$,
+$\ell=0,1,2,3$, for one atom from a SINGLE fresh diagonalization and a SINGLE
+\texttt{wfmtsv} call -- the same wavefunction expansion
+\texttt{elkpy\_atomproj} (Part~\ref{part:atomprojection}) uses -- then applies four
+separate reductions to that one array. Where \texttt{elkpy\_atomproj} broadcasts the
+\texttt{wr2cmt} quadrature weight $w(r)$ across every $(\ell,m)$ entry of a radial shell
+(summing the whole shell), \texttt{elkpy\_orbitalproj} builds, per $\ell$, a weight array
+nonzero only on the lm sub-range $\ell^2{+}1,\dots,(\ell{+}1)^2$ within each shell --
+mirroring \texttt{gendmatk.f90}'s own explicit per-$\ell$ loop (the machinery behind
+upstream \texttt{bandstr} task 21's $\ell$-resolved output) applied to
+Part~\ref{part:atomprojection}'s full $i,j$ off-diagonal \texttt{zgemm} construction
+instead of \texttt{gendmatk}'s per-state diagonal one. No new radial function or
+matching-coefficient computation is needed for any of this -- only a different, masked
+reduction of the same \texttt{wfmt} array \texttt{elkpy\_atomproj} already computes.
+
+Two details of that masking are load-bearing for correctness, and -- unlike a packing or
+sign error -- neither would be caught by the Hermitian/PSD checks below, since a
+real-valued, non-negative $w(r)$ preserves Hermiticity and positive semi-definiteness
+regardless of which lm range it happens to be nonzero on:
+\begin{itemize}
+\item The masked weight array must be explicitly zeroed before each $\ell$'s fill.
+  \texttt{elkpy\_atomproj} never needed this (every entry gets written there), but here
+  only the $\ell^2{+}1{:}(\ell{+}1)^2$ sub-range of each shell is written per $\ell$ --
+  leaving the rest at whatever an \texttt{allocate} happened to return would add
+  spurious, Hermitian-PSD-compatible weight at the wrong $\ell$.
+\item The muffin-tin-interior region (radial shells $\le\ell_{\rm max}^{\rm i}$'s own
+  angular cutoff, $\ell_{\rm max}^{\rm i}=1$ by default) only contributes to
+  $P_{\alpha,\ell}$ when $\ell\le\ell_{\rm max}^{\rm i}$ -- mirroring
+  \texttt{gendmatk.f90}'s own \texttt{if (l <= lmaxi)} guard exactly. With the default
+  $\ell_{\rm max}^{\rm i}=1$, this means $d$ and $f$ get no interior-region contribution
+  at all; omitting the guard would read the interior block's coefficients for the wrong
+  $\ell$ (adjacent shells' packed data) instead of correctly contributing zero.
+\end{itemize}
+
+\section{Why one query returns every atom, and every atom returns all four $\ell$}
+\label{sec:orbitalproj-verify}
+
+The task 9002 \texttt{ORBITAL $k_1\,k_2\,k_3\,ist_0\,ist_1$} query loops
+\texttt{elkpy\_orbitalproj} over every atom server-side, the same "share one
+diagonalization, so cross-atom identities are checkable" argument
+Part~\ref{part:atomprojection} gives for \texttt{PROJECTION}. It additionally gets a
+stronger guarantee \texttt{PROJECTION} does not need to make: for a single atom, all four
+$\ell$ matrices come from the SAME \texttt{wfmtsv} call, not merely the same
+diagonalization -- so they are exactly mutually consistent with each other, not only
+reproducibly so (the weaker guarantee that suffices for comparing two \emph{separate}
+\texttt{PROJECTION}/\texttt{ORBITAL} calls, which rests on ordinary LAPACK determinism
+rather than a shared computation). This is what makes
+Eq.~\eqref{eq:orbitalproj-sum}'s Loewner inequality, evaluated against a SEPARATE
+\texttt{get\_atom\_projection()} call for the same atom, a meaningful check rather than a
+coincidence of reproducibility.
+
+\subsection{Verified}
+
+Against a real compiled binary (bulk Si, generic $\mathbf k$-point): every returned
+$P_{\alpha,\ell}$ is Hermitian and positive semi-definite; $P_\alpha - \sum_{\ell=0}^3
+P_{\alpha,\ell}$ (Eq.~\eqref{eq:orbitalproj-sum}'s g/h/i remainder, $P_\alpha$ from a
+separate \texttt{get\_atom\_projection()} call) is itself Hermitian PSD, i.e.\ the s+p+d+f
+sum never overshoots the atom total. A diagonal entry agrees, to 5 decimal places, with an
+entirely independent Fortran code path -- upstream \texttt{bandstr.f90} task 21's own
+$\ell$-resolved \texttt{BAND\_Sss\_Aaaaa.OUT} columns (4 onward), calling the same
+\texttt{gendmatk}/\texttt{wfmtsv} machinery via a separate call site (Elk's own path
+diagonalization) and a separate reduction (\texttt{gendmatk}'s explicit per-$\ell$ loop,
+not this feature's masked \texttt{zgemm}) -- and here with \emph{no} $\ell_{\rm max}^{\rm
+db}$ override needed: task 21's own default, $\ell_{\rm max}^{\rm db}=3$, is exactly
+s,p,d,f, so the comparison is exact at Elk's own default rather than only after raising a
+cutoff (contrast Part~\ref{part:atomprojection}'s atom-total check, which needed $\ell_{\rm
+max}^{\rm db}=6$ to match $\ell_{\rm max}^{\rm o}$). The same task-21 cross-check on a
+spin-polarized run ($n_{\rm spinor}=2$) still matches, not merely staying Hermitian/PSD --
+closing a gap Part~\ref{part:atomprojection}'s own spin-polarized check leaves open there
+(Hermitian/PSD only, no external reference exercising the spin-channel accumulation).
+
+On monolayer h-BN (same structure as Part~\ref{part:berry}'s K/K$'$ verification), at
+$K=(1/3,1/3,0)$, nitrogen's occupied valence-top ($\pi$) band is $\ell=1$-dominated
+($p\approx0.522$, s/d/f $\approx0$) -- consistent with a N-$2p_z$ state, as expected for
+h-BN's $\pi$ manifold -- while a much deeper (bonding $\sigma$-type) valence band on the
+\emph{same} atom is instead $\ell=0$-dominated ($s\approx0.534$, p/d/f small). The
+dominant channel flips between the two bands of one atom: a sharp sign-of-the-effect
+prediction, not a plausibility band, the same spirit as Part~\ref{part:atomprojection}'s
+N/B atom-character check and Part~\ref{part:berry}'s K/K$'$ curvature-antisymmetry check
+(\texttt{tests/test\_calculation\_orbital\_projection.py}).
+
+\subsection{How to use in code}
+
+\begin{verbatim}
+from elkpy.session import ORBITAL_LABELS  # ("s", "p", "d", "f")
+
+orb = calc.get_orbital_projection((0.1, 0.2, 0.05), ist0=1, ist1=4)
+orb.matrices.shape             # (natmtot, 4, nst, nst) complex
+l = ORBITAL_LABELS.index("p")
+orb.matrices[a, l][i, i].real  # state (ist0+i)'s p-channel weight on atom a
+
+n = calc.structure.atom_index("N")
+orb.matrices[n]                # (4, nst, nst) -- all four l channels for that N atom
+\end{verbatim}
+\texttt{EigenstateSession.orbital\_projection(k, ist0, ist1)} is the underlying session
+method (\texttt{eigenstate\_session()}, Part~\ref{part:eigenstates});
+\texttt{get\_orbital\_projection(k, ist0, ist1)} is a one-off convenience wrapper opening
+and closing its own session, for a single query.
+
 \end{document}

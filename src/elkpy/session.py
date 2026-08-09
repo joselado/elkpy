@@ -16,6 +16,7 @@ from collections import namedtuple
 
 from .parsers.eigenstates import (
     parse_eigenstates_response,
+    parse_orbital_projection_response,
     parse_overlap_response,
     parse_projection_response,
 )
@@ -25,8 +26,14 @@ READY_SENTINEL = "ELKPY_SESSION_READY"
 END_SENTINEL = "ELKPY_SESSION_END"
 ERROR_PREFIX = "ELKPY_SESSION_ERROR"
 
+# l order OrbitalProjection.matrices' second axis uses -- s,p,d,f, matching
+# elkpy_orbitalproj's pmat(:,:,0:3) and Elk's own lmaxdb=3 "band character"
+# default (bandstr.f90 task 21).
+ORBITAL_LABELS = ("s", "p", "d", "f")
+
 Eigenstates = namedtuple("Eigenstates", ["k", "energies", "evecsv"])
 AtomProjection = namedtuple("AtomProjection", ["k", "matrices"])
+OrbitalProjection = namedtuple("OrbitalProjection", ["k", "matrices"])
 SpinOperator = namedtuple("SpinOperator", ["k", "sx", "sy", "sz"])
 
 
@@ -216,6 +223,43 @@ class EigenstateSession:
         self._send(f"PROJECTION {_fmt(k[0])} {_fmt(k[1])} {_fmt(k[2])} {int(ist0)} {int(ist1)}")
         tokens = self._read_until_sentinel()
         return AtomProjection(k=k, matrices=parse_projection_response(tokens))
+
+    def orbital_projection(self, k, ist0, ist1):
+        """The l-resolved atom-projection operators P_{alpha,l} for l=0,1,2,3
+        (s, p, d, f -- ORBITAL_LABELS), for EVERY atom alpha in the cell at
+        once, in the contiguous 1-indexed second-variational band window
+        [ist0, ist1] -- via elkpy_orbitalproj (src/elkpy_eigenstates.f90,
+        reusing the same wfmtsv/wr2cmt muffin-tin machinery as
+        atom_projection(), but resolved by l -- summed over m and spin only
+        -- rather than summed over every (l, m) up to lmaxo). Note this
+        projects onto an angular-momentum CHANNEL within the muffin-tin
+        sphere (all radii, all principal quantum numbers of that l), not
+        onto a specific atomic valence orbital's own radial shape -- l=1 on
+        a transition-metal atom, say, includes semicore p states too, not
+        only the outermost p shell. See docs/design.md #18 and
+        docs/physics.tex Part VII for the physics.
+
+        Returns an OrbitalProjection(k, matrices) namedtuple: matrices shape
+        (natmtot, 4, nst, nst) complex, nst = ist1 - ist0 + 1, atom axis in
+        Fortran's global 1-based atom order (same convention as
+        atom_projection()/get_forces()), l axis 0..3 = s,p,d,f
+        (ORBITAL_LABELS).
+
+        matrices[a, l] is Hermitian and positive semi-definite; summed over
+        l=0..3 it falls short of atom_projection()'s matrices[a] (which
+        sums to Elk's own lmaxo, 6 by default) by the l=4,5,6 (g,h,i)
+        weight -- not a defect, the same "not the whole atom" partiality
+        atom_projection() itself has relative to the full identity. All
+        4*natmtot matrices from one call share ONE diagonalisation and, per
+        atom, one wfmtsv call -- see elkpy_orbitalproj's docstring for the
+        precise gauge caveat (same spirit as atom_projection()'s, one level
+        more specific: the four l channels of a single atom are exactly
+        mutually consistent, not merely reproducibly so).
+        """
+        k = tuple(float(x) for x in k)
+        self._send(f"ORBITAL {_fmt(k[0])} {_fmt(k[1])} {_fmt(k[2])} {int(ist0)} {int(ist1)}")
+        tokens = self._read_until_sentinel()
+        return OrbitalProjection(k=k, matrices=parse_orbital_projection_response(tokens))
 
     def spin_operator(self, k, ist0, ist1):
         """The spin operators S_x, S_y, S_z (hbar=1, so eigenvalues +-1/2

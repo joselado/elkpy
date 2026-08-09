@@ -938,3 +938,98 @@ $S_x^2+S_y^2+S_z^2=\tfrac34\mathbb 1$ holds for the same reason; and definite-$\
 pure states (built directly from the up/down block split, no diagonalisation involved)
 reproduce the expected $\pm\tfrac12$ diagonal expectation values and vanishing cross-axis
 ones.
+
+## 18. Orbital-character (s, p, d, f) projection operators
+
+`Calculation.get_orbital_projection(k, ist0, ist1)` (task 9002's `ORBITAL` query,
+`patches/0005-orbital-projection.patch`, `elkpy_orbitalproj` in
+`src/elkpy_eigenstates.f90`) computes, for every atom $\alpha$ in the cell and every
+angular-momentum channel $\ell=0,1,2,3$ (s, p, d, f — `elkpy.session.ORBITAL_LABELS`) at
+once, the $\ell$-resolved atom-projection operator
+
+$$ (P_{\alpha,\ell})_{ij} = \sum_{m=-\ell}^{\ell}\sum_\sigma \int_0^{R_\alpha}
+ \psi_{i,\ell m\sigma}^*(r)\,\psi_{j,\ell m\sigma}(r)\,r^2\,dr, $$
+
+an `nst`$\times$`nst` Hermitian matrix in the second-variational eigenbasis of one fresh
+diagonalisation at $k$, `nst = ist1 - ist0 + 1`. This is §16's atom-projection operator
+$P_\alpha=\sum_{\ell=0}^{\text{lmaxo}}P_{\alpha,\ell}$ (summed over every $(\ell,m)$ up to
+Elk's own `lmaxo`, 6 by default) resolved by $\ell$ instead — summed over $m$ and spin
+only — the orbital-character analogue of atom-projection, and the same physical
+construction §16 already describes (Hermitian PSD weighted Gram matrix, not
+gauge-comparable across separate diagonalisations); full derivation in
+`docs/physics.tex` Part VII.
+
+**What this is not.** $P_{\alpha,\ell}$ projects onto an angular-momentum *channel*
+inside atom $\alpha$'s muffin-tin sphere — every radial shell and every principal
+quantum number sharing that $\ell$, not a specific atomic orbital's own radial shape.
+"s/p/d/f *for each element*" in the everyday chemistry sense (a transition metal's
+outermost $d$ shell, say, as opposed to its filled semicore $d$ states) would need a
+free-atom reference radial function to separate those out — a different, not-yet-built
+object. `get_orbital_projection()` answers "how much of this Bloch state's weight on
+atom $\alpha$ has $\ell=1$ symmetry", not "how much sits in atom $\alpha$'s valence $p$
+shell specifically" — the two coincide whenever a cell has no semicore states of that
+$\ell$ close in energy (true for the light $sp$-bonded systems `tests/test_calculation_orbital_projection.py`
+checks below), but are not the same question in general.
+
+**Reused, not new, machinery — one level more so than §16.** `elkpy_orbitalproj` is
+`elkpy_atomproj` with the $m$-sum restricted per call: one fresh diagonalisation and one
+`wfmtsv` call per atom (not per $\ell$), then four separate reductions of the SAME
+`wfmt` array — a masked, re-zeroed quadrature weight `wgt` (nonzero only for the lm
+sub-range $\ell^2{+}1,\dots,(\ell{+}1)^2$ within each radial shell) feeding one `zgemm`
+per spin channel per $\ell$, mirroring `gendmatk.f90`'s own per-$\ell$ loop (used by
+upstream `dos`/`bandstr` task 21's $\ell$-resolved output) rather than its per-$(\ell,m)$
+one. Two correctness details this masking makes load-bearing, both silent under
+Hermiticity/PSD checks alone (a real, non-negative `wgt` is Hermitian-PSD-preserving
+regardless of which lm range it is nonzero on): `wgt` must be explicitly zeroed before
+the masked fill (unlike `elkpy_atomproj`, which writes every entry, so needed no such
+zeroing), and the inner (muffin-tin-interior) region only contributes when
+$\ell\le$`lmaxi` — `lmaxi` defaults to 1, so d and f get no inner-region contribution at
+all — mirroring `gendmatk.f90`'s own `if (l <= lmaxi)` guard exactly; omitting either
+would silently read stale/uninitialised memory or the wrong radial shell's coefficients
+while staying perfectly Hermitian and PSD.
+
+**Why one call returns all four $\ell$ per atom.** Unlike `PROJECTION`'s
+"all-atoms-in-one-query" argument (§16 — atoms compared against each other need to share
+a diagonalisation, so the query loops atoms server-side), `ORBITAL`'s reason for
+batching per atom is sharper: the four $\ell$ matrices of ONE atom share not just one
+diagonalisation but one `wfmtsv` call, so they are exactly mutually consistent (not
+merely reproducibly so, the weaker guarantee §16 already flags for combining separate
+`PROJECTION`/`ORBITAL` calls, or different atoms' matrices from one `ORBITAL` call,
+across which only LAPACK determinism is relied on). This is what makes
+"$\sum_{\ell=0}^3 P_{\alpha,\ell} \le P_\alpha$" (from a separate `get_atom_projection()`
+call) a clean, checkable inequality rather than a coincidence of reproducibility alone.
+
+**How to use in code**:
+
+```python
+from elkpy.session import ORBITAL_LABELS  # ("s", "p", "d", "f")
+
+orb = calc.get_orbital_projection((0.1, 0.2, 0.05), ist0=1, ist1=4)
+orb.matrices.shape                    # (natmtot, 4, nst, nst) complex
+l = ORBITAL_LABELS.index("p")
+orb.matrices[a, l][i, i].real         # state (ist0+i)'s p-channel weight on atom a
+n = calc.structure.atom_index("N")
+orb.matrices[n]                       # (4, nst, nst) -- all four l channels for N
+```
+
+Verified against a real compiled binary: every $(\alpha,\ell)$ matrix is Hermitian and
+positive semi-definite; summing s+p+d+f and subtracting from `get_atom_projection()`'s
+own total for the same atom is still Hermitian PSD (the g/h/i remainder can't be
+negative); a diagonal entry matches an entirely independent Fortran code path —
+upstream `bandstr.f90` task 21's own $\ell$-resolved `BAND_Sss_Aaaaa.OUT` columns (4
+onward), calling the same `gendmatk`/`wfmtsv` machinery via a completely separate call
+site and reduction — to 5 decimal places, and here with NO `lmaxdb` override needed at
+all (unlike §16's atom-projection cross-check, which needed `lmaxdb=6` to match
+`lmaxo`): task 21's own default, `lmaxdb=3`, is exactly s,p,d,f, the same four channels
+this feature returns, so the comparison is exact at Elk's own default rather than only
+after raising a cutoff; a spin-polarized run (`spinpol=True`, `nspinor=2`) still matches
+that same task-21 cross-check, not merely Hermitian/PSD — closing a gap §16's own suite
+leaves open, where the spin-polarized fixture checks Hermitian/PSD only, with no
+external reference exercising the `do ispn=1,nspinor` accumulation; and on monolayer
+h-BN, at $K=(1/3,1/3,0)$, nitrogen's occupied valence-top ($\pi$) band is
+p-channel-dominated ($p\approx0.522$, s/d/f $\approx0$) while a much deeper
+(bonding $\sigma$-type) valence band on the SAME atom is s-channel-dominated instead
+($s\approx0.534$, p/d/f small) — the dominant channel flips between the two bands of one
+atom, a sharp sign-of-the-effect prediction (not a plausibility band), the same spirit
+as §16's N/B atom-character check and §13's K/K′ curvature antisymmetry
+(`tests/test_calculation_orbital_projection.py`).

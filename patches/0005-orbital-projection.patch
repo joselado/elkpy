@@ -1,0 +1,210 @@
+--- a/src/elkpy_eigenstates.f90	2026-08-09 13:32:27.428173308 +0300
++++ b/src/elkpy_eigenstates.f90	2026-08-09 13:32:27.429944184 +0300
+@@ -205,6 +205,138 @@
+ !EOC
+ 
+ !BOP
++! !ROUTINE: elkpy_orbitalproj
++! !INTERFACE:
++subroutine elkpy_orbitalproj(vpl,ias,nst,idx,pmat)
++! !USES:
++use modmain
++! !DESCRIPTION:
++!   The $\ell$-resolved atom-projection operators $P_{\alpha,\ell}$ for
++!   $\ell=0,1,2,3$ (s, p, d, f) restricted to atom {\tt ias}'s muffin-tin
++!   sphere, each an {\tt nst}$\times${\tt nst} Hermitian matrix in the
++!   orthonormal second-variational eigenbasis of ONE fresh on-the-fly
++!   diagonalisation at an arbitrary $k$-point {\tt vpl}:
++!   $$ (P_{\alpha,\ell})_{ij} = \sum_{m=-\ell}^{\ell}\sum_\sigma
++!    \int_0^{R_\alpha} \psi_{i,\ell m\sigma}^*(r)\,\psi_{j,\ell m\sigma}(r)\,
++!    r^2\,dr, $$
++!   the same construction as {\tt elkpy\_atomproj}'s $P_\alpha$ but resolved
++!   by $\ell$ (summed over $m$ and spin only) rather than summed over every
++!   $(\ell,m)$ up to {\tt lmaxo}. Returned as {\tt pmat(:,:,0:3)}, one matrix
++!   per $\ell$, all four sharing this single diagonalisation and single
++!   {\tt wfmtsv} call -- only the reduction (which {\tt wfmt} rows enter the
++!   {\tt zgemm}) differs between the four, so summing all four
++!   $P_{\alpha,\ell}$ compares validly against {\tt elkpy\_atomproj}'s
++!   $P_\alpha$ from a SEPARATE call (itself a separate diagonalisation) only
++!   up to ordinary LAPACK reproducibility, same caveat {\tt elkpy\_atomproj}'s
++!   own docstring already gives for combining separate queries; the four
++!   $\ell$ matrices from one call to THIS routine are exactly consistent
++!   with each other.
++!
++!   Each $P_{\alpha,\ell}$ is Hermitian and positive semi-definite by the
++!   same weighted-Gram-matrix argument as {\tt elkpy\_atomproj}. Radial
++!   shells with $\ell>${\tt lmaxi} contribute nothing from the inner
++!   (muffin-tin-interior) region -- mirrored here from {\tt gendmatk.f90}'s
++!   own {\tt if (l <= lmaxi)} guard, since the inner region's own angular
++!   basis ({\tt lmmaxi} wide) may not extend up to a requested $\ell$ (e.g.
++!   {\tt lmaxi}'s default of 1 excludes $\ell=2,3$ from the inner region
++!   entirely) -- omitting this guard would silently read the wrong radial
++!   shell's coefficients instead of correctly contributing zero.
++!
++! !REVISION HISTORY:
++!   Created 2026 (elkpy)
++!EOP
++!BOC
++implicit none
++! arguments
++real(8), intent(in) :: vpl(3)
++integer, intent(in) :: ias,nst,idx(*)
++complex(8), intent(out) :: pmat(nst,nst,0:3)
++! local variables
++integer ispn,nmatp,is,irc,nrc,nrci,np,p0,lsel,lma,lmb
++real(8) vl(3),vc(3)
++! automatic arrays
++integer ngp(nspnfv),igpig(ngkmax,nspnfv)
++real(8) vgpl(3,ngkmax,nspnfv),vgpc(3,ngkmax),gpc(ngkmax)
++real(8) evalfv(nstfv,nspnfv),evalsv_(nstsv)
++! allocatable arrays
++complex(8), allocatable :: sfacgp(:,:),apwalm(:,:,:,:,:)
++complex(8), allocatable :: evecfv(:,:,:),evecsv(:,:)
++complex(8), allocatable :: wfmt(:,:,:),wfmtw(:,:,:)
++real(8), allocatable :: wgt(:)
++if (spinsprl) then
++  write(*,*)
++  write(*,'("Error(elkpy_orbitalproj): spin-spirals not supported by the elkpy &
++   &orbital-projection task")')
++  write(*,*)
++  stop
++end if
++is=idxis(ias)
++allocate(sfacgp(ngkmax,natmtot))
++allocate(apwalm(ngkmax,apwordmax,lmmaxapw,natmtot,nspnfv))
++allocate(evecfv(nmatmax,nstfv,nspnfv),evecsv(nstsv,nstsv))
++! fresh on-the-fly diagonalisation, same pattern as elkpy_diagonalize/
++! elkpy_wfcorner/elkpy_atomproj (kept as its own copy rather than a shared
++! call, per this file's existing convention)
++do ispn=1,nspnfv
++  vl(1:3)=vpl(1:3)
++  vc(1:3)=bvec(1:3,1)*vpl(1)+bvec(1:3,2)*vpl(2)+bvec(1:3,3)*vpl(3)
++  call gengkvec(ngvc,ivg,vgc,vl,vc,gkmax,ngkmax,ngp(ispn),igpig(:,ispn), &
++   vgpl(:,:,ispn),vgpc,gpc)
++  call gensfacgp(ngp(ispn),vgpc,ngkmax,sfacgp)
++  call match(ngp(ispn),vgpc,gpc,sfacgp,apwalm(:,:,:,:,ispn))
++  nmatp=ngp(ispn)+nlotot
++  call eveqnfv(nmatp,ngp(ispn),igpig(:,ispn),vc,vgpc,apwalm(:,:,:,:,ispn), &
++   evalfv(:,ispn),evecfv(:,:,ispn))
++end do
++deallocate(sfacgp)
++call eveqnsv(ngp(1),igpig(:,1),vgpc,apwalm,evalfv,evecfv,evalsv_,evecsv)
++! second-variational muffin-tin wavefunction of atom ias, in (l,m)-harmonic
++! form (tsh=.true., same as gendmatk.f90/elkpy_atomproj), for the requested
++! band window -- computed ONCE and reused for all four l channels below
++allocate(wfmt(npcmtmax,nspinor,nst))
++call wfmtsv(.true.,lradstp,is,ias,nst,idx,ngp,apwalm,evecfv,evecsv,npcmtmax, &
++ wfmt)
++deallocate(apwalm,evecfv,evecsv)
++nrci=nrcmti(is)
++nrc=nrcmt(is)
++np=npcmt(is)
++allocate(wgt(np),wfmtw(npcmtmax,nspinor,nst))
++do lsel=0,3
++  lma=lsel**2+1
++  lmb=lma+2*lsel
++! radial quadrature weight per packed (l,m)+radial-shell index (same packing
++! as elkpy_atomproj), but masked to zero outside this l's lm sub-range
++! within each shell -- an explicit zero-fill first, since (unlike
++! elkpy_atomproj, which fills every entry) only lma:lmb is written per shell
++! below, and Fortran's Hermitian/PSD zgemm construction cannot itself catch
++! stale/uninitialised entries slipping in as spuriously nonzero weight
++  wgt(:)=0.d0
++  if (lsel <= lmaxi) then
++    do irc=1,nrci
++      wgt((irc-1)*lmmaxi+lma:(irc-1)*lmmaxi+lmb)=wr2cmt(irc,is)
++    end do
++  end if
++  if (lsel <= lmaxo) then
++    p0=npcmti(is)
++    do irc=nrci+1,nrc
++      wgt(p0+lma:p0+lmb)=wr2cmt(irc,is)
++      p0=p0+lmmaxo
++    end do
++  end if
++  do ispn=1,nspinor
++    wfmtw(1:np,ispn,1:nst)=wfmt(1:np,ispn,1:nst)*spread(wgt(1:np),2,nst)
++  end do
++  pmat(:,:,lsel)=zzero
++  do ispn=1,nspinor
++    call zgemm('C','N',nst,nst,np,zone,wfmt(1,ispn,1),npcmtmax*nspinor, &
++     wfmtw(1,ispn,1),npcmtmax*nspinor,zone,pmat(1,1,lsel),nst)
++  end do
++end do
++deallocate(wfmt,wfmtw,wgt)
++end subroutine
++!EOC
++
++!BOP
+ ! !ROUTINE: elkpy_eigenstate_session
+ ! !INTERFACE:
+ subroutine elkpy_eigenstate_session
+@@ -243,6 +375,15 @@
+ !    eigenbasis with each other (e.g. summing them and comparing to the
+ !    identity minus the interstitial remainder is a valid, self-contained
+ !    check; see {\tt tests/test\_calculation\_atom\_projection.py}).
++!   \item {\tt ORBITAL k1 k2 k3 ist0 ist1} -- the $\ell$-resolved
++!    atom-projection operators $P_{\alpha,\ell}$ for $\ell=0,1,2,3$ (s, p, d,
++!    f -- see {\tt elkpy\_orbitalproj}), for every atom $\alpha$ in the cell
++!    at once, restricted to the contiguous band window $[ist0,ist1]$. Like
++!    {\tt PROJECTION}, every returned matrix for a given atom shares that
++!    atom's one diagonalisation (here additionally: all four $\ell$ channels
++!    of one atom share the same {\tt wfmtsv} call too); across atoms this
++!    relies on the same diagonalisation-reproducibility argument
++!    {\tt PROJECTION} already does.
+ !   \end{itemize}
+ !
+ !   Kept alive across many queries rather than one query per subprocess (as
+@@ -288,7 +429,8 @@
+ complex(8), allocatable :: wfmt1(:,:,:,:),wfir1(:,:,:),wfgp1(:,:,:)
+ complex(8), allocatable :: wfmt2(:,:,:,:),wfir2(:,:,:),wfgp2(:,:,:)
+ complex(8), allocatable :: expqmt(:,:),oq(:,:),moverlap(:,:)
+-complex(8), allocatable :: pmat(:,:,:)
++complex(8), allocatable :: pmat(:,:,:),opmat(:,:,:,:)
++integer lsel
+ if (spinsprl) then
+   write(*,*)
+   write(*,'("Error(elkpy_eigenstate_session): spin-spirals not supported by &
+@@ -417,6 +559,42 @@
+     call flush(6)
+     deallocate(idx,pmat)
+ 
++  case('ORBITAL')
++    read(line,*,iostat=ios) cmd,vpl(1),vpl(2),vpl(3),ist0,ist1
++    if (ios /= 0) then
++      write(*,'("ELKPY_SESSION_ERROR malformed ORBITAL command")')
++      call flush(6)
++      cycle
++    end if
++    if ((ist0 < 1).or.(ist1 > nstsv).or.(ist1 < ist0)) then
++      write(*,'("ELKPY_SESSION_ERROR invalid band window (ist0,ist1,nstsv) : ", &
++       &3I8)') ist0,ist1,nstsv
++      call flush(6)
++      cycle
++    end if
++    nst=ist1-ist0+1
++    allocate(idx(nst))
++    do a=1,nst
++      idx(a)=ist0+a-1
++    end do
++    allocate(opmat(nst,nst,0:3,natmtot))
++    do ias=1,natmtot
++      call elkpy_orbitalproj(vpl,ias,nst,idx,opmat(:,:,:,ias))
++    end do
++    write(*,*) nst,natmtot,4
++    do ias=1,natmtot
++      do lsel=0,3
++        do b=1,nst
++          do a=1,nst
++            write(*,*) dble(opmat(a,b,lsel,ias)),aimag(opmat(a,b,lsel,ias))
++          end do
++        end do
++      end do
++    end do
++    write(*,'("ELKPY_SESSION_END")')
++    call flush(6)
++    deallocate(idx,opmat)
++
+   case default
+     write(*,'("ELKPY_SESSION_ERROR unknown command: ",A)') trim(cmd)
+     call flush(6)

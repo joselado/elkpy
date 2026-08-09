@@ -837,6 +837,23 @@ class Calculation:
         with self.eigenstate_session() as session:
             return session.atom_projection(k, ist0, ist1)
 
+    def get_orbital_projection(self, k, ist0, ist1):
+        """The l-resolved atom-projection operators P_{alpha,l} for l=0,1,2,3
+        (s, p, d, f) for every atom alpha in the cell, restricted to the
+        contiguous band window [ist0, ist1], at a single k-point. A one-off
+        convenience wrapper around eigenstate_session() -- see
+        get_eigenstates()'s docstring about preferring eigenstate_session()
+        directly for repeated queries, and EigenstateSession.orbital_projection()
+        for what this computes, its (natmtot, 4, nst, nst) return shape/atom
+        and l ordering, and its gauge caveat.
+
+        `self.structure.atom_index(symbol, index)` maps a (species, index)
+        pair to this array's first axis; `elkpy.session.ORBITAL_LABELS`
+        gives the second axis's l order (s, p, d, f).
+        """
+        with self.eigenstate_session() as session:
+            return session.orbital_projection(k, ist0, ist1)
+
     def get_spin_operator(self, k, ist0, ist1):
         """The spin operators S_x, S_y, S_z for the contiguous band window
         [ist0, ist1], at a single k-point. A one-off convenience wrapper

@@ -7,6 +7,7 @@ import pytest
 
 from elkpy.parsers.eigenstates import (
     parse_eigenstates_response,
+    parse_orbital_projection_response,
     parse_overlap_response,
     parse_projection_response,
 )
@@ -63,4 +64,24 @@ def test_parse_projection_response_round_trip():
     parsed = parse_projection_response(tokens)
 
     assert parsed.shape == (natmtot, nst, nst)
+    assert parsed == pytest.approx(mats, abs=1e-12)
+
+
+def test_parse_orbital_projection_response_round_trip():
+    rng = np.random.default_rng(3)
+    nst, natmtot, nl = 2, 3, 4
+    mats = rng.normal(size=(natmtot, nl, nst, nst)) + 1j * rng.normal(
+        size=(natmtot, nl, nst, nst)
+    )
+
+    # src/elkpy_eigenstates.f90's ORBITAL case writes "do ias; do lsel; do b;
+    # do a" (a innermost) -- each (atom, l) block column-major, blocks
+    # consecutive, l fastest-varying after (a, b).
+    tokens = [str(nst), str(natmtot), str(nl)]
+    for ias in range(natmtot):
+        for lsel in range(nl):
+            tokens += _complex_matrix_tokens(mats[ias, lsel])
+    parsed = parse_orbital_projection_response(tokens)
+
+    assert parsed.shape == (natmtot, nl, nst, nst)
     assert parsed == pytest.approx(mats, abs=1e-12)

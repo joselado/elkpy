@@ -235,6 +235,50 @@ fixed physical operator, which preserves commutators. Physics writeup (the produ
 derivation, spin-valley locking, the Fe cross-checks): `docs/design.md` §17 and
 `docs/physics.tex` (Part VI).
 
+Also implemented, as the fifth entry in the Fortran patch series:
+`Calculation.get_orbital_projection(k, ist0, ist1)` (task 9002's new `ORBITAL` query,
+`patches/0005-orbital-projection.patch`) — the atom-projection operator generalized in the
+opposite direction from §17's spin operators: resolved by angular-momentum channel
+$\ell=0,1,2,3$ (s, p, d, f — `elkpy.session.ORBITAL_LABELS`) instead of summed over every
+$(\ell,m)$ up to `lmaxo`. New Fortran subroutine `elkpy_orbitalproj` computes all four
+$\ell$ matrices for one atom from a SINGLE fresh diagonalisation and a SINGLE `wfmtsv`
+call — the same wavefunction expansion §16's `elkpy_atomproj` uses — then applies four
+separate masked reductions of that one array, mirroring `gendmatk.f90`'s own per-$\ell$
+loop (the machinery behind upstream `bandstr` task 21's $\ell$-resolved band-character
+output) rather than `elkpy_atomproj`'s broadcast-across-the-whole-shell weight. Two
+correctness details of that masking are load-bearing and invisible to a
+Hermitian/positive-semi-definite check alone (any non-negative weight preserves both,
+regardless of which angular-momentum range it's nonzero on): the masked weight array must
+be explicitly zeroed before each $\ell$'s fill (unlike `elkpy_atomproj`, which writes
+every entry and so never needed this), and the muffin-tin-interior region only
+contributes when $\ell\le$`lmaxi` (default 1, so d/f get no interior contribution at
+all) — mirroring `gendmatk.f90`'s own `if (l <= lmaxi)` guard exactly; skipping either
+would silently read stale memory or the wrong radial shell's coefficients while staying
+perfectly Hermitian and PSD. This projects onto an angular-momentum *channel* within the
+muffin-tin sphere (every radial shell sharing that $\ell$), not a specific atomic valence
+orbital's own radial shape — the two coincide for light, $sp$-bonded systems with no
+close-lying semicore state of that $\ell$ (the only case verified here), but are not the
+same object in general; the API is named and documented for the channel it actually
+computes, not the everyday "outer shell" phrasing that motivated it. Verified against a
+real compiled binary: every $(\alpha,\ell)$ matrix is Hermitian and positive
+semi-definite; summing s+p+d+f and subtracting from a separate `get_atom_projection()`
+call's total for the same atom is still Hermitian PSD (the g/h/i remainder can't be
+negative); a diagonal entry matches upstream `bandstr.f90` task 21's own $\ell$-resolved
+`BAND_Sss_Aaaaa.OUT` columns to 5 decimal places with **no** `lmaxdb` override needed —
+task 21's own default, `lmaxdb=3`, is exactly s,p,d,f, unlike §16's atom-total check
+which needed `lmaxdb=6` to match `lmaxo` — and this same cross-check still matches on a
+spin-polarized run, closing a gap §16's own spin-polarized test leaves open (Hermitian/PSD
+only there, no external reference exercising the `do ispn=1,nspinor` accumulation). On
+monolayer h-BN at $K=(1/3,1/3,0)$, nitrogen's occupied valence-top ($\pi$) band is
+p-channel-dominated ($p\approx0.522$, s/d/f $\approx0$, consistent with a N-$2p_z$ state)
+while a much deeper bonding-$\sigma$ valence band on the *same* atom is s-channel-dominated
+instead ($s\approx0.534$) — the dominant channel flips between the two bands of one atom,
+a sharp sign-of-the-effect prediction rather than a plausibility band
+(`tests/test_calculation_orbital_projection.py`). Physics writeup (the $\ell$-resolved
+operator, the masked-reduction construction, the s+p+d+f-vs-total inequality, why this
+isn't a valence-shell-specific projector): `docs/design.md` §18 and `docs/physics.tex`
+(Part VII).
+
 ## Architecture
 
 - `src/elkpy/structure.py` — `Structure`: lattice vectors (`avec`, Bohr) + species, each atom either a
@@ -267,10 +311,11 @@ derivation, spin-valley locking, the Fe cross-checks): `docs/design.md` §17 and
   Refuses `nprocs > 1` since `build-config/make.inc` builds serial (`mpi_stub.f90`) — that combination
   would silently launch N racing copies into one directory, not parallelize.
 - `src/elkpy/session.py` — `EigenstateSession`: owns the interactive task-9002 subprocess started by
-  `eigenstate_session()`, sending `EIGENSTATES`/`OVERLAP`/`PROJECTION` queries over stdin and parsing
-  responses off stdout until closed (context manager) or told to `QUIT`. See `docs/design.md` §14 for
-  why this is a persistent worker process rather than an f2py in-memory bridge, and §16 for
-  `PROJECTION` (atom-projection operators).
+  `eigenstate_session()`, sending `EIGENSTATES`/`OVERLAP`/`PROJECTION`/`ORBITAL` queries over stdin and
+  parsing responses off stdout until closed (context manager) or told to `QUIT`. See `docs/design.md`
+  §14 for why this is a persistent worker process rather than an f2py in-memory bridge, §16 for
+  `PROJECTION` (atom-projection operators), and §18 for `ORBITAL` (l-resolved s/p/d/f projectors,
+  `ORBITAL_LABELS`).
 - `src/elkpy/parsers/` — one small module per output file family (`info`, `totenergy`, `band` — reused
   for phonon dispersion, since `PHDISP.OUT` shares `BAND.OUT`'s exact layout — `dos`, reused for phonon
   DOS, `forces`, `geometry`, `effmass`, `volumetric`), each verified against real Elk output, not
@@ -278,8 +323,8 @@ derivation, spin-valley locking, the Fe cross-checks): `docs/design.md` §17 and
   Wilson-loop/Chern-number arithmetic in Python (`compute_berry_curvature()`), deliberately kept out of
   Fortran so it's unit-testable against synthetic overlap matrices (`tests/test_berry_gauge_invariance.py`)
   without an Elk run. `eigenstates` parses `EigenstateSession`'s stdout token stream (not a file) into
-  energies/`evecsv`/overlap/atom-projection arrays, independently unit-testable the same way
-  (`tests/test_parsers_eigenstates.py`).
+  energies/`evecsv`/overlap/atom-projection/orbital-projection arrays, independently unit-testable the
+  same way (`tests/test_parsers_eigenstates.py`).
 - `src/elkpy/config.py` — locates the built `elk` binary (`build/elk/src/elk` by default, override via
   `ELKPY_ELK_BIN`) and the species directory (`vendor/elk/species/` by default).
 
