@@ -147,21 +147,22 @@ from elkpy.session import ORBITAL_LABELS
 d = ORBITAL_LABELS.index("d")
 w = wse2.structure.atom_index("W")
 with wse2.eigenstate_session() as session:
-    lz_k = session.angular_momentum(K, ist1, ist1).lz_orbital[w, d, 0, 0].real
-    lz_kprime = session.angular_momentum(Kprime, ist1, ist1).lz_orbital[w, d, 0, 0].real
+    for k in path:                                              # path through Gamma-K-M-K'-Gamma
+        energies.append(session.get_eigenstates(k).energies[w0 - 1 : w1])
+        lz.append(session.angular_momentum(k, w0, w1).lz_orbital[w, d].diagonal().real)
 ```
-![Alt text](images/wse2_angular_momentum.png?raw=true "Lz of monolayer WSe2's valence-band-top state at K and K', W d-channel")
+![Alt text](images/wse2_angular_momentum.png?raw=true "Band structure of monolayer WSe2 along Gamma-K-M-K'-Gamma colored by Lz on the W d-channel, showing the K/K' sign flip")
 
 ## Spin operators: spin-valley locking in monolayer WSe2 ##
 Broken inversion symmetry plus strong spin-orbit coupling locks the valence-band-top spin
 to the valley index: $S_z(K)=-S_z(K')$ (Xiao, Liu, Feng, Xu & Yao, PRL 108, 196802 (2012)):
 ```python
-K, Kprime = (1 / 3, 1 / 3, 0), (-1 / 3, -1 / 3, 0)
 with wse2.eigenstate_session() as session:
-    sz_k = session.spin_operator(K, ist1, ist1).sz[0, 0].real          # valence-band top
-    sz_kprime = session.spin_operator(Kprime, ist1, ist1).sz[0, 0].real
+    for k in path:                                       # path through Gamma-K-M-K'-Gamma
+        energies.append(session.get_eigenstates(k).energies[w0 - 1 : w1])
+        sz.append(session.spin_operator(k, w0, w1).sz.diagonal().real)
 ```
-![Alt text](images/wse2_spin_valley.png?raw=true "Sz of monolayer WSe2's valence-band-top state at K and K'")
+![Alt text](images/wse2_spin_valley.png?raw=true "Band structure of monolayer WSe2 along Gamma-K-M-K'-Gamma colored by Sz, showing the K/K' sign flip")
 
 ## Also: Elk's standard DFT workflow (band structure, DOS, charge density) ##
 ```python
