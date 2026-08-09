@@ -418,7 +418,12 @@ object-model naming from) — physics-first, not an API/engineering writeup:
   PNG generated from an executed notebook cell (`images/`, extracted via
   `nbformat`+`base64`, same pattern as pyqula's own `images/*.png` gallery) — never a
   hand-drawn or synthetic figure. No "Project layout"/directory-tour section — that
-  reads as internal engineering documentation, not user-facing README material.
+  reads as internal engineering documentation, not user-facing README material. Every
+  `FUNCTIONALITIES` bullet ends with a `[[notebook]](notebooks/NN_name.ipynb)` link to
+  the notebook that demonstrates it — same inline-link-per-bullet pattern pyqula's own
+  README uses (see pyqula's `FUNCTIONALITIES` section) — so a reader goes straight from
+  the one-line physics claim to the worked example, not just from a separate summary
+  table at the bottom of the page.
 - **Notebooks** (`notebooks/`, one per feature area, table linked from the README):
   pyqula's `jupyter-notebooks/*/main.ipynb` rhythm — a one-line "This notebook shows
   how to compute X" title cell, minimal imports, then repeating
@@ -426,11 +431,27 @@ object-model naming from) — physics-first, not an API/engineering writeup:
   comment per line] → [plot]`. Cut engineering context rather than compress it into
   shorter prose; where a mechanism genuinely matters to a result (e.g. a value that's
   silently wrong if you get it from the wrong place), it becomes a `#` comment on the
-  line it affects, not a markdown paragraph. Every notebook runs against a real
-  compiled Elk binary and is checked in with its actual output cells — the one
-  exception is DFPT phonons, left unexecuted with a note on why (~11-13 min/call) and
-  the command to run it yourself. Add a new notebook (and a README table row) alongside
-  any new physics capability, same trigger as the `docs/physics.tex` writeup rule above.
+  line it affects, not a markdown paragraph. Concretely, this means no standalone
+  "verify the result" cell — a Hermiticity check, an identity/partition check
+  (`sum_alpha P_alpha + P_interstitial = 1`), an eigenvalue-sign check — sitting between
+  the formula and the headline calculation with no plot of its own: that correctness
+  check already lives in `tests/` and is asserted in the prose of `docs/design.md`/
+  `docs/physics.tex`, so repeating it in the notebook is exactly the kind of engineering
+  context pyqula's own notebooks don't carry (see e.g. `jupyter-notebooks/08_chern_insulator/
+  main.ipynb`: Hamiltonian → bands/curvature/Chern number → plot, nothing else). A
+  notebook cell should either feed the next cell or feed a plot; if it does neither,
+  cut it. When a quantity is naturally a function of k (or of some other physically
+  meaningful axis), prefer showing it that way over a bar chart of one or two isolated
+  numbers — e.g. a band structure colored by an operator's expectation value (a
+  spin/orbital-texture plot), not `ax.bar(["K", "K'"], [...])` — even when the
+  headline physics claim is about just two points; a categorical comparison across
+  atoms/orbital channels (not indexed by k) is the one case where a grouped bar chart
+  is still the right call (see [[feedback_notebook_plots_not_bar_charts]] in the
+  auto-memory). Every notebook runs against a real compiled Elk binary and is checked
+  in with its actual output cells — the one exception is DFPT phonons, left unexecuted
+  with a note on why (~11-13 min/call) and the command to run it yourself. Add a new
+  notebook (and a README table row + `FUNCTIONALITIES` link) alongside any new physics
+  capability, same trigger as the `docs/physics.tex` writeup rule above.
 - **LaTeX gotchas hit in practice**: matplotlib's mathtext needs braced arguments
   (`\mathbf{r}`, not `\mathbf r` — the latter raises `ParseFatalException` at render
   time, not at notebook-generation time, so it only surfaces when a cell actually

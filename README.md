@@ -38,27 +38,27 @@ python3 -m pip install -e .        # add .[ase] for Structure.from_ase()/to_ase(
 # FUNCTIONALITIES #
 
 ## Spin-orbit coupling ##
-- Per-species scaling of the spin-orbit term $\hat H_{\rm soc}(r)=f_{\rm soc}(r)\,\hat{\mathbf L}\cdot\boldsymbol\sigma$, rather than one global scale for the whole cell
+- Per-species scaling of the spin-orbit term $\hat H_{\rm soc}(r)=f_{\rm soc}(r)\,\hat{\mathbf L}\cdot\boldsymbol\sigma$, rather than one global scale for the whole cell [[notebook]](notebooks/04_per_species_soc_scaling.ipynb)
 
 ## Topological characterization ##
 - Berry curvature $F_{12}(\mathbf k)=\partial_1A_2-\partial_2A_1$ and Chern numbers $c_n=\frac1{2\pi i}\int_{T^2}\!d^2k\,F_{12}\in\mathbb Z$, via a gauge-invariant Wilson-loop discretization
-- Berry curvature at an arbitrary k-point with no periodic mesh required, e.g. to resolve individual valleys of a 2D material
+- Berry curvature at an arbitrary k-point with no periodic mesh required, e.g. to resolve individual valleys of a 2D material [[notebook]](notebooks/05_berry_curvature.ipynb)
 
 ## Quantum geometry ##
-- The full quantum geometric tensor $Q_{ab}=g_{ab}-\tfrac i2F_{ab}$ at an arbitrary k-point: Berry curvature $F_{ab}$ *and* the quantum metric $g_{ab}$ (Fubini-Study distance between neighbouring Bloch states), from the same wavefunction-overlap queries used for eigenstates below
+- The full quantum geometric tensor $Q_{ab}=g_{ab}-\tfrac i2F_{ab}$ at an arbitrary k-point: Berry curvature $F_{ab}$ *and* the quantum metric $g_{ab}$ (Fubini-Study distance between neighbouring Bloch states), from the same wavefunction-overlap queries used for eigenstates below [[notebook]](notebooks/07_quantum_geometry.ipynb)
 
 ## Eigenstates and wavefunction overlaps ##
-- Second-variational energies and eigenvectors at an arbitrary k-point
-- Wavefunction overlaps $O_{ab}(\mathbf k_a,\mathbf k_b)=\langle\psi_a(\mathbf k_a)|\psi_b(\mathbf k_b)\rangle$ between two arbitrary k-points, queried interactively
-- Atom-projection operators $(P_\alpha)_{ij}=\langle\psi_i|\hat P_\alpha|\psi_j\rangle$ (muffin-tin restriction of the identity, $\sum_\alpha P_\alpha+P_{\rm interstitial}=\mathbb 1$), applicable to any wavefunction in the same band window
-- Orbital-character (s, p, d, f) operators $P_{\alpha,\ell}=\sum_{m,\sigma}\langle\psi_i|\hat P_{\alpha,\ell m\sigma}|\psi_j\rangle$, the atom-projection operator resolved by angular momentum $\ell=0,1,2,3$
-- Atomic angular momentum operators $L_x,L_y,L_z$, the same $\ell$-resolved atom-projection operator generalized from a scalar weight to the full ladder-operator matrix (reusing Elk's own `lopzflm` subroutine)
-- Spin operators $S_x,S_y,S_z$ (eigenvalues $\pm\tfrac12$) as Hermitian matrices in a band window, applicable to any wavefunction the same way
+- Second-variational energies and eigenvectors at an arbitrary k-point [[notebook]](notebooks/06_eigenstate_session.ipynb)
+- Wavefunction overlaps $O_{ab}(\mathbf k_a,\mathbf k_b)=\langle\psi_a(\mathbf k_a)|\psi_b(\mathbf k_b)\rangle$ between two arbitrary k-points, queried interactively [[notebook]](notebooks/06_eigenstate_session.ipynb)
+- Atom-projection operators $(P_\alpha)_{ij}=\langle\psi_i|\hat P_\alpha|\psi_j\rangle$ (muffin-tin restriction of the identity, $\sum_\alpha P_\alpha+P_{\rm interstitial}=\mathbb 1$), applicable to any wavefunction in the same band window [[notebook]](notebooks/08_atom_projection.ipynb)
+- Orbital-character (s, p, d, f) operators $P_{\alpha,\ell}=\sum_{m,\sigma}\langle\psi_i|\hat P_{\alpha,\ell m\sigma}|\psi_j\rangle$, the atom-projection operator resolved by angular momentum $\ell=0,1,2,3$ [[notebook]](notebooks/10_orbital_projection.ipynb)
+- Atomic angular momentum operators $L_x,L_y,L_z$, the same $\ell$-resolved atom-projection operator generalized from a scalar weight to the full ladder-operator matrix (reusing Elk's own `lopzflm` subroutine) [[notebook]](notebooks/11_angular_momentum.ipynb)
+- Spin operators $S_x,S_y,S_z$ (eigenvalues $\pm\tfrac12$) as Hermitian matrices in a band window, applicable to any wavefunction the same way [[notebook]](notebooks/09_spin_operators.ipynb)
 
 ## Ground-state electronic structure ##
-- Self-consistent total energy $E[n]$, band structure $\epsilon_i(\mathbf k)$, density of states
-- Hellmann-Feynman forces, structural relaxation, effective mass tensor, charge density $n(\mathbf r)$
-- Phonon dispersion and density of states via density functional perturbation theory
+- Self-consistent total energy $E[n]$, band structure $\epsilon_i(\mathbf k)$, density of states [[notebook]](notebooks/01_getting_started.ipynb)
+- Hellmann-Feynman forces, structural relaxation, effective mass tensor, charge density $n(\mathbf r)$ [[notebook]](notebooks/02_relaxation_forces_and_properties.ipynb)
+- Phonon dispersion and density of states via density functional perturbation theory [[notebook]](notebooks/03_phonon_dispersion_and_dos.ipynb)
 
 # EXAMPLES #
 Full worked notebooks (formulas + code + real Elk output) are in [`notebooks/`](notebooks); short examples below, in the same order as FUNCTIONALITIES.
