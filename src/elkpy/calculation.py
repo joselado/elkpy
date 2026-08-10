@@ -696,10 +696,15 @@ class Calculation:
 
         Unlike get_berry_curvature_path() (one Elk subprocess launch per
         point, via task 9001's fresh corner diagonalisation), this opens
-        ONE eigenstate_session() and issues 9 overlap queries per point (4
-        self-overlaps + 5 cross overlaps) -- reusing the persistent
-        session's "stay warm" setup (docs/design.md #14) rather than
-        re-paying it 9 times per point.
+        ONE eigenstate_session() and issues 19 overlap queries per point (9
+        self-overlaps + 8 cross overlaps from k0, walking a 3x3 grid of
+        corners centered at k0, + 2 more cross overlaps for curvature's own
+        forward sub-loop) -- reusing the persistent session's "stay warm"
+        setup (docs/design.md #14) rather than re-paying it 19 times per
+        point. The centered grid (rather than just the forward quadrant) is
+        what gives the metric's off-diagonal component g12 its correct
+        k -> -k symmetry -- see parsers.quantum_geometry.compute_quantum_geometry's
+        docstring and docs/design.md #15 for why.
 
         Returns a list of dicts, one per requested k-point, in the order
         given: {"k": (kx,ky,kz) fractional, "g": (2,2) array
@@ -722,28 +727,41 @@ class Calculation:
         bvec = self._reciprocal_vectors()
         v1 = dk * bvec[directions[0] - 1]
         v2 = dk * bvec[directions[1] - 1]
+        d1, d2 = directions
 
-        def shift(k, direction):
+        def displaced(k, n1, n2):
             k = list(k)
-            k[direction - 1] += dk
+            k[d1 - 1] += n1 * dk
+            k[d2 - 1] += n2 * dk
             return tuple(k)
 
         results = []
         with self.eigenstate_session(label=label) as session:
             for k0 in kpoints:
-                k1 = shift(k0, directions[0])
-                k2 = shift(k0, directions[1])
-                k12 = shift(k1, directions[1])
+                k1p, k1m = displaced(k0, 1, 0), displaced(k0, -1, 0)
+                k2p, k2m = displaced(k0, 0, 1), displaced(k0, 0, -1)
+                k12pp, k12pm = displaced(k0, 1, 1), displaced(k0, 1, -1)
+                k12mp, k12mm = displaced(k0, -1, 1), displaced(k0, -1, -1)
                 overlaps = {
                     "s0": session.overlap(k0, k0, ist0, ist1),
-                    "s1": session.overlap(k1, k1, ist0, ist1),
-                    "s2": session.overlap(k2, k2, ist0, ist1),
-                    "s12": session.overlap(k12, k12, ist0, ist1),
-                    "m1": session.overlap(k0, k1, ist0, ist1),
-                    "m2": session.overlap(k0, k2, ist0, ist1),
-                    "m12": session.overlap(k0, k12, ist0, ist1),
-                    "edge_b": session.overlap(k1, k12, ist0, ist1),
-                    "edge_c": session.overlap(k2, k12, ist0, ist1),
+                    "s1p": session.overlap(k1p, k1p, ist0, ist1),
+                    "s1m": session.overlap(k1m, k1m, ist0, ist1),
+                    "s2p": session.overlap(k2p, k2p, ist0, ist1),
+                    "s2m": session.overlap(k2m, k2m, ist0, ist1),
+                    "s12pp": session.overlap(k12pp, k12pp, ist0, ist1),
+                    "s12pm": session.overlap(k12pm, k12pm, ist0, ist1),
+                    "s12mp": session.overlap(k12mp, k12mp, ist0, ist1),
+                    "s12mm": session.overlap(k12mm, k12mm, ist0, ist1),
+                    "m1p": session.overlap(k0, k1p, ist0, ist1),
+                    "m1m": session.overlap(k0, k1m, ist0, ist1),
+                    "m2p": session.overlap(k0, k2p, ist0, ist1),
+                    "m2m": session.overlap(k0, k2m, ist0, ist1),
+                    "m12pp": session.overlap(k0, k12pp, ist0, ist1),
+                    "m12pm": session.overlap(k0, k12pm, ist0, ist1),
+                    "m12mp": session.overlap(k0, k12mp, ist0, ist1),
+                    "m12mm": session.overlap(k0, k12mm, ist0, ist1),
+                    "edge_b": session.overlap(k1p, k12pp, ist0, ist1),
+                    "edge_c": session.overlap(k2p, k12pp, ist0, ist1),
                 }
                 result = quantum_geometry.compute_quantum_geometry(overlaps, v1, v2)
                 results.append({"k": k0, **result})

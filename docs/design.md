@@ -656,21 +656,24 @@ self-overlap $\langle\psi(\mathbf k)|\psi(\mathbf k)\rangle$, the one new ingred
 curvature-alone never needed — is already exposed by the task 9002 interactive session
 (§14): `EigenstateSession.overlap(k_a, k_b, ist0, ist1)` with `k_a=k_b` for a
 self-overlap, or `k_a != k_b` for a cross overlap. `get_quantum_geometry()` opens one
-`eigenstate_session()` and, per requested point, walks a small rectangular loop anchored
-at that point — corners $\mathbf k$, $\mathbf k+\mathbf v_1$, $\mathbf k+\mathbf
-v_1+\mathbf v_2$, $\mathbf k+\mathbf v_2$ ($\mathbf v_\mu = \texttt{dk}\times
+`eigenstate_session()` and, per requested point, walks a $3\times3$ grid of corners
+centered at that point — $\mathbf k$, $\mathbf k\pm\mathbf v_1$, $\mathbf k\pm\mathbf v_2$,
+$\mathbf k\pm\mathbf v_1\pm\mathbf v_2$ ($\mathbf v_\mu = \texttt{dk}\times
 \mathbf b_{\mu}$, $\mathbf b_\mu$ a Cartesian reciprocal lattice vector computed directly
 from `self.structure.avec` by `_reciprocal_vectors()` — the exact formula Elk's own
 `src/reciplat.f90` uses, kept in Python rather than read back from an Elk-written file,
-unlike `parsers.berry`'s `bvec`) — issuing 9 overlap queries (4 self-overlaps, 5 cross
-overlaps) and handing them to `parsers.quantum_geometry.compute_quantum_geometry()`,
-pure Python, unit-testable without an Elk run
-(`tests/test_quantum_geometry_gauge_invariance.py`) the same way `parsers.berry` is.
-This was an explicit design choice over adding a new task analogous to 9001 (a
-dedicated `elkpy_quantum_geometry.f90` exporting the same 9 matrices in one subprocess
-launch instead of 9 round-trips over an already-open pipe) — see docs/physics.tex Part
-IV for why the metric's dominant error source is much cheaper to fix in Python than in
-Fortran, which is the actual reason no new Fortran was needed here, not merely that it
+unlike `parsers.berry`'s `bvec`) — issuing 19 overlap queries (9 self-overlaps, 8 cross
+overlaps from $\mathbf k$, plus 2 more cross overlaps for curvature's own forward
+sub-loop; see below for why the metric needs the full centered grid while curvature only
+needs its original forward quadrant) and handing them to
+`parsers.quantum_geometry.compute_quantum_geometry()`, pure Python, unit-testable without
+an Elk run (`tests/test_quantum_geometry_gauge_invariance.py`) the same way
+`parsers.berry` is. This was an explicit design choice over adding a new task analogous
+to 9001 (a dedicated `elkpy_quantum_geometry.f90` exporting the same matrices in one
+subprocess launch instead of 19 round-trips over an already-open pipe) — see
+docs/physics.tex Part IV for why the metric's dominant error source is much cheaper to
+fix in Python than in Fortran, which is the actual reason no new Fortran was needed here,
+not merely that it
 was avoidable.
 
 **Why the metric needs an extra step curvature never did.** `parsers.berry`'s Wilson-loop
@@ -697,25 +700,56 @@ inert for curvature (§ above; $S^{-1/2}$ is Hermitian positive-definite, so
 $\det(S^{-1/2})$ is real and positive and cannot shift $\arg(\det M)$), so it's applied
 uniformly rather than only where it matters.
 
-**A genuine remaining discretization subtlety, not a bug**: the metric's off-diagonal
-component $g_{12}$ converges markedly more slowly with `dk` than $g_{11}/g_{22}$ or the
-curvature — it's built from a *difference* of three comparable-magnitude
-`quantum_distance()` values via the polarization identity ($g_{12} = [D(\mathbf
-v_1+\mathbf v_2) - D(\mathbf v_1) - D(\mathbf v_2)] / (2\,\texttt{dk}_1\texttt{dk}_2)$),
-so its own $O(\texttt{dk})$ discretization error is amplified relative to its
-$O(\texttt{dk}^2)$ signal in a way the diagonal terms' direct evaluation isn't. Observed
-directly on monolayer h-BN's K/K′ valleys (structure and occupied-window convention as
-in §13's path-mode verification): $g_{11}(K)$/$g_{11}(K')$ already agree to $<0.1\%$ at
-`dk=0.01`, matching the tight discretization curvature already achieves at that `dk`
-(§13), while $g_{12}(K)$/$g_{12}(K')$ — which time-reversal symmetry ($g_{ab}(-\mathbf
-k)=g_{ab}(\mathbf k)$, the same argument §13 uses for curvature's sign, applied to the
-metric instead) requires to agree in the `dk`$\,\to 0$ limit — only visibly converge
-toward each other as `dk` is refined (`tests/test_calculation_quantum_geometry.py::
-test_hbn_metric_offdiagonal_parity_improves_with_smaller_dk`), rather than already
-agreeing tightly at a single practical `dk`. Anyone reaching for $g_{12}$ specifically
-(not just $g_{11}$/$g_{22}$/curvature) should check its own `dk`-convergence before
-trusting a single value, the same discipline `get_berry_curvature_path()`'s own
-docstring already asks for regarding curvature.
+**The metric now uses a centered stencil, not a forward one — and why that fixed more
+than just the convergence order.** The metric was originally built from a plain forward
+difference: $g_{11} = D(\mathbf v_1)/\texttt{dk}_1^2$ and, via the polarization identity,
+$g_{12} = [D(\mathbf v_1+\mathbf v_2) - D(\mathbf v_1) - D(\mathbf v_2)] /
+(2\,\texttt{dk}_1\texttt{dk}_2)$, using only the forward quadrant of corners ($\mathbf k$,
+$\mathbf k+\mathbf v_1$, $\mathbf k+\mathbf v_2$, $\mathbf k+\mathbf v_1+\mathbf v_2$) the
+curvature loop already needed. $D(\mathbf v) = g_{ab}v^av^b + O(|\mathbf v|^3)$
+(the quadratic-form expansion, `docs/physics.tex` Part IV) has a generically nonzero
+cubic correction, so this forward estimate carried an $O(\texttt{dk})$ error — small for
+$g_{11}/g_{22}$ in practice (h-BN's K/K′ diagonal agreed to $<1\%$ at `dk=0.01`) but large
+for $g_{12}$, built from a *difference* of three comparable-magnitude
+`quantum_distance()` values that amplifies it: measured on h-BN's K/K′ valleys, the K-vs-K′
+gap in $g_{12}$ shrank by very close to a factor of 2 per `dk`-halving (1.83, 0.97, 0.49 at
+`dk` = 0.02, 0.01, 0.005) — the textbook signature of an $O(\texttt{dk})$ error going to
+zero, not of two values that already agree.
+
+`parsers.quantum_geometry.compute_quantum_geometry()` now walks a full $3\times3$ grid of
+corners centered at $\mathbf k$ (9 self-overlaps, 8 cross overlaps from $\mathbf k$, plus
+curvature's own 2 forward-loop edges — 19 queries total, up from 9) and uses the standard
+centered stencil for the metric — $g_{11} = [D(\mathbf v_1)+D(-\mathbf v_1)] /
+(2\,\texttt{dk}_1^2)$, and $g_{12}$ from the four diagonal corners
+$\mathbf k \pm\mathbf v_1\pm\mathbf v_2$ — the mixed-partial analogue of a centered
+numerical derivative, which cancels the cubic correction exactly and leaves an
+$O(\texttt{dk}^2)$ error instead (derivation, and the same claim confirmed on noise-free
+synthetic data with the O(dk) vs O(dk^2) trend directly visible:
+`docs/physics.tex` Part IV, `tests/test_quantum_geometry_gauge_invariance.py::
+test_offdiagonal_metric_centered_stencil_converges_quadratically`). Curvature's own Wilson
+loop is left exactly as it was — a forward (non-centered) sub-loop — since it was already
+$O(\texttt{dk}^2)$ accurate and centering it would cost more corners for no gain.
+
+That fix turned out to do more than improve the convergence *order*: for this
+time-reversal-symmetric, non-spin-orbit structure, the K/K′ metric agreement is now
+*exact up to floating-point roundoff* (measured relative differences
+$\sim10^{-13}$–$10^{-12}$ across `dk` = 0.02, 0.01, 0.005 — not a shrinking-but-nonzero
+gap, so there's no `dk`-convergence trend left to observe in real Elk output any more;
+`tests/test_calculation_quantum_geometry.py::
+test_hbn_metric_offdiagonal_k_kprime_symmetry_is_near_exact`). The reason: a
+time-reversal-symmetric, non-spin-orbit Hamiltonian gives $\psi(-\mathbf k) =
+\psi(\mathbf k)^*$, hence $D_{-\mathbf k}(\mathbf v) = D_{\mathbf k}(-\mathbf v)$
+(derivation in `docs/physics.tex` Part IV), and every term of the centered stencil is manifestly
+invariant under negating $\mathbf v_1,\mathbf v_2$ simultaneously — so $g_{ab}$ evaluated
+at $-\mathbf k$ is *literally the same arithmetic expression* as at $\mathbf k$, not just a
+closely converged one. Curvature doesn't get this same exactness: its sub-loop is anchored
+at $\mathbf k$ (not centered), so the same conjugation maps it to a loop in the
+diagonally-opposite quadrant rather than the identical one, leaving only the ordinary
+$O(\texttt{dk}^2)$ discretization agreement it already had (K/K′ curvature matches to
+$<1\%$, not machine precision). This exactness is conditional on
+$\psi(-\mathbf k)=\psi(\mathbf k)^*$ — it does **not** hold under `spinorb=True`
+(§17/§19's spin/orbital-locking checks), where $H(-\mathbf k)\ne H(\mathbf k)^*$ in this
+simple form; only the ordinary $O(\texttt{dk}^2)$ stencil accuracy is expected there.
 
 **How to use in code**:
 
@@ -742,8 +776,9 @@ same four points in the same cyclic order — the same reasoning as §13's own p
 agreement test), confirming this Python-level loop construction didn't introduce a
 sign/corner-order bug independent of the already-verified FHS arithmetic it reuses; and,
 on monolayer h-BN (same structure as §13's K/K′ verification), the occupied manifold's
-quantum metric is positive semi-definite at Γ, K, M, K′, its diagonal is K/K′-symmetric
-to $<1\%$ at `dk=0.01` (as time-reversal requires), curvature vanishes at the
+quantum metric is positive semi-definite at Γ, K, M, K′, its diagonal AND off-diagonal
+are K/K′-symmetric to $10^{-8}$ relative at `dk=0.01` (as time-reversal requires — see
+above for why this is now essentially exact, not just small), curvature vanishes at the
 time-reversal-invariant points Γ and M and is K/K′-antisymmetric (reproducing §13's own
 finding via an entirely independent Python code path — `EigenstateSession.overlap()`
 rather than task 9001's dedicated Fortran corners); and, at all four points, $\det g \ge

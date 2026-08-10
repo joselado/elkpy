@@ -767,17 +767,21 @@ off-diagonal component follows from the polarization identity for the bilinear f
 $D$,
 \begin{equation}
   g_{12} = \frac{D(\mathbf v_1+\mathbf v_2) - D(\mathbf v_1) - D(\mathbf v_2)}
-    {2\,|\mathbf v_1|\,|\mathbf v_2|},
-  \label{eq:g12-polarization}
+    {2\,|\mathbf v_1|\,|\mathbf v_2|}.
+  \label{eq:g12-polarization-fwd}
 \end{equation}
-needing one extra overlap, $M(\mathbf k,\mathbf k+\mathbf v_1+\mathbf v_2)$, beyond the
-four already needed for $F_{12}$'s closed loop (Eq.~\eqref{eq:link}, corners $\mathbf k$,
-$\mathbf k+\mathbf v_1$, $\mathbf k+\mathbf v_1+\mathbf v_2$, $\mathbf k+\mathbf v_2$,
-anchored rather than centered, the same convention \texttt{parsers.berry}'s mesh mode --
-not its centered path mode -- uses). Because $\det(S^{-1/2})$ for any Hermitian
-positive-definite $S$ is real and positive (\S~below), this construction leaves $F_{12}$
-computed from the same corners numerically identical to Part~\ref{part:berry}'s
-Eq.~\eqref{eq:fieldstrength}.
+This is a \emph{forward} finite-difference estimate -- $D$ is sampled only along $+\mathbf
+v_1$, $+\mathbf v_2$, $+(\mathbf v_1+\mathbf v_2)$, the same quadrant $F_{12}$'s closed
+loop (Eq.~\eqref{eq:link}, corners $\mathbf k$, $\mathbf k+\mathbf v_1$, $\mathbf
+k+\mathbf v_1+\mathbf v_2$, $\mathbf k+\mathbf v_2$) already needs -- and, since
+Eq.~\eqref{eq:qdist-quadratic} has a generically nonzero \emph{cubic} correction, it
+carries an $O(|\mathbf v|)$ discretization error, small in practice for $g_{11}/g_{22}$
+but strongly amplified for $g_{12}$: Eq.~\eqref{eq:g12-polarization-fwd} is a
+\emph{difference} of three comparable-magnitude $D$ values, so the same absolute cubic
+error is large relative to the much smaller $O(|\mathbf v|^2)$ quantity it's meant to
+isolate. \S\ref{sec:qg-centering} below replaces this with a centered stencil that
+removes the cubic term exactly and, for a class of structures including h-BN,
+does more than that.
 
 \section{elkpy's implementation: Löwdin normalization, and why curvature didn't need it}
 
@@ -821,23 +825,113 @@ No new Fortran task was needed for any of this (unlike Parts~\ref{part:berry}--
 Eq.~\eqref{eq:qg-overlap}'s cross overlaps and now also each corner's self-overlap -- is
 already exposed by the task 9002 interactive session (Part~\ref{part:eigenstates}), so
 \texttt{Calculation.get\_quantum\_geometry()} drives everything above purely from
-Python-side \texttt{EigenstateSession.overlap()} calls (9 per requested k-point: 4
-self-overlaps, 5 cross overlaps) plus the discretization arithmetic in
+Python-side \texttt{EigenstateSession.overlap()} calls (19 per requested k-point --
+\S\ref{sec:qg-centering} below) plus the discretization arithmetic in
 \texttt{parsers/quantum\_geometry.py}, independently unit-testable against synthetic
 data with no Elk run at all
 (\texttt{tests/test\_quantum\_geometry\_gauge\_invariance.py}), the same way
 \texttt{parsers/berry.py} is.
 
-A remaining discretization subtlety worth stating plainly, not a bug: $g_{12}$
-(Eq.~\eqref{eq:g12-polarization}) is a difference of three comparable-magnitude
-$D$ values, so its own $O(\texttt{dk})$ discretization error is amplified relative to
-its $O(\texttt{dk}^2)$ signal in a way $g_{11}$/$g_{22}$'s direct evaluation is not --
-observed on monolayer h-BN's K/K$'$ valleys (\S~below): $g_{12}(K)$ and $g_{12}(K')$,
-required equal in the $\texttt{dk}\to 0$ limit by time-reversal symmetry ($g_{ab}(-\mathbf
-k)=g_{ab}(\mathbf k)$, the same argument Part~\ref{part:berry} uses for curvature's sign
-flip, applied here to a quantity that does \emph{not} flip sign), only visibly converge
-toward each other as \texttt{dk} is refined, unlike $g_{11}$/$g_{22}$, which already
-agree to $<0.1\%$ at a single practical \texttt{dk}.
+\section{Centering the stencil: exact $O(\texttt{dk}^2)$ convergence, and exact
+$\mathbf k\to-\mathbf k$ symmetry for time-reversal-symmetric structures}
+\label{sec:qg-centering}
+
+Eq.~\eqref{eq:g12-polarization-fwd}'s forward difference was pinned directly on
+monolayer h-BN's K/K$'$ valleys, which time-reversal symmetry requires to have equal
+metric ($g_{ab}(-\mathbf k)=g_{ab}(\mathbf k)$, the same argument Part~\ref{part:berry}
+uses for curvature's \emph{sign} flip, applied here to a quantity that does not flip
+sign): the K-vs-K$'$ gap in $g_{12}$ shrank by almost exactly a factor of 2 per
+\texttt{dk}-halving (1.83, 0.97, 0.49 at \texttt{dk} = 0.02, 0.01, 0.005) -- the textbook
+signature of an uncancelled $O(\texttt{dk})$ error, not of two values already in
+agreement -- while $g_{11}$/$g_{22}$, suffering the same cubic contamination but not its
+amplification by subtraction, already agreed to $<1\%$ at a single practical
+\texttt{dk}=0.01.
+
+The fix is the standard centered generalization of Eqs.~\eqref{eq:g12-polarization-fwd}
+and the forward $g_{11}=D(\mathbf v_1)/|\mathbf v_1|^2$, using both signs of each
+displacement:
+\begin{align}
+  g_{11} &= \frac{D(\mathbf v_1) + D(-\mathbf v_1)}{2\,|\mathbf v_1|^2}, \qquad
+  g_{22} = \frac{D(\mathbf v_2) + D(-\mathbf v_2)}{2\,|\mathbf v_2|^2}, \label{eq:g-diag-centered}\\
+  g_{12} &= \frac{D(\mathbf v_1+\mathbf v_2) + D(-\mathbf v_1-\mathbf v_2)
+    - D(\mathbf v_1-\mathbf v_2) - D(-\mathbf v_1+\mathbf v_2)}{8\,|\mathbf v_1|\,|\mathbf v_2|},
+  \label{eq:g12-centered}
+\end{align}
+needing a full $3\times3$ grid of corners centered at $\mathbf k$ (9 self-overlaps, 8
+cross overlaps from $\mathbf k$, plus curvature's original 2 forward-loop edges -- 19
+queries total, up from 9). Eq.~\eqref{eq:g12-centered} is exactly the standard centered
+finite-difference stencil for a mixed second partial derivative applied to $D$; writing
+$D(\mathbf v) = Q(\mathbf v) + C(\mathbf v) + O(|\mathbf v|^4)$ for the quadratic part
+$Q(\mathbf v) = g_{ab}v^av^b$ and the (generically nonzero) cubic part $C(\mathbf v)$,
+$C$ odd ($C(-\mathbf v)=-C(\mathbf v)$) cancels between each $\pm$ pair while $Q$
+(even) survives and doubles, using the polarization identity $Q(\mathbf x+\mathbf
+y)-Q(\mathbf x-\mathbf y) = 4\,g(\mathbf x,\mathbf y)$:
+\begin{equation}
+  D(\mathbf v_1+\mathbf v_2)+D(-\mathbf v_1-\mathbf v_2) - D(\mathbf v_1-\mathbf v_2)-D(-\mathbf v_1+\mathbf v_2)
+  = 2\bigl[Q(\mathbf v_1+\mathbf v_2)-Q(\mathbf v_1-\mathbf v_2)\bigr] + O(|\mathbf v|^4)
+  = 8\,g_{12}\,|\mathbf v_1||\mathbf v_2| + O(|\mathbf v|^4),
+\end{equation}
+leaving an $O(\texttt{dk}^2)$ error in place of the forward stencil's $O(\texttt{dk})$ --
+confirmed directly on noise-free synthetic data (a skewed reparametrization of the
+Provost-Vallee spin coherent state chosen so $g_{12}\ne0$ analytically, since the
+diagonal $(\theta,\phi)$ parametrization used for the absolute-normalization check below
+has $g_{12}\equiv0$ and so cannot show this): measured errors against the analytic value
+go $1.18\times10^{-3}\to5.92\times10^{-4}\to2.96\times10^{-4}$ (ratio $\approx2$, i.e.\
+$O(\texttt{dk})$) for the forward stencil and
+$2.88\times10^{-5}\to7.20\times10^{-6}\to1.80\times10^{-6}$ (ratio $\approx4$, i.e.\
+$O(\texttt{dk}^2)$) for the centered one, at \texttt{dk} = 0.02, 0.01, 0.005
+(\texttt{tests/test\_quantum\_geometry\_gauge\_invariance.py::
+test\_offdiagonal\_metric\_centered\_stencil\_converges\_quadratically}). Curvature's
+own Wilson loop is left exactly as it was -- a forward, non-centered sub-loop -- since it
+was already $O(\texttt{dk}^2)$ accurate (Part~\ref{part:berry}) and centering it would
+cost more corners for no accuracy gain.
+
+Centering turns out to fix more than the convergence \emph{order}. For a
+time-reversal-symmetric, non-spin-orbit Hamiltonian, $H(-\mathbf k)=H(\mathbf k)^*$, so
+the eigenstates satisfy $\psi(-\mathbf k) = \psi(\mathbf k)^*$ (in the gauge a
+deterministic diagonalization routine applied to conjugate matrices happens to produce --
+verified numerically below, not assumed). Since $\langle x^*|y^*\rangle =
+\overline{\langle x|y\rangle}$ for any states $x,y$, the cross overlap picks up a
+displacement-reversing conjugation,
+\begin{equation}
+  M(-\mathbf k,\, -\mathbf k+\mathbf v) = \langle\psi(-\mathbf k)|\psi(-\mathbf k+\mathbf v)\rangle
+  = \overline{\langle\psi(\mathbf k)|\psi(\mathbf k-\mathbf v)\rangle}
+  = \overline{M(\mathbf k,\,\mathbf k-\mathbf v)},
+\end{equation}
+and because $D$ (Eq.~\eqref{eq:qdist}) depends on $M$ only through $MM^\dagger$'s trace
+(insensitive to an overall conjugation),
+\begin{equation}
+  D_{-\mathbf k}(\mathbf v) = D_{\mathbf k}(-\mathbf v).
+  \label{eq:qdist-conjugation}
+\end{equation}
+Every term of Eqs.~\eqref{eq:g-diag-centered}--\eqref{eq:g12-centered} is manifestly
+invariant under negating $\mathbf v_1,\mathbf v_2$ simultaneously (each is a sum over a
+$\pm$-symmetric set of corners), so applying Eq.~\eqref{eq:qdist-conjugation} termwise
+shows $g_{ab}$ evaluated at $-\mathbf k$ is \emph{the identical arithmetic expression} as
+at $\mathbf k$ -- not merely closely converged, but exact up to whatever floating-point
+error the diagonalization itself carries. Curvature does not inherit this: its sub-loop
+is anchored at $\mathbf k$ (corners $\mathbf k,\mathbf k+\mathbf v_1,\dots$), not
+centered, so Eq.~\eqref{eq:qdist-conjugation}'s displacement reversal maps it to a loop
+in the diagonally \emph{opposite} quadrant rather than the identical one -- a nearby but
+different loop, agreeing with the original only to the ordinary $O(\texttt{dk}^2)$
+discretization accuracy curvature already had, not to floating-point precision. This
+mechanism needs $\psi(-\mathbf k)=\psi(\mathbf k)^*$ specifically, which does \emph{not}
+hold in this simple form under \texttt{spinorb=True} (Parts~\ref{part:spin},
+\ref{part:angularmomentum}'s spin/orbital-locking checks, where $H(-\mathbf k)\ne H(\mathbf
+k)^*$) -- only the ordinary $O(\texttt{dk}^2)$ stencil accuracy of
+Eqs.~\eqref{eq:g-diag-centered}--\eqref{eq:g12-centered} is expected there, not exact
+$\mathbf k\to-\mathbf k$ symmetry.
+
+Measured on a real compiled binary (monolayer h-BN, K/K$'$, same structure as \S~below):
+relative differences between $g_{ab}(K)$ and $g_{ab}(K')$ -- diagonal and off-diagonal
+alike -- are $\sim10^{-13}$ at \texttt{dk}=0.02 growing only to $\sim10^{-12}$ at
+\texttt{dk}=0.005, i.e.\ floating-point roundoff accumulated through the diagonalization
+and overlap chain, with no residual \texttt{dk}-dependence of the kind
+Eqs.~\eqref{eq:g-diag-centered}--\eqref{eq:g12-centered}'s own $O(\texttt{dk}^2)$
+accuracy would otherwise predict -- confirming Eq.~\eqref{eq:qdist-conjugation}'s
+prediction directly rather than merely being consistent with it
+(\texttt{tests/test\_calculation\_quantum\_geometry.py::
+test\_hbn\_metric\_offdiagonal\_k\_kprime\_symmetry\_is\_near\_exact}).
 
 \subsection{Verified}
 
@@ -852,7 +946,11 @@ $|n(\theta,\phi)\rangle = (\cos\tfrac\theta2, e^{i\phi}\sin\tfrac\theta2)$, Prov
 Vallee's own original worked example -- the metric converges to the exact round-sphere
 result $g = \tfrac14\,\mathrm{diag}(1,\sin^2\theta)$ and the curvature to
 $F_{\theta\phi}=\tfrac12\sin\theta$ (the sign this module's overlap-matrix convention
-produces; magnitude is the solid-angle/2 result standard for a spin-1/2)
+produces; magnitude is the solid-angle/2 result standard for a spin-1/2); and, on a
+skewed reparametrization of the same state where $g_{12}\ne0$ analytically, the centered
+stencil's error against the analytic value shrinks by $\approx4\times$ per
+\texttt{dk}-halving where the forward stencil it replaced shrinks only $\approx2\times$
+(\S\ref{sec:qg-centering}'s numbers)
 (\texttt{tests/test\_quantum\_geometry\_gauge\_invariance.py}).
 
 Against a real compiled binary: the $\texttt{dk}$ divergence-vs-convergence contrast
@@ -868,7 +966,10 @@ semi-definite at $\Gamma$, K, M, K$'$; curvature vanishes (to $<1\%$ of the vall
 at the time-reversal-invariant momenta $\Gamma$ and M and is K/K$'$-antisymmetric,
 reproducing Part~\ref{part:berry}'s own finding via an entirely independent Python code
 path (\texttt{EigenstateSession.overlap()} rather than task 9001's dedicated corners);
-$g_{11}$/$g_{22}$ are K/K$'$-symmetric to $<1\%$ at $\texttt{dk}=0.01$; and, at all four
+$g_{11}$, $g_{22}$, and $g_{12}$ alike are K/K$'$-symmetric to $10^{-8}$ relative (measured
+$\sim10^{-13}$--$10^{-12}$) at $\texttt{dk}=0.01$ -- the exact-up-to-roundoff agreement
+\S\ref{sec:qg-centering} predicts for this non-spin-orbit structure, not merely a tight
+discretization match; and, at all four
 points, the exact bound Eq.~\eqref{eq:qgt-psd-bound} holds -- with comfortable margin at
 K/K$'$ ($\det g$ about twice the bound) and trivially at $\Gamma$/M (both sides
 near zero) -- tying the new metric's absolute scale to the already-trusted curvature

@@ -144,6 +144,14 @@ def test_hbn_gkm_valley_quantum_geometry(hbn_calculation):
       for curvature alone in docs/design.md #13/test_calculation_berry.py;
       here it's extended to the metric's diagonal). Gamma and M are
       time-reversal-invariant momenta, forcing curvature to vanish there.
+      The metric's K/K' agreement is checked to a tight (1e-8 relative)
+      tolerance, not a loose 1%: parsers.quantum_geometry.compute_quantum_geometry()'s
+      centered stencil (see its docstring) makes g_ab(-k)=g_ab(k) exact up
+      to floating-point roundoff for this time-reversal-symmetric,
+      non-spin-orbit structure -- measured relative differences are
+      ~1e-13-1e-12 (docs/design.md #15) -- so a real regression (a stencil
+      bug reintroducing the old O(dk) forward-difference asymmetry) would
+      show up as a ~1e-3-1e-2 mismatch, many orders above this tolerance.
     - det(g) >= (Omega/2)^2 at every point -- not a loose plausibility
       band but an exact theorem: Q_ab = g_ab - (i/2)*Omega_ab is
       Tr[da_P Q db_P], a sum over band indices of Gram-matrix-like
@@ -182,8 +190,8 @@ def test_hbn_gkm_valley_quantum_geometry(hbn_calculation):
     assert abs(k_curv) > 5  # sanity: a real, non-vanishing valley curvature (~8 Bohr^-2 expected)
 
     k_g, kp_g = by_name["K"]["g"], by_name["Kprime"]["g"]
-    assert k_g[0, 0] == pytest.approx(kp_g[0, 0], rel=1e-2)
-    assert k_g[1, 1] == pytest.approx(kp_g[1, 1], rel=1e-2)
+    assert k_g[0, 0] == pytest.approx(kp_g[0, 0], rel=1e-8)
+    assert k_g[1, 1] == pytest.approx(kp_g[1, 1], rel=1e-8)
 
     # exact theorem (see docstring), checked at all four points, not just K --
     # M/Gamma have curvature near zero, so this is the version of the earlier
@@ -193,30 +201,38 @@ def test_hbn_gkm_valley_quantum_geometry(hbn_calculation):
         assert det_g >= (r["berry_curvature"] / 2) ** 2 - 1e-6, f"PSD bound violated at {name}"
 
 
-def test_hbn_metric_offdiagonal_parity_improves_with_smaller_dk(hbn_calculation):
-    """Companion to test_hbn_gkm_valley_quantum_geometry: the off-diagonal
-    metric component g12 converges more slowly with dk than g11/g22 or the
-    curvature (it's built from a difference of three comparable-magnitude
-    quantum_distance() values, D(v1+v2)-D(v1)-D(v2), so its own O(dk)
-    discretization error is amplified relative to its O(dk^2) signal) --
-    worth pinning explicitly rather than silently relying on a single dk's
-    K/K' agreement being tight, unlike the diagonal case above. The
-    discriminating check: the K vs K' gap in g12 must shrink as dk shrinks,
-    not just happen to be small at one particular dk -- checked over three
-    successive halvings (dk = 0.02, 0.01, 0.005), which empirically shrink
-    the gap by very close to a factor of 2 each time (1.83, 0.97, 0.49 --
-    the textbook signature of a clean O(dk) discretization error going to
-    zero, not noise), i.e. K and K' really do converge to a common value as
-    the time-reversal theorem (g_ab(-k)=g_ab(k)) requires, not to two
-    different values (which would mean a bug in the polarization identity,
-    not just slow discretization convergence)."""
+def test_hbn_metric_offdiagonal_k_kprime_symmetry_is_near_exact(hbn_calculation):
+    """Companion to test_hbn_gkm_valley_quantum_geometry: pins g12's K/K'
+    agreement specifically, since it's the component the old forward-
+    difference formula (before this code was centered, see git log) got
+    most wrong -- a K-vs-K' gap that only *shrank* with dk (by ~2x per
+    halving, the O(dk) signature of a forward difference), never a tight
+    match at any single practical dk.
+
+    The centered mixed-partial stencil compute_quantum_geometry() now uses
+    (see its docstring) doesn't just improve that convergence order --
+    for this time-reversal-symmetric, non-spin-orbit structure it makes
+    g12(-k)=g12(k) *exact up to floating-point roundoff*, independent of
+    dk: since psi(-k) = conj(psi(k)) here (a generic consequence of a
+    real, time-reversal-symmetric Hamiltonian -- does NOT hold under
+    spinorb=True, see docs/design.md #15), D_{-k}(v) = D_k(-v), and every
+    term in the centered stencil is manifestly invariant under negating
+    v1 and v2 simultaneously -- so g12 computed at K' is literally the
+    same arithmetic expression as at K, not merely a closely converged
+    one. There is therefore no O(dk) or O(dk^2) trend left to measure in
+    the K/K' gap itself at practical dk (it's floating-point noise, as low
+    as ~1e-13 relative, well below any physical discretization scale) --
+    that trend is instead pinned on noise-free synthetic data in
+    test_offdiagonal_metric_centered_stencil_converges_quadratically,
+    where there's a real O(dk) vs O(dk^2) contrast to see (real Elk output
+    collapses straight to roundoff and can't show it).
+    """
     calc, ist0, ist1 = hbn_calculation
     points = [(1 / 3, 1 / 3, 0), (-1 / 3, -1 / 3, 0)]
 
-    gaps = []
     for dk in (0.02, 0.01, 0.005):
         result = calc.get_quantum_geometry(points, ist0, ist1, directions=(1, 2), dk=dk, label=f"qg_g12_{dk}")
-        gaps.append(abs(result[0]["g"][0, 1] - result[1]["g"][0, 1]))
-
-    assert gaps[1] < gaps[0]
-    assert gaps[2] < gaps[1]
+        g12_k, g12_kp = result[0]["g"][0, 1], result[1]["g"][0, 1]
+        # guard against a degenerate all-zero stencil bug trivially "agreeing"
+        assert abs(g12_k) > 0.01
+        assert g12_k == pytest.approx(g12_kp, rel=1e-8)

@@ -89,28 +89,56 @@ def quantum_distance(m):
 
 def compute_quantum_geometry(overlaps, v1, v2):
     """Quantum geometric tensor Q_ab = g_ab - (i/2) F_ab at one k-point,
-    from raw overlaps between the loop corners k, k+v1, k+v2, k+v1+v2.
+    from raw overlaps on a 3x3 grid of corners centered at k: k, k +/- v1,
+    k +/- v2, k + v1 +/- v2, k - v1 +/- v2.
 
     `overlaps`: dict of (nst, nst) complex arrays --
-      "s0", "s1", "s2", "s12": self-overlaps <psi(c)|psi(c)> at corners
-          k, k+v1, k+v2, k+v1+v2 respectively (needed only for Loewdin
-          normalization, not physical inputs in their own right).
-      "m1", "m2", "m12": <psi(k)|psi(k+v1)>, <psi(k)|psi(k+v2)>,
-          <psi(k)|psi(k+v1+v2)> -- m1/m2 feed both the metric's diagonal
-          components and (as FHS link variables) the curvature; m12 feeds
-          only the metric's off-diagonal component via the polarization
-          identity D(v1+v2) = D(v1) + D(v2) + 2*g(v1,v2).
-      "edge_b", "edge_c": <psi(k+v1)|psi(k+v1+v2)>,
-          <psi(k+v2)|psi(k+v1+v2)> -- the remaining two edges of the closed
-          Wilson loop (FHS eq. 8, same convention as
-          parsers.berry.compute_berry_curvature's mesh anchor: corners
-          k, k+e1, k+e1+e2, k+e2, not the centered convention
-          compute_berry_curvature_path uses).
+      "s0": self-overlap <psi(k)|psi(k)>.
+      "s1p"/"s1m", "s2p"/"s2m": self-overlaps at k+v1/k-v1, k+v2/k-v2.
+      "s12pp"/"s12pm"/"s12mp"/"s12mm": self-overlaps at the four diagonal
+          corners k+v1+v2, k+v1-v2, k-v1+v2, k-v1-v2.
+      "m1p"/"m1m", "m2p"/"m2m": <psi(k)|psi(k+/-v1)>, <psi(k)|psi(k+/-v2)>
+          -- feed the metric's diagonal components.
+      "m12pp"/"m12pm"/"m12mp"/"m12mm": <psi(k)|psi(k+v1+v2)>, etc. -- feed
+          the metric's off-diagonal component via a centered mixed-partial
+          stencil (see below); m12pp also feeds the curvature link
+          variable, same role "m12" played before this was centered.
+      "edge_b", "edge_c": <psi(k+v1)|psi(k+v1+v2)>, <psi(k+v2)|psi(k+v1+v2)>
+          -- the remaining two edges of the closed Wilson loop (FHS eq. 8,
+          same convention as parsers.berry.compute_berry_curvature's mesh
+          anchor: corners k, k+e1, k+e1+e2, k+e2, not the centered
+          convention compute_berry_curvature_path uses). Curvature is
+          computed on this forward (non-centered) sub-loop deliberately --
+          see below.
 
     `v1`, `v2`: the two Cartesian (Bohr^-1) displacement vectors used to
       reach the neighbouring corners from k -- their norms set the
       metric's dk normalization, their cross product the loop's area for
       curvature (same convention as parsers.berry's path mode).
+
+    **Why the metric is centered but curvature isn't.** Expanding the
+    quantum distance D(v) = J - Re Tr[M(v)M(v)^dagger] in v: the linear
+    term vanishes (D(0)=0 is a minimum), the quadratic term is the metric
+    g_ab v^a v^b, and the next (cubic) term is generically nonzero and,
+    under time reversal, odd in k -- this is what made g12's forward-
+    difference estimate (the polarization identity D(v1+v2)-D(v1)-D(v2))
+    converge only as O(dk) instead of O(dk^2), and K/K' converge to a
+    common value only in the dk->0 limit rather than agreeing tightly at
+    one dk (see git log / docs/design.md #15 for the measured 1.83/0.97/0.49
+    O(dk) signature this replaces). Using the +/-v corner pairs cancels
+    that cubic term exactly, the same way a centered numerical derivative
+    outperforms a forward one:
+        g11 = [D(v1) + D(-v1)] / (2 dk1^2)
+        g22 = [D(v2) + D(-v2)] / (2 dk2^2)
+        g12 = [D(v1+v2) + D(-v1-v2) - D(v1-v2) - D(-v1+v2)] / (8 dk1 dk2)
+    (g12's stencil is the standard centered mixed-partial-derivative
+    formula applied to D; see docs/physics.tex Part IV for the full
+    odd-term-cancellation derivation.) Curvature is built from arg(det M)
+    around a *closed* loop (FHS eq. 8), which is already exact to O(dk^2)
+    on the plain forward sub-loop k, k+v1, k+v1+v2, k+v2 -- centering it
+    would cost more corners for no accuracy gain, so it's left as-is
+    (also pinned by test_curvature_matches_berry_curvature_path_on_identical_corners's
+    specific forward anchoring).
 
     Returns {"g": (2,2) real array [[g11,g12],[g12,g22]] (quantum metric,
     Bohr^2), "berry_curvature": float (Bohr^-2, identical convention/value
@@ -118,20 +146,28 @@ def compute_quantum_geometry(overlaps, v1, v2):
     Hermitian array, Q[0,0]=g11, Q[1,1]=g22, Q[0,1]=g12-(i/2)*F_12,
     Q[1,0]=conj(Q[0,1])}.
     """
-    m1 = _normalize_overlap(overlaps["m1"], overlaps["s0"], overlaps["s1"])
-    m2 = _normalize_overlap(overlaps["m2"], overlaps["s0"], overlaps["s2"])
-    m12 = _normalize_overlap(overlaps["m12"], overlaps["s0"], overlaps["s12"])
-    edge_b = _normalize_overlap(overlaps["edge_b"], overlaps["s1"], overlaps["s12"])
-    edge_c = _normalize_overlap(overlaps["edge_c"], overlaps["s2"], overlaps["s12"])
+    s0 = overlaps["s0"]
+    m1p = _normalize_overlap(overlaps["m1p"], s0, overlaps["s1p"])
+    m1m = _normalize_overlap(overlaps["m1m"], s0, overlaps["s1m"])
+    m2p = _normalize_overlap(overlaps["m2p"], s0, overlaps["s2p"])
+    m2m = _normalize_overlap(overlaps["m2m"], s0, overlaps["s2m"])
+    m12pp = _normalize_overlap(overlaps["m12pp"], s0, overlaps["s12pp"])
+    m12pm = _normalize_overlap(overlaps["m12pm"], s0, overlaps["s12pm"])
+    m12mp = _normalize_overlap(overlaps["m12mp"], s0, overlaps["s12mp"])
+    m12mm = _normalize_overlap(overlaps["m12mm"], s0, overlaps["s12mm"])
+    edge_b = _normalize_overlap(overlaps["edge_b"], overlaps["s1p"], overlaps["s12pp"])
+    edge_c = _normalize_overlap(overlaps["edge_c"], overlaps["s2p"], overlaps["s12pp"])
 
     dk1 = float(np.linalg.norm(v1))
     dk2 = float(np.linalg.norm(v2))
-    d1 = quantum_distance(m1)
-    d2 = quantum_distance(m2)
-    d12 = quantum_distance(m12)
-    g11 = d1 / dk1**2
-    g22 = d2 / dk2**2
-    g12 = (d12 - d1 - d2) / (2 * dk1 * dk2)
+    d1p, d1m = quantum_distance(m1p), quantum_distance(m1m)
+    d2p, d2m = quantum_distance(m2p), quantum_distance(m2m)
+    d12pp, d12mm = quantum_distance(m12pp), quantum_distance(m12mm)
+    d12pm, d12mp = quantum_distance(m12pm), quantum_distance(m12mp)
+
+    g11 = (d1p + d1m) / (2 * dk1**2)
+    g22 = (d2p + d2m) / (2 * dk2**2)
+    g12 = (d12pp + d12mm - d12pm - d12mp) / (8 * dk1 * dk2)
 
     # FHS eq. 8, parsers.berry's own link-variable convention, corners
     # anchored at k (not centered): w = U1(k)*U2(k+e1) / (U1(k+e2)*U2(k)).
@@ -139,7 +175,7 @@ def compute_quantum_geometry(overlaps, v1, v2):
     # Hermitian positive-definite, so det(S^{-1/2}) is real positive and
     # cannot shift arg(det M) -- normalizing here is for uniformity with
     # the metric computation above, not a correctness requirement.
-    w = _link_variable(m1) * _link_variable(edge_b) / (_link_variable(edge_c) * _link_variable(m2))
+    w = _link_variable(m1p) * _link_variable(edge_b) / (_link_variable(edge_c) * _link_variable(m2p))
     flux = float(np.angle(w))
     area = float(np.linalg.norm(np.cross(v1, v2)))
     curvature = flux / area

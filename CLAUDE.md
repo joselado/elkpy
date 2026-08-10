@@ -109,7 +109,8 @@ the quantum metric $g_{ab}$ (Fubini-Study/Provost-Vallee metric) it had been mis
 overlap this needs — including each loop corner's own self-overlap
 `session.overlap(k, k, ...)`, the one new ingredient curvature alone never needed a name
 for — is already exposed by the task 9002 interactive session, so this is driven entirely
-from Python-side `EigenstateSession.overlap()` queries (9 per k-point) plus discretization
+from Python-side `EigenstateSession.overlap()` queries (19 per k-point: a 3x3 grid of
+corners centered at k, needed for the centered stencil below) plus discretization
 arithmetic in `parsers/quantum_geometry.py`; no `elkpy_quantum_geometry.f90`, no new task
 number. The one real subtlety: Elk's `genolpq` overlap carries a ~1e-3 real-space
 truncation floor that Berry curvature is immune to (it survives only in a closed-loop phase
@@ -125,26 +126,46 @@ inert for curvature (`S^{-1/2}` is Hermitian positive-definite, so it cannot shi
 divergence/convergence contrast on bulk Si; that curvature from `get_quantum_geometry()`
 matches `get_berry_curvature_path()` on literally identical loop corners (task 9001's
 corner-1 anchor, double the step size); and on monolayer h-BN (same structure as the Berry
-curvature K/K′ check above), the metric is positive semi-definite at Γ/K/M/K′, its
-diagonal is K/K′-symmetric to <1% (time-reversal symmetry, $g_{ab}(-k)=g_{ab}(k)$, unlike
-curvature's sign flip), curvature reproduces the existing K/K′ antisymmetry via an entirely
-independent Python code path, and at all four points $\det g \geq (F_{12}/2)^2$ — an exact
-theorem ($Q_{ab}=g_{ab}-\tfrac i2F_{ab}$ is PSD as a 2x2 Hermitian matrix, being a sum of
-Gram-matrix-like $\langle\cdot|Q|\cdot\rangle$ terms, so $\det Q\geq0$), not a loose
-plausibility band — holds with margin at K/K′ and trivially at Γ/M, tying the new metric's
-scale to the already-trusted curvature value without dividing by a curvature that
-vanishes at two of the four points
-(`tests/test_calculation_quantum_geometry.py`,
+curvature K/K′ check above), the metric is positive semi-definite at Γ/K/M/K′, curvature
+reproduces the existing K/K′ antisymmetry via an entirely independent Python code path, and
+at all four points $\det g \geq (F_{12}/2)^2$ — an exact theorem ($Q_{ab}=g_{ab}-\tfrac
+i2F_{ab}$ is PSD as a 2x2 Hermitian matrix, being a sum of Gram-matrix-like
+$\langle\cdot|Q|\cdot\rangle$ terms, so $\det Q\geq0$), not a loose plausibility band —
+holds with margin at K/K′ and trivially at Γ/M, tying the new metric's scale to the
+already-trusted curvature value without dividing by a curvature that vanishes at two of
+the four points (`tests/test_calculation_quantum_geometry.py`,
 `tests/test_quantum_geometry_gauge_invariance.py`). Also pinned against an analytically
 known case, the spin coherent state / CP¹ Fubini-Study metric (Provost & Vallée 1980's own
 worked example): converges to the exact $g=\tfrac14\mathrm{diag}(1,\sin^2\theta)$ and
-$F_{\theta\phi}=\tfrac12\sin\theta$. One genuine remaining wrinkle, not a bug: the metric's
-off-diagonal component $g_{12}$ (built from a polarization-identity difference of three
-comparable-magnitude quantities) converges markedly more slowly with `dk` than $g_{11}$,
-$g_{22}$, or curvature — worth checking its own dk-convergence before trusting a single
-value, same discipline `get_berry_curvature_path()` already asks for regarding curvature
-generally. Physics writeup (the quantum geometric tensor, the Marzari-Vanderbilt/Resta
-discretization, the `Tr[P∂P∂P]` derivation, the Löwdin-normalization fix):
+$F_{\theta\phi}=\tfrac12\sin\theta$.
+
+The metric's off-diagonal component $g_{12}$ was originally computed from a *forward*
+polarization identity ($D(v_1+v_2)-D(v_1)-D(v_2)$, the same corners curvature's own
+Wilson loop needed), which carried an $O(dk)$ error — small for $g_{11}/g_{22}$ but
+amplified in $g_{12}$'s difference-of-three-comparable-quantities construction; measured
+directly on h-BN's K/K′ valleys, the K-vs-K′ gap in $g_{12}$ shrank by a clean factor of
+~2 per dk-halving (1.83, 0.97, 0.49), the textbook $O(dk)$ signature. Fixed by switching to
+the standard *centered* mixed-partial stencil (both $\pm v$ corners: $g_{11}=[D(v_1)+D(-v_1)]/(2dk_1^2)$,
+$g_{12}$ from the four diagonal corners $k\pm v_1\pm v_2$), which cancels $D(v)$'s
+generically-nonzero cubic-order term exactly and gives $O(dk^2)$ error instead — confirmed
+on noise-free synthetic data (a skewed CP¹ reparametrization with $g_{12}\neq0$
+analytically): forward-stencil error ratio ~2 per halving, centered ~4, textbook $O(dk)$
+vs $O(dk^2)$. This did more than fix the convergence order: for this
+time-reversal-symmetric, non-spin-orbit structure, $\psi(-k)=\psi(k)^*$ makes
+$D_{-k}(v)=D_k(-v)$ exactly, and since every centered-stencil term is manifestly invariant
+under negating both displacements at once, $g_{ab}(-k)$ turns out to be the *identical
+arithmetic expression* as $g_{ab}(k)$ — not just closely converged but exact up to
+floating-point roundoff (measured K/K′ relative differences ~1e-13 to 1e-12, with no
+residual dk-trend left to see in real Elk output at all). Curvature doesn't get this same
+exactness (its own Wilson loop is left forward/anchored, deliberately not centered, since
+it was already $O(dk^2)$-accurate): the same conjugation maps its anchored sub-loop to a
+diagonally-opposite-quadrant loop rather than the identical one, so it keeps its ordinary
+$O(dk^2)$ agreement (<1%), not machine precision. This exactness needs
+$\psi(-k)=\psi(k)^*$ specifically and is not expected under `spinorb=True` (§17/§19's
+spin/orbital-locking checks), where that relation doesn't hold in the same simple form.
+Physics writeup (the quantum geometric tensor, the Marzari-Vanderbilt/Resta
+discretization, the `Tr[P∂P∂P]` derivation, the Löwdin-normalization fix, the
+centered-stencil derivation and the $D_{-k}(v)=D_k(-v)$ conjugation argument):
 `docs/design.md` §15 and `docs/physics.tex` (Part IV).
 
 Also implemented, as the fourth entry in the Fortran patch series:
