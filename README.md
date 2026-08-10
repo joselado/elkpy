@@ -2,7 +2,9 @@
 A Python interface to [Elk](https://elk.sourceforge.io/), an all-electron
 full-potential linearized augmented-plane-wave (FP-LAPW) code that solves the
 Kohn-Sham equations of density-functional theory,
+
 $$ \Big[-\tfrac12\nabla^2+v_{\rm eff}(\mathbf r)\Big]\psi_{i\mathbf k}(\mathbf r)=\epsilon_i(\mathbf k)\,\psi_{i\mathbf k}(\mathbf r). $$
+
 $v_{\rm eff}=v_{\rm ext}+v_H[n]+v_{xc}[n]$ is solved self-consistently in the electron
 density $n(\mathbf r)=\sum_{i\mathbf k}^{\rm occ}|\psi_{i\mathbf k}(\mathbf r)|^2$. elkpy
 wraps Elk's `elk.in`/task-number workflow in a small, `pyqula`-style object model
@@ -41,7 +43,7 @@ python3 -m pip install -e .        # add .[ase] for Structure.from_ase()/to_ase(
 - Per-species scaling of the spin-orbit term $\hat H_{\rm soc}(r)=f_{\rm soc}(r)\,\hat{\mathbf L}\cdot\boldsymbol\sigma$, rather than one global scale for the whole cell [[notebook]](notebooks/04_per_species_soc_scaling.ipynb)
 
 ## Topological characterization ##
-- Berry curvature $F_{12}(\mathbf k)=\partial_1A_2-\partial_2A_1$ and Chern numbers $c_n=\frac1{2\pi i}\int_{T^2}\!d^2k\,F_{12}\in\mathbb Z$, via a gauge-invariant Wilson-loop discretization
+- Berry curvature $F_{12}(\mathbf k)=\partial_1A_2-\partial_2A_1$ and Chern numbers $c_n=\frac1{2\pi i}\int_{T^2}\!d^2k\,F_{12}\in\mathbb Z$, via a gauge-invariant Wilson-loop discretization [[notebook]](notebooks/05_berry_curvature.ipynb)
 - Berry curvature at an arbitrary k-point with no periodic mesh required, e.g. to resolve individual valleys of a 2D material [[notebook]](notebooks/05_berry_curvature.ipynb)
 
 ## Quantum geometry ##
@@ -111,30 +113,34 @@ with calc.eigenstate_session() as session:              # one warm Elk process
 
 ## Atom-projection operators: N vs. B character of monolayer h-BN ##
 The more electronegative N pulls the bonding (valence-top, $\pi$) state's weight toward
-itself; the antibonding (conduction-bottom, $\pi^*$) state is B-dominated instead:
+itself; the antibonding (conduction-bottom, $\pi^*$) state is B-dominated instead --
+shown here as a full band structure colored by weight on N, not just those two bands:
 ```python
-K = (1 / 3, 1 / 3, 0)
-proj = hbn.get_atom_projection(K, ist0=ist1, ist1=ist1 + 1)  # valence top, conduction bottom
-n, b = hbn.structure.atom_index("N"), hbn.structure.atom_index("B")
-proj.matrices[n][0, 0].real  # N's weight on the valence-top band -- large
-proj.matrices[b][1, 1].real  # B's weight on the conduction-bottom band -- large
+n = hbn.structure.atom_index("N")
+with hbn.eigenstate_session() as session:
+    for k in path:                                       # path through Gamma-K-M-K'-Gamma
+        energies.append(session.get_eigenstates(k).energies[w0 - 1 : w1])
+        n_weight.append(session.atom_projection(k, w0, w1).matrices[n].diagonal().real)
 ```
-![Alt text](images/hbn_atom_projection.png?raw=true "Atom-projected muffin-tin weight of monolayer h-BN's valence-top and conduction-bottom bands")
+![Alt text](images/hbn_atom_projection.png?raw=true "Band structure of monolayer h-BN along Gamma-K-M-K'-Gamma colored by muffin-tin weight on N")
 
 ## Orbital-character operators: p vs. s character across bands of monolayer h-BN ##
 The occupied valence-top ($\pi$) band at K is a nitrogen $2p_z$ state; a much deeper
 bonding ($\sigma$-type) valence band is nitrogen $2s$-dominated instead -- the dominant
-channel flips between the two bands of the *same* atom:
+channel flips between the two bands of the *same* atom, visible across the whole band
+structure once colored by each channel's weight:
 ```python
 from elkpy.session import ORBITAL_LABELS  # ("s", "p", "d", "f")
 
 n = hbn.structure.atom_index("N")
-orb_top = hbn.get_orbital_projection(K, ist0=ist1, ist1=ist1)  # valence-top (pi) band
-orb_deep = hbn.get_orbital_projection(K, ist0=1, ist1=1)       # deep bonding (sigma) band
-orb_top.matrices[n, :, 0, 0].real   # (s, p, d, f) weight -- p dominates
-orb_deep.matrices[n, :, 0, 0].real  # (s, p, d, f) weight -- s dominates instead
+s_i, p_i = ORBITAL_LABELS.index("s"), ORBITAL_LABELS.index("p")
+with hbn.eigenstate_session() as session:
+    for k in path:                                       # path through Gamma-K-M-K'-Gamma
+        orb = session.orbital_projection(k, w0, w1)
+        s_weight.append(orb.matrices[n, s_i].diagonal().real)
+        p_weight.append(orb.matrices[n, p_i].diagonal().real)
 ```
-![Alt text](images/hbn_orbital_projection.png?raw=true "s/p/d/f orbital character on nitrogen, valence-top vs. deep bonding band of monolayer h-BN")
+![Alt text](images/hbn_orbital_projection.png?raw=true "Band structure of monolayer h-BN along Gamma-K-M-K'-Gamma, colored by N's s-weight and p-weight side by side, showing the channel flip between the deep bonding band and the valence-top band")
 
 ## Angular momentum operators: orbital valley locking in monolayer WSe2 ##
 The valence-band-top state at K/K' is a pure $d_{x^2-y^2}\mp id_{xy}=Y_2^{\mp2}$ state on
