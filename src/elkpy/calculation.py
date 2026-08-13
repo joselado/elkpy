@@ -839,68 +839,138 @@ class Calculation:
         with self.eigenstate_session() as session:
             return session.overlap(k_a, k_b, ist0, ist1)
 
-    def get_atom_projection(self, k, ist0, ist1):
+    def _session_query_path(
+        self, session_method, k, kpoints, kpath, ist0, ist1, npoints, label
+    ):
+        """Shared plumbing for the four eigenstate_session() query wrappers
+        below (get_atom_projection/get_orbital_projection/
+        get_spin_operator/get_angular_momentum): a single `k=` call opens
+        (and tears down) its own session and returns the underlying
+        EigenstateSession method's namedtuple unchanged, same as before --
+        for `kpoints=`/`kpath=`, opens ONE session and reuses it across
+        every point (same kpoints=/kpath=/npoints convention as
+        get_quantum_geometry(), including why re-opening a session per
+        point would repay Elk's ground-state-dependent setup cost each
+        time -- see its docstring), returning a list of dicts (one per
+        point: "k" plus the namedtuple's own fields, plus "distance" when
+        `kpath` was used) -- the same list-of-dicts shape
+        get_berry_curvature_path()/get_quantum_geometry() already return.
+        """
+        if sum(x is not None for x in (k, kpoints, kpath)) != 1:
+            raise ValueError("pass exactly one of k=, kpoints=, or kpath=")
+        if ist0 is None or ist1 is None:
+            raise ValueError("ist0 and ist1 are required")
+        if k is not None:
+            with self.eigenstate_session() as session:
+                return getattr(session, session_method)(k, ist0, ist1)
+        distances = None
+        if kpath is not None:
+            kpoints, distances = self._kpath_to_points(kpath, npoints)
+        kpoints = [tuple(kp) for kp in kpoints]
+        results = []
+        with self.eigenstate_session(label=label) as session:
+            for kp in kpoints:
+                results.append(getattr(session, session_method)(kp, ist0, ist1)._asdict())
+        if distances is not None:
+            for point, distance in zip(results, distances):
+                point["distance"] = float(distance)
+        return results
+
+    def get_atom_projection(
+        self, k=None, ist0=None, ist1=None, kpoints=None, kpath=None, npoints=100,
+        label="atom_projection",
+    ):
         """The atom-projection operator P_alpha for every atom alpha in the
-        cell, restricted to the contiguous band window [ist0, ist1], at a
-        single k-point. A one-off convenience wrapper around
-        eigenstate_session() -- see get_eigenstates()'s docstring about
-        preferring eigenstate_session() directly for repeated queries, and
-        EigenstateSession.atom_projection() for what this computes, its
-        (natmtot, nst, nst) return shape/atom ordering, and its gauge
-        caveat.
+        cell, restricted to the contiguous band window [ist0, ist1]. A
+        one-off convenience wrapper around eigenstate_session() -- see
+        get_eigenstates()'s docstring about preferring eigenstate_session()
+        directly for repeated queries, and EigenstateSession.atom_projection()
+        for what this computes, its (natmtot, nst, nst) return shape/atom
+        ordering, and its gauge caveat.
+
+        Pass exactly one of `k` (single point, returns an AtomProjection
+        namedtuple as before), `kpoints` (iterable of points), or `kpath`
+        (symbolic path string, e.g. "GKMG") -- the latter two open ONE
+        session and reuse it across every point, returning a list of dicts
+        (see _session_query_path()'s docstring, and get_quantum_geometry()'s
+        for the kpath=/npoints= convention).
 
         `self.structure.atom_index(symbol, index)` maps a (species, index)
         pair to this array's first axis.
         """
-        with self.eigenstate_session() as session:
-            return session.atom_projection(k, ist0, ist1)
+        return self._session_query_path(
+            "atom_projection", k, kpoints, kpath, ist0, ist1, npoints, label
+        )
 
-    def get_orbital_projection(self, k, ist0, ist1):
+    def get_orbital_projection(
+        self, k=None, ist0=None, ist1=None, kpoints=None, kpath=None, npoints=100,
+        label="orbital_projection",
+    ):
         """The l-resolved atom-projection operators P_{alpha,l} for l=0,1,2,3
         (s, p, d, f) for every atom alpha in the cell, restricted to the
-        contiguous band window [ist0, ist1], at a single k-point. A one-off
-        convenience wrapper around eigenstate_session() -- see
-        get_eigenstates()'s docstring about preferring eigenstate_session()
-        directly for repeated queries, and EigenstateSession.orbital_projection()
-        for what this computes, its (natmtot, 4, nst, nst) return shape/atom
-        and l ordering, and its gauge caveat.
+        contiguous band window [ist0, ist1]. A one-off convenience wrapper
+        around eigenstate_session() -- see get_eigenstates()'s docstring
+        about preferring eigenstate_session() directly for repeated
+        queries, and EigenstateSession.orbital_projection() for what this
+        computes, its (natmtot, 4, nst, nst) return shape/atom and l
+        ordering, and its gauge caveat.
+
+        Pass exactly one of `k` (single point, returns an
+        OrbitalProjection namedtuple as before), `kpoints`, or `kpath` --
+        see get_atom_projection()'s docstring for what the latter two do.
 
         `self.structure.atom_index(symbol, index)` maps a (species, index)
         pair to this array's first axis; `elkpy.session.ORBITAL_LABELS`
         gives the second axis's l order (s, p, d, f).
         """
-        with self.eigenstate_session() as session:
-            return session.orbital_projection(k, ist0, ist1)
+        return self._session_query_path(
+            "orbital_projection", k, kpoints, kpath, ist0, ist1, npoints, label
+        )
 
-    def get_spin_operator(self, k, ist0, ist1):
+    def get_spin_operator(
+        self, k=None, ist0=None, ist1=None, kpoints=None, kpath=None, npoints=100,
+        label="spin_operator",
+    ):
         """The spin operators S_x, S_y, S_z for the contiguous band window
-        [ist0, ist1], at a single k-point. A one-off convenience wrapper
-        around eigenstate_session() -- see get_eigenstates()'s docstring
-        about preferring eigenstate_session() directly for repeated
-        queries, and EigenstateSession.spin_operator() for what this
-        computes, its return shape, and why it needs spinpol=True or
-        spinorb=True.
-        """
-        with self.eigenstate_session() as session:
-            return session.spin_operator(k, ist0, ist1)
-
-    def get_angular_momentum(self, k, ist0, ist1):
-        """The (orbital) angular momentum operators L_x, L_y, L_z,
-        l-resolved for l=0,1,2,3 (s, p, d, f), for every atom alpha in the
-        cell, restricted to the contiguous band window [ist0, ist1], at a
-        single k-point. A one-off convenience wrapper around
+        [ist0, ist1]. A one-off convenience wrapper around
         eigenstate_session() -- see get_eigenstates()'s docstring about
         preferring eigenstate_session() directly for repeated queries, and
-        EigenstateSession.angular_momentum() for what this computes, its
-        return shape, and why the su(2)/Casimir identities don't hold
-        exactly on the returned (band-window-truncated) matrices.
+        EigenstateSession.spin_operator() for what this computes, its
+        return shape, and why it needs spinpol=True or spinorb=True.
+
+        Pass exactly one of `k` (single point, returns a SpinOperator
+        namedtuple as before), `kpoints`, or `kpath` -- see
+        get_atom_projection()'s docstring for what the latter two do.
+        """
+        return self._session_query_path(
+            "spin_operator", k, kpoints, kpath, ist0, ist1, npoints, label
+        )
+
+    def get_angular_momentum(
+        self, k=None, ist0=None, ist1=None, kpoints=None, kpath=None, npoints=100,
+        label="angular_momentum",
+    ):
+        """The (orbital) angular momentum operators L_x, L_y, L_z,
+        l-resolved for l=0,1,2,3 (s, p, d, f), for every atom alpha in the
+        cell, restricted to the contiguous band window [ist0, ist1]. A
+        one-off convenience wrapper around eigenstate_session() -- see
+        get_eigenstates()'s docstring about preferring eigenstate_session()
+        directly for repeated queries, and EigenstateSession.angular_momentum()
+        for what this computes, its return shape, and why the su(2)/Casimir
+        identities don't hold exactly on the returned (band-window-truncated)
+        matrices.
+
+        Pass exactly one of `k` (single point, returns an AngularMomentum
+        namedtuple as before), `kpoints`, or `kpath` -- see
+        get_atom_projection()'s docstring for what the latter two do.
 
         `self.structure.atom_index(symbol, index)` maps a (species, index)
         pair to this array's first axis; `elkpy.session.ORBITAL_LABELS`
         gives the l order (s, p, d, f) of the *_orbital fields.
         """
-        with self.eigenstate_session() as session:
-            return session.angular_momentum(k, ist0, ist1)
+        return self._session_query_path(
+            "angular_momentum", k, kpoints, kpath, ist0, ist1, npoints, label
+        )
 
     def run_tasks(self, tasks, blocks=None, resume=True, label=None):
         """Escape hatch for any Elk task not covered by a named get_*

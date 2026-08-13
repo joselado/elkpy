@@ -844,6 +844,14 @@ proj.matrices.shape         # (natmtot, nst, nst) complex
 proj.matrices[a][i, i].real # state (ist0+i)'s fractional weight on atom a's muffin tin
 n = calc.structure.atom_index("N")  # (species, index) -> this array's atom axis
 proj.matrices[n]
+
+# kpoints=/kpath= (same convention as get_berry_curvature_path()/get_quantum_geometry(),
+# §13/§15): opens ONE eigenstate_session() and reuses it across every point instead of
+# re-paying the ground-state-dependent setup cost per point -- returns a list of dicts
+# ({"k", "matrices", ...} plus "distance" when kpath= is used) rather than the single
+# AtomProjection namedtuple k= returns.
+path = calc.get_atom_projection(kpath="GXW", ist0=1, ist1=4, npoints=50)
+path[0]["matrices"], path[0]["distance"]
 ```
 
 Verified against a real compiled binary: every returned matrix is Hermitian and positive
@@ -869,8 +877,11 @@ monolayer h-BN, at $K=(1/3,1/3,0)$ the occupied valence-top ($\pi$) band is N-do
 and the unoccupied conduction-bottom ($\pi^*$) band is B-dominated — the more
 electronegative N pulling the bonding state's weight toward itself, the standard
 qualitative picture for h-BN's band character, and a sharp sign-of-the-effect prediction
-rather than a plausibility band, the same spirit as §13's K/K′ curvature antisymmetry check
-(`tests/test_calculation_atom_projection.py`).
+rather than a plausibility band, the same spirit as §13's K/K′ curvature antisymmetry check;
+and `kpoints=` batching is purely a plumbing change, not a numerical one -- a
+multi-point call reproduces the same matrices as the equivalent sequence of one-point
+calls, and `kpath=` resolves through the same `_kpath_to_points()` every other `kpath=`
+consumer uses (`tests/test_calculation_atom_projection.py`).
 
 ## 17. Spin operators ($S_x$, $S_y$, $S_z$) applicable to wavefunctions
 
@@ -917,6 +928,12 @@ wse2.get_energy()
 with wse2.eigenstate_session() as session:
     ops = session.spin_operator((1 / 3, 1 / 3, 0), ist0=ist1, ist1=ist1)  # valence-band top at K
     ops.sz[0, 0].real  # <S_z> for that state, in [-1/2, 1/2]
+
+# calc.get_spin_operator(kpath=..., ist0=, ist1=) does the above session-reuse loop for
+# you (same kpoints=/kpath= convention as §16's get_atom_projection()), returning a list
+# of dicts instead of the single SpinOperator namedtuple k= returns.
+path = wse2.get_spin_operator(kpath="GKM", ist0=ist1, ist1=ist1, npoints=50)
+path[0]["sz"], path[0]["distance"]
 ```
 
 **Which row block is actually "up"?** Eqs. above assume `evecsv` row block 1 (rows
@@ -1045,6 +1062,11 @@ l = ORBITAL_LABELS.index("p")
 orb.matrices[a, l][i, i].real         # state (ist0+i)'s p-channel weight on atom a
 n = calc.structure.atom_index("N")
 orb.matrices[n]                       # (4, nst, nst) -- all four l channels for N
+
+# calc.get_orbital_projection(kpoints=..., ist0=, ist1=) reuses one session across every
+# point (§16's kpoints=/kpath= convention), returning a list of dicts.
+path = calc.get_orbital_projection(kpoints=[(0, 0, 0), (1 / 3, 1 / 3, 0)], ist0=1, ist1=4)
+path[1]["matrices"][n]
 ```
 
 Verified against a real compiled binary: every $(\alpha,\ell)$ matrix is Hermitian and
@@ -1144,6 +1166,11 @@ lm.lz.shape                           # (natmtot, nst, nst) complex -- l=0..3 to
 l = ORBITAL_LABELS.index("d")
 w = calc.structure.atom_index("W")
 lm.lz_orbital[w, l][0, 0].real        # <Lz> of state ist0 on W's d channel
+
+# calc.get_angular_momentum(kpath=..., ist0=, ist1=) reuses one session across every
+# point (§16's kpoints=/kpath= convention), returning a list of dicts.
+path = calc.get_angular_momentum(kpath="GKM", ist0=1, ist1=4, npoints=50)
+path[0]["lz_orbital"][w, l]
 ```
 
 Verified against a real compiled binary: every returned matrix (per atom, per $\ell$,

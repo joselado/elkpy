@@ -180,3 +180,48 @@ def test_hbn_valence_is_nitrogen_conduction_is_boron_at_k(hbn_calculation):
 
     assert n_valence > b_valence, (n_valence, b_valence)
     assert b_conduction > n_conduction, (b_conduction, n_conduction)
+
+
+def test_kpoints_batch_matches_per_point_calls(si_calculation):
+    """kpoints=[...] opens ONE session and reuses it across every point
+    (see _session_query_path()'s docstring) -- pin that this is purely a
+    plumbing change, not a numerical one, by checking it reproduces the
+    same matrices as calling get_atom_projection(k, ...) once per point
+    (each of which opens/closes its own session)."""
+    kpoints = [(0.1, 0.2, 0.05), (0.0, 0.0, 0.0), (0.3, 0.1, 0.0)]
+    batch = si_calculation.get_atom_projection(kpoints=kpoints, ist0=1, ist1=1)
+    assert len(batch) == len(kpoints)
+    for point, k in zip(batch, kpoints):
+        assert point["k"] == pytest.approx(k)
+        single = si_calculation.get_atom_projection(k, ist0=1, ist1=1)
+        assert point["matrices"] == pytest.approx(single.matrices, abs=1e-8)
+
+
+def test_kpath_keyword_matches_explicit_kpoints(si_calculation):
+    """get_atom_projection(kpath=...) (ASE symbolic path) resolves through
+    the same _kpath_to_points() every other kpath= consumer uses (see
+    get_berry_curvature_path()'s equivalent test) and attaches a
+    "distance" entry per point."""
+    pytest.importorskip("ase")
+    from_kpath = si_calculation.get_atom_projection(
+        ist0=1, ist1=1, kpath="GXW", npoints=6, label="kpath_check"
+    )
+    explicit_kpoints, distances = si_calculation._kpath_to_points("GXW", 6)
+    from_kpoints = si_calculation.get_atom_projection(
+        kpoints=list(explicit_kpoints), ist0=1, ist1=1, label="kpath_check_explicit"
+    )
+
+    assert len(from_kpath) == len(explicit_kpoints)
+    for got, expected_k, expected_d, ref in zip(
+        from_kpath, explicit_kpoints, distances, from_kpoints
+    ):
+        assert got["k"] == pytest.approx(tuple(expected_k))
+        assert got["distance"] == pytest.approx(expected_d)
+        assert got["matrices"] == pytest.approx(ref["matrices"])
+
+
+def test_kpath_and_kpoints_are_mutually_exclusive(si_calculation):
+    with pytest.raises(ValueError):
+        si_calculation.get_atom_projection(
+            kpoints=[(0.0, 0.0, 0.0)], kpath="GXW", ist0=1, ist1=1
+        )
