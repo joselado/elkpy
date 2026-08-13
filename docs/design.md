@@ -1191,3 +1191,129 @@ $m=\pm2$ eigenstate, not a mixture of $\ell=2$ $m$-values — confirming the cit
 $\mathbf{k}\cdot\mathbf{p}$ model's orbital character quantitatively, and tying this
 feature's absolute scale to $P_{W,d}$, itself already cross-checked against upstream
 `bandstr.f90` in §18 (`tests/test_calculation_angular_momentum.py`).
+
+## 20. The $Z_2$ topological invariant via Wannier-charge-center pumping
+
+`Calculation.get_z2_invariant(ist0, ist1, loop_direction=1, pump_direction=2, nkx=, nt=)`
+computes the $Z_2$ invariant $\nu\in\{0,1\}$ of a 2D time-reversal-invariant insulator's
+occupied band window, via Wannier-charge-center (WCC) pumping: Yu, Qi, Bernevig, Fang &
+Dai's non-Abelian-Berry-connection formulation of the invariant (PRB 84, 075119 (2011),
+arXiv:1101.2011), combined with Soluyanov & Vanderbilt's "largest gap" crossing-counting
+method for robustly extracting $\nu$ from the computed WCC trajectories (PRB 83, 235401
+(2011), arXiv:1102.5600). Full derivation in `docs/physics.tex` Part IX.
+
+**No new Fortran — reusing task 9000's already-trusted mesh export.** Unlike every
+other Fortran-patch-series entry above, this feature needs no new patch at all. The
+non-Abelian Wilson loop $D(k_2) = U(F_0)U(F_1)\cdots U(F_{N-1})$ (product of
+SVD-unitarized nearest-neighbour overlap matrices around a closed loop in one
+reciprocal-lattice direction $k_1$, at fixed pumping value $k_2$) is built from exactly
+the same mesh-neighbour overlaps §13's `get_berry_curvature()` already exports via task
+9000 (`elkpy_berry.f90`) and reads with `parsers.berry.parse_berry_overlaps()` — just
+read here as a full multi-band matrix rather than collapsed to a single `det`-phase link
+variable. Crucially, this reuses the Brillouin-zone-boundary periodic gauge closure
+§13's Chern-number arithmetic already depends on for its integers to come out clean —
+not a new, separately-trusted assumption. An earlier design considered driving this from
+the arbitrary-k `eigenstate_session()` (task 9002, §14) instead — closing the loop by
+literally querying `overlap(k_last, (1,0,0))` past the last mesh point — but this would
+require independently re-establishing that Elk's arbitrary-k diagonalization reproduces
+the exact periodic-gauge wavefunction at $k+G$, an assumption never previously exercised
+by any existing test; task 9000's mesh export sidesteps this entirely by reusing
+machinery whose periodicity handling is already empirically validated (§13's exact-zero
+Chern number on trivial Si).
+
+**Pure Python arithmetic, physically-grounded synthetic validation.** All WCC/$Z_2$
+arithmetic (link unitarization, the Wilson loop product, the largest-gap reference
+curve, the crossing-count parity) lives in `parsers/wilson.py`, independently
+unit-tested against synthetic overlap matrices with no Elk run
+(`tests/test_wilson_gauge_invariance.py`) — gauge invariance of the WCC angles under a
+random per-$k$ unitary transform, an exact single-band phase pin, and, for the harder
+question of whether the *crossing-count* logic is actually correct (gauge invariance
+alone can't rule out a crossing-counter that's simply always wrong), a cross-check
+against a completely independent, already-trusted code path: a time-reversal-symmetric
+two-copy Qi-Wu-Zhang lattice model (spin-up and its complex-conjugate spin-down partner,
+giving exactly opposite Chern numbers by construction), where $Z_2$ equals the
+single-spin-sector Chern number mod 2 (Kane & Mele, PRL 95, 146802 (2005), whenever
+$S_z$ is conserved) — checked directly against `parsers.berry`'s own plaquette-flux
+Chern number (§13) computed on the identical wavefunctions, not merely hand-derived by
+constructing a trajectory and guessing its expected $\nu$ (an earlier attempt at that —
+hand-built smooth WCC trajectories meant to look like a textbook "partner exchange" —
+gave $\nu=0$ unexpectedly for what was intended as the topological case, not because the
+implementation was wrong but because an exactly mirror-symmetric ($a(s)=-b(s)$) 2-band
+trajectory is a degenerate edge case where the largest-gap reference tracks the pair's
+own motion rather than acting as a fixed-enough reference to register a crossing;
+resolved by validating against the independently-checkable QWZ model instead of trying
+to hand-craft and hand-verify a synthetic trajectory's expected answer).
+
+**Additivity across independently-gapped band groups.** `ist0`/`ist1` is checked gapped
+at every mesh point via `berry.check_gap()` (the same guard `get_berry_curvature()`
+uses), and is chosen, in `tests/test_calculation_z2.py`, to span *every* occupied
+valence band (the standard ab initio convention, same EIGVAL.OUT-occupation-derived
+count as §16/§17's hexagonal-slab fixtures) rather than hand-isolating just the
+topologically relevant low-energy complex. This is safe because $Z_2$ is additive mod 2
+across independently-gapped band groups: a deep, symmetry-generic valence manifold
+(e.g. graphene's $\sigma$-bonding complex) is essentially always $Z_2$-trivial on its
+own, so folding it into a topologically nontrivial low-energy complex (graphene's
+$\pi/\pi^*$ manifold, once gapped by spin-orbit coupling) changes $\nu$ by $0\bmod 2$ —
+i.e. doesn't change it — provided the two groups stay mutually gapped everywhere on the
+sampled mesh, which `check_gap()` verifies directly rather than assuming.
+
+**Choosing `soc_scale` for a numerically resolvable gap, not just a nonzero one.** A
+first attempt at `soc_scale={"C": 100.0}` (the value initially requested for this
+feature) passed `check_gap()` (a real, ~15 meV gap at $K$) but gave $\nu=0$ — the
+*wrong* answer, traced not to a bug in `get_z2_invariant()`/`parsers/wilson.py` but to
+mesh aliasing: `check_gap()` only checks the eigenvalue gap at the mesh points actually
+sampled, and says nothing about how narrow, in $k$, the Dirac-point anticrossing region
+is. Diagnosed directly (not just suspected) via a cheap scan with the already-open
+`eigenstate_session()` along $k_x$ through $K$ at fixed `soc_scale=100`: the occupied-
+window overlap `session.overlap(K, K+dk, 1, 8)` has two singular values that stay well
+below 1 (as low as ~0.71) even at `dk` an order of magnitude finer than any practical
+mesh spacing (`nkx` in the thousands) — i.e. the occupied $\pi$ state's character
+rotates almost completely between neighbouring mesh points at `nkx=30`'s spacing
+($1/30\approx0.033$, vs.\ the anticrossing's actual width of order $10^{-3}$ in
+fractional coordinates), so the Wilson loop's link unitarization at that link is
+essentially an arbitrary choice — the topological signal is aliased away, not absent.
+Raising `soc_scale` to 3000 (a 30x further increase — the anticrossing-width scaling
+$\Delta k\sim E_{\rm gap}/(2\hbar v)$ means resolving the same relative width at a fixed
+mesh spacing needs a proportionally larger gap) opens a $\sim$1.4 eV gap at $K$ whose
+overlap singular values
+stay close to 1 (>0.97) at a practical mesh spacing — confirmed with the same cheap
+scan before committing to a full mesh run. This is a numerics-only knob, not a change of
+physics: Kane & Mele's QSH prediction holds for *any* nonzero intrinsic coupling, so
+`soc_scale=100`'s $\nu=1$ is exactly as real as `soc_scale=3000`'s — it is simply below
+what a practically-sized `nkx` can resolve, the same way an under-sampled Chern-number
+mesh (§13's `max_flux` diagnostic) can silently miss a real Berry-curvature feature
+without any single point's own check failing.
+
+Verified against a real compiled binary: on monolayer graphene (`spinorb=True`,
+`soc_scale={"C": 3000.0}`, chosen via the resolvability diagnostic above rather than the
+original 100x) the occupied $\pi$ band stays gapped from $\pi^*$ by $\sim$1.4 eV at
+$K$ — the Brillouin-zone minimum, well above `check_gap()`'s default tolerance and
+still well below graphene's own $\sigma$-$\pi$ separation (occupied bandwidth
+$\sim$19 eV), confirming the scaled SOC term (§12) is acting on the right states without
+reorganizing the $\sigma$ manifold — and `get_z2_invariant()` on the full occupied
+valence manifold gives $\nu=1$, Kane & Mele's own prediction for graphene with enhanced
+intrinsic spin-orbit coupling (`tests/test_calculation_z2.py`).
+
+**A second, independent physical test with no artificial SOC scaling at all.**
+Freestanding monolayer bismuth ("bismuthene": a buckled honeycomb lattice, 2 atoms per
+cell vertically offset — the same structural motif as buckled silicene/germanene, space
+group P-3m1) was predicted a QSH insulator by Murakami (PRL 97, 236805 (2006),
+arXiv:cond-mat/0607001), driven by bismuth's own large *atomic* spin-orbit coupling —
+unlike graphene, no `soc_scale` enhancement is needed to see a numerically convenient
+gap. Structure (`a`=4.34 Å, buckling=1.73 Å, gap 0.555 eV without SOC / 0.500 eV with
+SOC) from Cheng, Liu, Tan, Zhang, Wei, Lv, Shi & Tang, "Thermoelectric Properties of a
+Monolayer Bismuth", *J. Phys. Chem. C* 118, 904 (2014), confirmed independently in
+Freitas, Rivelino, de Brito Mota, de Castilho, Kakanakova-Georgieva & Gueorguiev,
+"Topological Insulating Phases in Two-Dimensional Bismuth-Containing Single Layers
+Preserved by Hydrogenation", *J. Phys. Chem. C* 119, 23599 (2015), Table 1 ("in good
+agreement with the work of Cheng et al."). Scanning `get_eigenstates()` across
+Γ-K-M with the real compiled binary confirms a genuinely different band-inversion
+mechanism from graphene's Dirac-point-at-K picture: the gap minimum (~0.6 eV) sits at
+Γ (an s-p-orbital inversion, HgTe/CdTe-style), monotonically increasing to >2 eV at K
+and M — checked directly rather than assumed, since `get_z2_invariant()`'s default
+mesh (`loop_direction`/`pump_direction`=(1,2)) always includes Γ at mesh index (0,0)
+regardless of `nkx`, unlike K (which needed `nkx`/`nky_full` multiples of 3 for
+graphene's own test to land on it exactly). `get_z2_invariant()` on the full occupied
+valence manifold (30 bands) gives $\nu=1$ — Murakami's own prediction — confirming the
+method on a second, structurally and mechanistically distinct QSH system
+(`tests/test_calculation_z2.py`).

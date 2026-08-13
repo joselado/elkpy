@@ -16,7 +16,19 @@ import numpy as np
 from . import config, spec
 from .inputfile import InputFile
 from .launcher import LocalLauncher
-from .parsers import band, berry, dos, effmass, forces, geometry, info, quantum_geometry, totenergy, volumetric
+from .parsers import (
+    band,
+    berry,
+    dos,
+    effmass,
+    forces,
+    geometry,
+    info,
+    quantum_geometry,
+    totenergy,
+    volumetric,
+    wilson,
+)
 from .session import EigenstateSession
 
 MANIFEST_NAME = ".elkpy_manifest.json"
@@ -769,6 +781,132 @@ class Calculation:
             for point, distance in zip(results, distances):
                 point["distance"] = float(distance)
         return results
+
+    def get_z2_invariant(
+        self,
+        ist0,
+        ist1,
+        loop_direction=1,
+        pump_direction=2,
+        nkx=41,
+        nt=21,
+        gap_tol=1e-4,
+        label="z2",
+    ):
+        """Z2 topological invariant of a 2D time-reversal-invariant
+        insulator's occupied band window [ist0, ist1], via Wannier-charge-
+        center (WCC) pumping (Yu, Qi, Bernevig, Fang, Dai, PRB 84, 075119
+        (2011), arXiv:1101.2011; the "largest gap" crossing-counting method
+        of Soluyanov & Vanderbilt, PRB 83, 235401 (2011), arXiv:1102.5600).
+        See docs/design.md #20 and docs/physics.tex Part IX for the physics
+        (why only half the Brillouin zone needs to be pumped, Kramers
+        pairing at the two ends, additivity of Z2 across independently
+        gapped band groups) this implements.
+
+        Needs NO new Fortran: reuses task 9000's existing mesh-neighbour
+        overlap export (elkpy Fortran extension, patches/0002-berry-
+        curvature-wilson-loop.patch, src/elkpy_berry.f90 -- the same export
+        get_berry_curvature() uses for its Chern-number arithmetic), just
+        read here as a non-Abelian Wilson loop instead of an Abelian
+        plaquette flux. All WCC/Z2 arithmetic happens in pure Python
+        (parsers/wilson.py), independently unit-tested against synthetic
+        overlap matrices (tests/test_wilson_gauge_invariance.py) -- this
+        method's own job is only building the right mesh and slicing the
+        Fortran-exported overlaps into per-pumping-step closed loops.
+
+        `loop_direction` (default 1): the reciprocal-lattice direction
+        (1, 2 or 3) the non-Abelian Wilson loop is closed over -- spans the
+        FULL Brillouin zone (nkx points), relying on the SAME periodic mesh
+        machinery already trusted for get_berry_curvature()'s Chern-number
+        boundary closure.
+
+        `pump_direction` (default 2, must differ from `loop_direction`):
+        the pumping direction, swept only over the time-reversal-invariant
+        HALF Brillouin zone [0, 0.5] (nt points, both endpoints included --
+        k_pump=0 and k_pump=0.5 are the two time-reversal-invariant momenta
+        where the WCC spectrum is Kramers-paired, arXiv:1101.2011 Sec. II).
+        Internally requested as a full-Brillouin-zone mesh of
+        2*(nt-1) points along this direction (so 0 and 0.5 both land
+        exactly on mesh points), of which only the first nt (covering
+        [0, 0.5]) are used.
+
+        `ist0`/`ist1`: the contiguous, 1-indexed band window, as in
+        get_berry_curvature() -- checked gapped at every mesh point via
+        berry.check_gap() (same as get_berry_curvature(), same `gap_tol`),
+        both a correctness guard (Z2 is only defined for a window gapped
+        from the rest of the spectrum everywhere) and, for a window chosen
+        as "all occupied valence bands" (the standard ab initio convention
+        -- see docs/design.md #20 for why this gives the same Z2 as
+        isolating just the topologically-relevant bands), a check that no
+        band reordering by energy silently swapped in an unintended state
+        anywhere on the mesh.
+
+        `nkx`: mesh points spanning the closed Wilson-loop direction (the
+        resolution of the loop integral itself). `nt`: pumping steps across
+        the half Brillouin zone. Real DFT wavefunctions (unlike a toy
+        tight-binding model) make each additional mesh point relatively
+        expensive -- start modest (e.g. the defaults) and increase if
+        `wannier_centers` looks under-resolved (jagged rather than smooth
+        as a function of the pumping coordinate) or if a near-singular link
+        overlap raises ValueError from parsers.wilson._unitarize.
+
+        A gap passing `check_gap()` is NOT by itself evidence that `nkx`
+        resolves it: `check_gap()` only checks the eigenvalue gap AT the
+        sampled mesh points, not how narrow, in k, a small-gap feature
+        (e.g. a weakly-split Dirac point) is between them -- a real case
+        hit while testing this method (docs/design.md #20): graphene with
+        `soc_scale=100` passed `check_gap()` (a genuine ~15 meV gap at K)
+        but gave a wrong (aliased) Z2, because the anticrossing region was
+        far narrower in k than the mesh spacing. Before trusting a result
+        near a small, sharply-localized gap, check resolvability directly
+        with a cheap `eigenstate_session().overlap()` scan across the
+        narrow-gap point: singular values of the occupied-window overlap
+        between neighbouring mesh points should stay close to 1, not drop
+        well below it.
+
+        Returns a dict: {"z2": 0 or 1, "wannier_centers": (nt, nst) array
+        of WCC angles (radians, sorted, one row per pumping step),
+        "pump": (nt,) array of the pumping-direction k-values sampled (in
+        [0, 0.5], fractional lattice coordinates)}.
+        """
+        if loop_direction == pump_direction:
+            raise ValueError("loop_direction and pump_direction must differ")
+        if nt < 2:
+            raise ValueError("nt must be at least 2 (both time-reversal-invariant endpoints)")
+
+        nky_full = 2 * (nt - 1)
+        directions = (loop_direction, pump_direction)
+        blocks = {
+            "elkpy_berry": [(directions[0], directions[1], ist0, ist1)],
+            "reducek": [0],
+        }
+        ngridk = [1, 1, 1]
+        ngridk[loop_direction - 1] = nkx
+        ngridk[pump_direction - 1] = nky_full
+        subdir = self._run_resumed(
+            label, [spec.TASKS["berry_curvature"]], blocks, ngridk=tuple(ngridk)
+        )
+        parsed = berry.parse_berry_overlaps(subdir / spec.OUTPUT_FILES["berry"])
+        berry.check_gap(parsed, tol=gap_tol)
+
+        theta_by_step = []
+        pump_values = []
+        for j in range(nt):
+            link_overlaps = []
+            for i in range(nkx):
+                key = [0, 0, 0]
+                key[loop_direction - 1] = i
+                key[pump_direction - 1] = j
+                link_overlaps.append(parsed["overlaps"][tuple(key)][0])
+            theta_by_step.append(wilson.wilson_loop_wannier_centers(link_overlaps))
+            pump_values.append(j / nky_full)
+
+        z2 = wilson.z2_from_wannier_centers(theta_by_step)
+        return {
+            "z2": z2,
+            "wannier_centers": np.array(theta_by_step),
+            "pump": np.array(pump_values),
+        }
 
     def eigenstate_session(self, label="eigenstates"):
         """Start an interactive eigenstate/overlap query session (task

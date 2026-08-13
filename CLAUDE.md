@@ -333,6 +333,69 @@ $m=\pm2$ state, a quantitative confirmation rather than just a sign check
 formula, the `lopzflm` reuse, the truncation caveat, the valley-locking derivation):
 `docs/design.md` §19 and `docs/physics.tex` (Part VIII).
 
+Also implemented, and — unlike every other Fortran-patch-series entry above — needing
+NO new Fortran at all:
+`Calculation.get_z2_invariant(ist0, ist1, loop_direction=, pump_direction=, nkx=, nt=)`
+— the $\mathbb Z_2$ topological invariant of a 2D time-reversal-invariant insulator's
+occupied band window, via Wannier-charge-center (WCC) pumping (Yu, Qi, Bernevig, Fang &
+Dai, *Equivalent expression of $Z_2$ topological invariant for band insulators using the
+non-Abelian Berry connection*, PRB 84, 075119 (2011); Soluyanov & Vanderbilt's "largest
+gap" crossing-counting method, *Computing topological invariants without inversion
+symmetry*, PRB 83, 235401 (2011)). Built entirely by reusing task 9000's existing
+mesh-neighbour overlap export (§13's `elkpy_berry.f90`, the same one
+`get_berry_curvature()` uses for Chern numbers) as a non-Abelian (multi-band) Wilson
+loop instead of a single `det`-phase link variable — deliberately *not* driven from the
+arbitrary-k `eigenstate_session()` (§14), since closing the Wilson loop across the
+Brillouin-zone boundary would then need a fresh, never-before-exercised assumption about
+Elk's arbitrary-k diagonalization reproducing the exact periodic-gauge wavefunction at
+$k+G$, where task 9000's mesh export instead reuses machinery whose periodic-boundary
+handling is already empirically load-bearing for §13's exact-integer Chern numbers. All
+WCC/$Z_2$ arithmetic (SVD link unitarization, the Wilson-loop product, the largest-gap
+reference curve, the crossing-count parity) is pure Python (`parsers/wilson.py`),
+independently unit-tested on synthetic data — gauge invariance, an exact single-band
+phase pin, and, for the crossing-count logic specifically, a cross-check against an
+unrelated already-trusted code path: a time-reversal-symmetric two-copy Qi-Wu-Zhang
+lattice model (spin-up and its complex-conjugate spin-down partner, exactly opposite
+Chern numbers by construction), where $Z_2$ equals the single-spin-sector Chern number
+mod 2 whenever $S_z$ is conserved (Kane & Mele, PRL 95, 146802 (2005)) — checked
+directly against `parsers.berry`'s own plaquette-flux Chern number on the identical
+wavefunctions, after an earlier attempt at a hand-built "partner exchange" synthetic
+trajectory gave an unexpected (but, on inspection, correct) $\nu=0$ due to a degenerate
+mirror-symmetric edge case, not an implementation bug (`tests/test_wilson_gauge_invariance.py`).
+A first attempt at `soc_scale={"C": 100.0}` (the value initially requested for this
+feature) passed `check_gap()` (a real ~15 meV gap at $K$) but gave $\nu=0$ — traced, via
+a cheap `eigenstate_session()` scan through $K$ (occupied-window overlap singular values
+stayed below 1 even at $\delta k$ far finer than any practical mesh spacing), to mesh
+aliasing: the Dirac-point anticrossing is only $\sim10^{-3}$ wide in fractional
+coordinates, far narrower than a practical `nkx`'s mesh spacing, so `check_gap()`
+passing (it only checks sampled points, not the region between them) gave false
+confidence — not a bug in `get_z2_invariant()`/`parsers/wilson.py` itself. Raising
+`soc_scale` to 3000 (real unscaled intrinsic carbon SOC is far too weak,
+$\sim1\,\mu$eV-scale, to resolve on any practical mesh at all — this is a pure numerics
+knob, not a change of physics, since Kane & Mele's QSH result holds for any nonzero
+coupling) opens a ~1.4 eV gap at $K$ that the same diagnostic confirms is resolvable at
+a practical mesh spacing. Verified against a real compiled binary at that scale: the
+occupied $\pi$ band stays gapped from $\pi^*$ by ~1.4 eV at $K$, and `get_z2_invariant()`
+on the full occupied valence manifold gives $\nu=1$ — Kane & Mele's own prediction,
+relying on $Z_2$'s additivity mod 2 across independently-gapped band groups (§20) to
+justify using the whole valence manifold rather than hand-isolating just the $\pi/\pi^*$
+complex (`tests/test_calculation_z2.py`). A second, independent physical test needs no
+`soc_scale` at all: freestanding buckled-honeycomb monolayer bismuth ("bismuthene",
+2 atoms/cell, P-3m1 — same motif as buckled silicene/germanene), predicted a QSH
+insulator by Murakami, PRL 97, 236805 (2006), via bismuth's own large *atomic* SOC.
+Structure ($a=4.34$ Å, buckling $=1.73$ Å) and gap (0.555 eV without SOC / 0.500 eV
+with SOC) from Cheng, Liu, Tan, Zhang, Wei, Lv, Shi & Tang, J. Phys. Chem. C 118, 904
+(2014), confirmed independently in Freitas, Rivelino, de Brito Mota, de Castilho,
+Kakanakova-Georgieva & Gueorguiev, J. Phys. Chem. C 119, 23599 (2015). A real-binary
+scan of `get_eigenstates()` across Γ-K-M confirmed a band-inversion mechanism genuinely
+distinct from graphene's Dirac-point-at-K picture: the gap minimum (~0.6 eV) sits at Γ
+(an s-p-orbital inversion, HgTe/CdTe-style), not K (>2 eV there). `get_z2_invariant()`
+on the full occupied valence manifold (30 bands) gives $\nu=1$ — confirming the method
+on a second, structurally and mechanistically distinct QSH system.
+Physics writeup (the non-Abelian Wilson loop, Kramers pairing at the two
+time-reversal-invariant pumping endpoints, the largest-gap construction, the additivity
+argument): `docs/design.md` §20 and `docs/physics.tex` (Part IX).
+
 ## Architecture
 
 - `src/elkpy/structure.py` — `Structure`: lattice vectors (`avec`, Bohr) + species, each atom either a
@@ -378,7 +441,10 @@ formula, the `lopzflm` reuse, the truncation caveat, the valley-locking derivati
   Fortran so it's unit-testable against synthetic overlap matrices (`tests/test_berry_gauge_invariance.py`)
   without an Elk run. `eigenstates` parses `EigenstateSession`'s stdout token stream (not a file) into
   energies/`evecsv`/overlap/atom-projection/orbital-projection arrays, independently unit-testable the
-  same way (`tests/test_parsers_eigenstates.py`).
+  same way (`tests/test_parsers_eigenstates.py`). `wilson` is the same "arithmetic, not
+  just parsing" exception as `berry`, reusing `berry.parse_berry_overlaps()`'s output as
+  a non-Abelian (multi-band) Wilson loop instead of a single link-variable phase, for
+  `get_z2_invariant()` — see §20.
 - `src/elkpy/config.py` — locates the built `elk` binary (`build/elk/src/elk` by default, override via
   `ELKPY_ELK_BIN`) and the species directory (`vendor/elk/species/` by default).
 

@@ -1667,4 +1667,289 @@ method (\texttt{eigenstate\_session()}, Part~\ref{part:eigenstates});
 \texttt{get\_angular\_momentum(k, ist0, ist1)} is a one-off convenience wrapper opening and
 closing its own session, for a single query.
 
+\part{The $\mathbb Z_2$ topological invariant via Wannier-charge-center pumping}
+\label{part:z2}
+
+\section{Setting: time-reversal invariant insulators and the quantum spin Hall phase}
+
+A two-dimensional insulator with time-reversal symmetry (no magnetism, no external
+field) but strong spin-orbit coupling can realize a topologically distinct phase from an
+ordinary insulator -- the quantum spin Hall (QSH) state -- first predicted for graphene
+by Kane \& Mele \cite{kanemele2005}. Unlike the Chern number
+(Part~\ref{part:berry}), which vanishes identically under time-reversal symmetry
+($F_{12}(-\mathbf k)=-F_{12}(\mathbf k)$ forces the Brillouin-zone integral to cancel), a
+time-reversal-symmetric insulator's topology is instead classified by a $\mathbb Z_2$
+invariant $\nu\in\{0,1\}$: $\nu=0$ is an ordinary insulator, $\nu=1$ is a QSH insulator
+with a symmetry-protected, back-scattering-immune helical edge state at any boundary.
+$\nu$ cannot be read off any single Berry-curvature integral -- it is a genuinely
+different (mod-2, not integer) topological classification, tied specifically to the
+Kramers degeneracy time-reversal symmetry forces at the four (in 2D) time-reversal
+invariant momenta (TRIM) of the Brillouin zone.
+
+This Part implements the Wannier-charge-center (WCC) pumping method for computing
+$\nu$: Yu, Qi, Bernevig, Fang \& Dai's non-Abelian-Berry-connection formulation
+\cite{yu2011} of the invariant, combined with Soluyanov \& Vanderbilt's numerically
+robust ``largest gap'' crossing-counting method \cite{soluyanov2011} for extracting
+$\nu$ from the computed WCC trajectories. Unlike every other capability in this
+document, \texttt{Calculation.get\_z2\_invariant()} needs \emph{no new Fortran at all}:
+it reuses task 9000's existing mesh-neighbour overlap export -- the very same
+Fukui-Hatsugai-Suzuki (FHS) construction (Part~\ref{part:berry}) already trusted, via
+its Chern-number arithmetic, to correctly close a Wilson loop across the
+Brillouin-zone boundary -- just read here as a non-Abelian (multi-band) Wilson loop
+instead of collapsed to a single Abelian phase.
+
+\section{The non-Abelian Wilson loop and hybrid Wannier charge centers}
+
+Fix a $J$-band occupied window (e.g.\ all occupied valence bands) and a ``pumping''
+momentum $k_2$ (one reciprocal-lattice direction, held fixed). Discretize the
+\emph{other} reciprocal-lattice direction $k_1$ into $N$ points spanning the full
+Brillouin zone, $k_1^{(i)} = i/N$, $i=0,\dots,N-1$, and, exactly as in
+Part~\ref{part:berry}'s FHS construction, form the nearest-neighbour overlap matrix at
+each link,
+\begin{equation}
+  F_i(k_2) = \langle\psi(k_1^{(i)},k_2)\,|\,\psi(k_1^{(i+1)},k_2)\rangle,
+  \qquad i=0,\dots,N-1 \ (\mathrm{mod}\ N),
+  \label{eq:z2-link}
+\end{equation}
+a $J\times J$ complex matrix (not, in general, unitary, since the two band windows at
+$k_1^{(i)}$ and $k_1^{(i+1)}$ span slightly different subspaces of the full Hilbert
+space). Unitarize each link by its polar decomposition, $F_i = U_iS_iV_i^\dagger \to
+U_iV_i^\dagger$ -- the multi-band generalization of Part~\ref{part:berry}'s single-band
+link variable $U(F)=\det F/|\det F|$, to which it reduces exactly for $J=1$ (a $1\times1$
+SVD is just polar form of a complex number). The non-Abelian Wilson loop is the ordered
+product of unitarized links around the closed $k_1$ loop \cite{yu2011},
+\begin{equation}
+  D(k_2) = U(F_0)\,U(F_1)\cdots U(F_{N-1}),
+  \label{eq:wilson-loop}
+\end{equation}
+a $J\times J$ unitary matrix (a product of unitaries). Its $J$ eigenvalues
+$\lambda_m(k_2) = e^{i\theta_m(k_2)}$ define the \emph{hybrid Wannier charge centers}
+$x_m(k_2) = \theta_m(k_2)/2\pi \pmod 1$ -- the positions, along the $k_1$-conjugate
+lattice direction, of $J$ maximally-localized-in-$k_1$ hybrid Wannier functions built
+from this occupied subspace \cite{yu2011,soluyanov2011}. Since $D(k_2)$ is manifestly
+gauge covariant under an independent $U(J)$ gauge transformation of the wavefunctions at
+each $k_1^{(i)}$ (each such transformation conjugates one $F_i$ and inverse-conjugates
+its neighbour, telescoping to an overall similarity transform of $D$, which leaves its
+eigenvalues fixed), the WCC angles $\theta_m(k_2)$ are gauge invariant -- checked here on
+synthetic overlap matrices exactly as Part~\ref{part:berry}'s Chern-number arithmetic is
+(\texttt{tests/test\_wilson\_gauge\_invariance.py}).
+
+\section{Pumping across the time-reversal-invariant half Brillouin zone}
+
+At the two TRIM values of $k_2$ -- $k_2=0$ and $k_2=0.5$ (in reduced coordinates) -- the
+Bloch Hamiltonian is time-reversal symmetric, forcing every band to be Kramers-degenerate
+there; this degeneracy propagates directly into $D(k_2)$'s eigenvalue spectrum, which is
+exactly doubly-degenerate (paired) at these two points only \cite{yu2011}. Sweeping
+$k_2$ continuously from $0$ to $0.5$ (never needing the other half of the zone, related to
+this half by time reversal), each Kramers pair of WCCs either splits apart and
+recombines back into the \emph{same} pair by $k_2=0.5$ (an even, removable-by-deformation
+process) or exchanges partners with a neighbouring pair (an odd process, protected by
+time-reversal symmetry) -- $\nu=1$ iff an odd number of such partner exchanges occurs
+overall, $\nu=0$ otherwise \cite{yu2011,soluyanov2011}.
+
+\section{Extracting $\nu$: the largest-gap crossing count}
+
+Rather than track individual WCC branches across pumping steps -- fragile whenever two
+WCCs cross or cluster, since which branch is ``which'' after a crossing is a gauge
+choice with no canonical answer -- Soluyanov \& Vanderbilt's method tracks only the
+\emph{largest empty arc} in the WCC spectrum at each pumping step \cite{soluyanov2011}.
+At step $m$ (pumping value $k_2^{(m)}$), let $z^{(m)}\in[0,1)$ be the center of the
+largest gap between adjacent (sorted, circular) WCC values. Between consecutive steps
+$m,m+1$, define the signed circular-orientation test
+\begin{equation}
+  g(\phi_1,\phi_2,\phi_3) = \sin(\phi_2-\phi_1) + \sin(\phi_3-\phi_2) + \sin(\phi_1-\phi_3),
+  \label{eq:orientation}
+\end{equation}
+whose sign tests whether $\phi_3$ lies on the counter-clockwise arc from $\phi_1$ to
+$\phi_2$. Each occupied band's contribution to whether a crossing occurred between steps
+$m$ and $m+1$ is then
+\begin{equation}
+  (-1)^{\Delta_m} = \prod_{n=1}^{J} \operatorname{sgn}\Bigl[
+    g\bigl(2\pi z^{(m)},\,2\pi z^{(m+1)},\,2\pi x_n^{(m+1)}\bigr)\Bigr],
+  \label{eq:z2-crossing}
+\end{equation}
+and the total invariant is
+\begin{equation}
+  \nu = \Bigl(\textstyle\sum_m \Delta_m\Bigr) \bmod 2.
+  \label{eq:z2-total}
+\end{equation}
+This is exactly what \texttt{elkpy.parsers.wilson.z2\_from\_wannier\_centers()}
+implements: \texttt{\_largest\_gap\_center()} for $z^{(m)}$,
+\texttt{\_orientation()} for Eq.~\eqref{eq:orientation}, and a running sign-flip
+product for Eqs.~\eqref{eq:z2-crossing}--\eqref{eq:z2-total}. The method's robustness
+is exactly its insensitivity to branch labelling: Eq.~\eqref{eq:z2-crossing} only asks
+whether each WCC, at the \emph{later} step, sits on the arc the tracked gap just swept
+through -- it never needs to decide which WCC ``is'' which between steps.
+
+\section{Reusing the FHS mesh export, not new Fortran}
+
+Calculation.get\_z2\_invariant() builds Eq.~\eqref{eq:z2-link}'s link overlaps from
+exactly the same mesh-neighbour overlaps Part~\ref{part:berry}'s
+\texttt{get\_berry\_curvature()} already exports via task 9000
+(\texttt{src/elkpy\_berry.f90}) and reads with \texttt{parsers.berry.parse\_berry\_
+overlaps()} -- a periodic \texttt{ngridk} mesh with \texttt{reducek=0}, one direction
+($k_1$, \texttt{loop\_direction}) spanning the full Brillouin zone at \texttt{nkx}
+points, the other ($k_2$, \texttt{pump\_direction}) requested as a full-zone mesh of
+$2(\texttt{nt}{-}1)$ points so that both TRIM values $k_2=0,0.5$ land exactly on mesh
+points; only the first \texttt{nt} of those (covering $[0,0.5]$) are used. The
+Brillouin-zone-boundary periodic gauge closure this relies on for the $k_1$ loop is not
+a new assumption for this feature -- it is exactly what already had to be correct for
+\texttt{get\_berry\_curvature()}'s Chern numbers to come out as clean integers
+(Part~\ref{part:berry}), reused here unmodified. \texttt{ist0}/\texttt{ist1} is checked
+gapped at every mesh point via \texttt{parsers.berry.check\_gap()}, the same guard
+\texttt{get\_berry\_curvature()} uses.
+
+Choosing \texttt{ist0}/\texttt{ist1} to span \emph{every} occupied valence band (the
+standard ab initio convention, and what \texttt{tests/test\_calculation\_z2.py} uses,
+following the same EIGVAL.OUT-occupation-derived count as
+Part~\ref{part:atomprojection}/\ref{part:spin}'s hexagonal-slab fixtures) rather than
+hand-isolating just the topologically relevant low-energy bands is safe here for a
+standard reason: $\mathbb Z_2$ is additive mod 2 across independently-gapped band
+groups. A deep, symmetry-generic valence complex (e.g.\ graphene's $\sigma$-bonding
+manifold) is essentially always $\mathbb Z_2$-trivial on its own, so adding it to a
+topologically nontrivial low-energy complex (graphene's $\pi/\pi^*$ manifold, once
+gapped by spin-orbit coupling) changes $\nu$ by $0 \bmod 2$ -- i.e.\ leaves it unchanged
+-- \emph{provided} the two groups stay mutually gapped at every point of the sampled
+mesh, which \texttt{check\_gap()} verifies directly rather than assuming.
+
+\section{The physical prediction: Kane-Mele graphene is a QSH insulator}
+
+Kane \& Mele's original proposal \cite{kanemele2005} is that planar graphene, whose
+mirror symmetry ($z\to-z$) forbids first-order spin-orbit coupling within the $\sigma$
+manifold but permits an \emph{intrinsic} spin-orbit term in the $\pi/\pi^*$ manifold
+(a next-nearest-neighbour, sublattice-chirality-dependent hopping, formally a
+Haldane-model mass term \cite{haldane1988} of opposite sign for the two spin species),
+opens a gap at the Dirac points $K,K'$ and realizes $\nu=1$ for \emph{any} nonzero
+intrinsic spin-orbit strength -- unlike a Chern insulator, no fine-tuned parameter
+regime is needed. Real (unscaled) intrinsic spin-orbit coupling in planar carbon is
+extremely weak ($\sim 1\,\mu$eV-scale, from second-order virtual $\sigma$-$\pi$
+transitions far from the Fermi level), giving a real Kane-Mele gap far too small to
+resolve on a practically-sized $k$-mesh -- hence testing this feature on graphene with
+\texttt{soc\_scale} (Part~\ref{part:soc}) artificially enhanced: this does not change
+\emph{which} phase the system is in (Kane-Mele's own result holds for any nonzero
+coupling), only how large and numerically convenient the resulting gap is.
+
+\subsection{A gap large enough to pass \texorpdfstring{\texttt{check\_gap()}}{check\_gap()} is not automatically large enough to resolve}
+
+A first attempt at $100\times$ (the scale initially requested for this feature) passed
+\texttt{check\_gap()} -- a real $\sim15$~meV gap at $K$ -- but \texttt{get\_z2\_invariant()}
+returned $\nu=0$, the wrong answer. \texttt{check\_gap()} only checks the eigenvalue gap
+at the mesh points actually sampled; it says nothing about how narrow, \emph{in
+$\mathbf k$}, the Dirac-point anticrossing region itself is. Diagnosed directly with a
+cheap scan through $K$ using the already-open \texttt{eigenstate\_session()}: the
+occupied-window overlap $\texttt{session.overlap}(K,K{+}\delta k,1,8)$ has two singular
+values that stay well below $1$ (as low as $\sim0.71$) even at $\delta k$ an order of
+magnitude finer than any practical mesh spacing -- the occupied $\pi$ state's character
+rotates almost completely between neighbouring mesh points at a mesh spacing (e.g.\
+$1/30\approx0.033$) far coarser than the anticrossing's actual width (order $10^{-3}$ in
+fractional coordinates), so the corresponding link's unitarization in
+Eq.~\eqref{eq:wilson-loop} is close to an arbitrary choice: the topological signal is
+\emph{aliased away}, not absent. This is the direct $\mathbf k$-space analogue of a
+too-coarse Chern-number mesh silently missing a real Berry-curvature feature (the
+\texttt{max\_flux} diagnostic Part~\ref{part:berry} uses to catch that case) -- except
+here no single sampled point's own gap check fails, since $K$ itself is always exactly
+resolved; it is the region \emph{around} $K$ that a coarse mesh skips over.
+
+Raising \texttt{soc\_scale} to $3000$ opens a $\sim1.4$~eV gap at $K$, wide enough (via
+the anticrossing-width scaling $\Delta k\sim E_{\rm gap}/2\hbar v$) that the same
+overlap-singular-value diagnostic stays close to $1$ at a practical mesh spacing --
+confirmed with the same cheap scan before committing to a full mesh run. This is a pure
+numerics knob, not a change of physics: Kane-Mele's QSH prediction holds for any nonzero
+intrinsic coupling, so $100\times$'s $\nu=1$ is exactly as real as $3000\times$'s -- it
+is simply below what a practically-sized Wilson-loop mesh can resolve.
+
+\subsection{Verified}
+
+Against a real compiled binary, on monolayer graphene with \texttt{spinorb=True} and
+\texttt{soc\_scale=\{"C": 3000.0\}} (chosen via the resolvability diagnostic above): the
+occupied $\pi$ band stays gapped from the unoccupied $\pi^*$ band by $\sim1.4$~eV at
+$K$ -- the Brillouin-zone minimum of that gap, well above \texttt{check\_gap()}'s
+default tolerance and still well below graphene's own occupied bandwidth ($\sim19$~eV),
+confirming the scaled intrinsic spin-orbit term is doing what Part~\ref{part:soc} says
+it does without reorganizing the $\sigma$ manifold. \texttt{get\_z2\_invariant()} on the
+full occupied valence manifold gives $\nu=1$ (\texttt{tests/test\_calculation\_z2.py})
+-- Kane \& Mele's own prediction, and the additivity argument above for why the deeper
+$\sigma$ manifold doesn't change that answer.
+
+A second, independent test needs no artificial SOC scaling at all: freestanding
+monolayer bismuth ("bismuthene"), a buckled honeycomb lattice (2 atoms/cell, vertically
+offset -- the same structural motif as buckled silicene/germanene, space group P-3m1),
+predicted a QSH insulator by Murakami \cite{murakami2006} via bismuth's own large
+\emph{atomic} spin-orbit coupling. Structure ($a=4.34$~\AA, buckling $=1.73$~\AA, gap
+$0.555$~eV without SOC / $0.500$~eV with SOC) from Cheng et al.\ \cite{cheng2014},
+confirmed independently in Freitas et al.\ \cite{freitas2015}. A
+real-binary scan of \texttt{get\_eigenstates()} across $\Gamma$-$K$-$M$ confirms a band-
+inversion mechanism genuinely distinct from graphene's Dirac-point-at-$K$ picture: the
+gap minimum ($\sim0.6$~eV) sits at $\Gamma$ (an $s$-$p$-orbital inversion, HgTe/CdTe-
+style), not $K$ ($>2$~eV there) -- checked directly, since \texttt{get\_z2\_invariant()}'s
+default mesh always includes $\Gamma$ at index $(0,0)$ regardless of \texttt{nkx},
+unlike $K$ (which needed \texttt{nkx}/\texttt{nky\_full} multiples of 3 for the graphene
+test above to land on it exactly). \texttt{get\_z2\_invariant()} on the full occupied
+valence manifold (30 bands) gives $\nu=1$ -- Murakami's own prediction -- confirming the
+method on a second, structurally and mechanistically distinct QSH system
+(\texttt{tests/test\_calculation\_z2.py}).
+
+The pure Wilson-loop/WCC/largest-gap
+arithmetic itself (Eqs.~\eqref{eq:wilson-loop}--\eqref{eq:z2-total}) is independently
+validated on synthetic data against an unrelated, already-trusted code path: a
+time-reversal-symmetric two-copy Qi-Wu-Zhang lattice model (spin-up and its
+complex-conjugate spin-down partner, giving exactly opposite Chern numbers by
+construction), for which $\nu$ equals the single-spin-sector Chern number mod 2 whenever
+$S_z$ is conserved \cite{kanemele2005} -- checked directly against
+\texttt{parsers.berry}'s own (Part~\ref{part:berry}, already Chern-number-tested)
+plaquette-flux Chern number computed on the identical wavefunctions
+(\texttt{tests/test\_wilson\_gauge\_invariance.py}).
+
+\subsection{How to use in code}
+
+\begin{verbatim}
+result = calc.get_z2_invariant(
+    ist0=1, ist1=n_occ,               # e.g. from EIGVAL.OUT occupations
+    loop_direction=1, pump_direction=2,
+    nkx=30, nt=16,
+)
+result["z2"]                # 0 (trivial) or 1 (QSH)
+result["wannier_centers"]   # (nt, n_occ) WCC angles (radians), one row per pumping step
+result["pump"]               # (nt,) pumping-direction k-values in [0, 0.5]
+\end{verbatim}
+No \texttt{eigenstate\_session()} is opened for this feature -- unlike
+Parts~\ref{part:quantumgeometry}, \ref{part:atomprojection}--\ref{part:angularmomentum}, it is
+driven entirely by task 9000's mesh export (Part~\ref{part:berry}), the same
+\texttt{get\_berry\_curvature()} already uses.
+
+\begin{thebibliography}{9}
+\bibitem{kanemele2005}
+C.~L.~Kane and E.~J.~Mele,
+\emph{$Z_2$ Topological Order and the Quantum Spin Hall Effect},
+Phys.\ Rev.\ Lett.\ \textbf{95}, 146802 (2005).
+\bibitem{yu2011}
+R.~Yu, X.~L.~Qi, A.~Bernevig, Z.~Fang and X.~Dai,
+\emph{Equivalent expression of $Z_2$ topological invariant for band insulators using the
+non-Abelian Berry connection},
+Phys.\ Rev.\ B \textbf{84}, 075119 (2011).
+\bibitem{soluyanov2011}
+A.~A.~Soluyanov and D.~Vanderbilt,
+\emph{Computing topological invariants without inversion symmetry},
+Phys.\ Rev.\ B \textbf{83}, 235401 (2011).
+\bibitem{haldane1988}
+F.~D.~M.~Haldane,
+\emph{Model for a Quantum Hall Effect without Landau Levels: Condensed-Matter
+Realization of the ``Parity Anomaly''},
+Phys.\ Rev.\ Lett.\ \textbf{61}, 2015 (1988).
+\bibitem{murakami2006}
+S.~Murakami,
+\emph{Quantum Spin Hall Effect and Enhanced Magnetic Response by Spin-Orbit Coupling},
+Phys.\ Rev.\ Lett.\ \textbf{97}, 236805 (2006).
+\bibitem{cheng2014}
+L.~Cheng, H.~Liu, X.~Tan, J.~Zhang, J.~Wei, H.~Lv, J.~Shi and X.~Tang,
+\emph{Thermoelectric Properties of a Monolayer Bismuth},
+J.\ Phys.\ Chem.\ C \textbf{118}, 904 (2014).
+\bibitem{freitas2015}
+R.~R.~Q.~Freitas, R.~Rivelino, F.~de Brito Mota, C.~M.~C.~de Castilho,
+A.~Kakanakova-Georgieva and G.~K.~Gueorguiev,
+\emph{Topological Insulating Phases in Two-Dimensional Bismuth-Containing Single Layers
+Preserved by Hydrogenation},
+J.\ Phys.\ Chem.\ C \textbf{119}, 23599 (2015).
+\end{thebibliography}
+
 \end{document}

@@ -45,6 +45,7 @@ python3 -m pip install -e .        # add .[ase] for Structure.from_ase()/to_ase(
 ## Topological characterization ##
 - Berry curvature $F_{12}(\mathbf k)=\partial_1A_2-\partial_2A_1$ and Chern numbers $c_n=\frac1{2\pi i}\int_{T^2}\!d^2k\,F_{12}\in\mathbb Z$, via a gauge-invariant Wilson-loop discretization [[notebook]](notebooks/05_berry_curvature.ipynb)
 - Berry curvature at an arbitrary k-point with no periodic mesh required, e.g. to resolve individual valleys of a 2D material [[notebook]](notebooks/05_berry_curvature.ipynb)
+- The $\mathbb Z_2$ invariant $\nu\in\{0,1\}$ of a time-reversal-invariant 2D insulator, via Wannier-charge-center pumping and the non-Abelian Wilson loop $D(k_2)=\prod_iU(F_i)$, distinguishing an ordinary insulator from a quantum spin Hall insulator [[notebook]](notebooks/12_z2_invariant.ipynb)
 
 ## Quantum geometry ##
 - The full quantum geometric tensor $Q_{ab}=g_{ab}-\tfrac i2F_{ab}$ at an arbitrary k-point: Berry curvature $F_{ab}$ *and* the quantum metric $g_{ab}$ (Fubini-Study distance between neighbouring Bloch states), from the same wavefunction-overlap queries used for eigenstates below [[notebook]](notebooks/07_quantum_geometry.ipynb)
@@ -93,6 +94,16 @@ hbn.get_energy()
 omega_K = hbn.get_berry_curvature_path([(1/3, 1/3, 0)], 1, 4, dk=0.01)[0]["curvature"]
 ```
 ![Alt text](images/hbn_berry_curvature.png?raw=true "Berry curvature of monolayer h-BN along Gamma-K-M-Gamma")
+
+## Z2 invariant of monolayer graphene with enhanced intrinsic spin-orbit coupling ##
+Kane & Mele's founding prediction: planar graphene with intrinsic spin-orbit coupling is
+a quantum spin Hall insulator ($\nu=1$) for any nonzero coupling strength:
+```python
+result = graphene.get_z2_invariant(1, ist1, nkx=24, nt=13)
+result["z2"]                 # 1: quantum spin Hall (0 would be an ordinary insulator)
+result["wannier_centers"]    # (nt, ist1) Wannier-charge-center angles vs. pumping k
+```
+![Alt text](images/graphene_z2_invariant.png?raw=true "Wannier charge centers of monolayer graphene with enhanced intrinsic spin-orbit coupling, showing an odd number of crossings")
 
 ## Quantum metric alongside Berry curvature, along Gamma-K-M-K'-Gamma of monolayer h-BN ##
 Time-reversal symmetry requires $g_{ab}(K)=g_{ab}(K')$ even though $\Omega(K')=-\Omega(K)$ --
