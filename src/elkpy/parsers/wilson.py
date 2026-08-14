@@ -149,3 +149,55 @@ def z2_from_wannier_centers(theta_by_step):
             # harmless to assign either way, since it appears identically
             # in every step's product -- left as a no-op (+1) here.
     return 0 if parity > 0 else 1
+
+
+def combine_3d_invariants(z_by_axis_offset):
+    """The 3D strong/weak Z2 classification (nu0; nu1, nu2, nu3), Fu, Kane
+    & Mele, "Topological Insulators in Three Dimensions", Phys. Rev. Lett.
+    98, 106803 (2007) (arXiv:cond-mat/0607699), from the six per-plane 2D
+    Z2 invariants of a 3D time-reversal-invariant insulator's six
+    time-reversal-invariant (TRI) planes (k_i=0 and k_i=pi for each
+    reciprocal-lattice direction i=1,2,3 -- each such plane is itself a
+    genuine 2D time-reversal-invariant system, since the other two
+    directions on the plane still map k -> -k onto the same plane; see
+    docs/design.md #21).
+
+    `z_by_axis_offset`: dict {(axis, offset): z2}, axis in (1, 2, 3),
+    offset in (0.0, 0.5), z2 in (0, 1) -- the six 2D Z2 invariants (e.g.
+    Calculation.get_z2_invariant_3d()'s six get_z2_invariant() calls, one
+    per (axis, offset) pair).
+
+    FKM eq. 2 (strong index): the product of the parity eigenvalues at all
+    8 TRIM factors exactly into the product over the 4 TRIM of the k_i=0
+    plane times the product over the 4 TRIM of the k_i=pi plane, for ANY
+    choice of axis i -- so in mod-2/XOR form, nu0 = z(k_i=0) XOR z(k_i=pi)
+    for i=1, 2, OR 3, and these three must all agree (FKM state this
+    explicitly: "nu0 is independent of the choice of b_k"). A disagreement
+    here is therefore a bug (mesh/plumbing), not a physical ambiguity, and
+    raises ValueError rather than silently picking one axis's answer.
+
+    FKM eq. 3 (weak indices): nu_i = z(k_i=pi), the k_i=pi plane's OWN 2D
+    Z2 invariant (not the k_i=0 plane -- the two conventions are not
+    interchangeable, this is the one FKM's eq. 3 defines). Unlike nu0,
+    (nu1,nu2,nu3) are basis-dependent -- FKM note they combine into a
+    reciprocal-lattice vector G_nu = sum_i nu_i b_i, so their individual
+    values depend on the primitive reciprocal vectors b_i used (here,
+    whatever Calculation.structure.avec's own reciprocal vectors are) --
+    report them as computed, not as an assumed universal (0,0,0)/(1,1,1).
+
+    Returns a dict: {"nu0": 0 or 1, "nu": (nu1, nu2, nu3), "nu0_by_axis":
+    (nu0 computed via axis 1, via axis 2, via axis 3) -- all three equal to
+    "nu0" if this function returned at all}.
+    """
+    nu0_by_axis = tuple(
+        z_by_axis_offset[(axis, 0.0)] ^ z_by_axis_offset[(axis, 0.5)] for axis in (1, 2, 3)
+    )
+    if len(set(nu0_by_axis)) != 1:
+        raise ValueError(
+            f"strong index nu0 disagrees across axes: {nu0_by_axis} -- FKM eq. 2 guarantees "
+            f"these must agree algebraically, so this is a bug (mesh construction, band "
+            f"window, or a genuinely unresolved gap on one axis' mesh -- see "
+            f"Calculation.get_z2_invariant()'s resolvability warning), not a physical result"
+        )
+    nu = tuple(z_by_axis_offset[(axis, 0.5)] for axis in (1, 2, 3))
+    return {"nu0": nu0_by_axis[0], "nu": nu, "nu0_by_axis": nu0_by_axis}

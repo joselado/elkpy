@@ -124,7 +124,7 @@ class Calculation:
                 f"Elk xctype integer (see docs/elk_manual.txt sec. 5.150)"
             )
 
-    def _add_base_blocks(self, input_file, ngridk=None):
+    def _add_base_blocks(self, input_file, ngridk=None, vkloff=None):
         sppath_str = str(self.sppath)
         if not sppath_str.endswith("/"):
             sppath_str += "/"
@@ -152,7 +152,7 @@ class Calculation:
             )
         input_file.add_block("rgkmax", [self.rgkmax])
         input_file.add_block("ngridk", [ngridk or self.ngridk])
-        input_file.add_block("vkloff", [self.vkloff])
+        input_file.add_block("vkloff", [vkloff or self.vkloff])
 
         for name, lines in self.extra_blocks.items():
             input_file.add_block(name, lines)
@@ -236,7 +236,7 @@ class Calculation:
         self._converged = converged
         self._raise_if_not_converged()
 
-    def _run_resumed(self, subdir_name, tasks, extra_blocks=None, ngridk=None):
+    def _run_resumed(self, subdir_name, tasks, extra_blocks=None, ngridk=None, vkloff=None):
         """Run task(s) resumed from the ground state's STATE.OUT, in an
         isolated subdirectory rather than self.workdir.
 
@@ -259,6 +259,12 @@ class Calculation:
         silently corrupts the next run's result instead of erroring; a
         clean directory every time avoids that at the cost of not getting a
         free resume if a run is deliberately interrupted and retried later.
+
+        `ngridk`/`vkloff` optionally override the calculation's own mesh/
+        offset for this call only, same sampling-only-parameter reasoning as
+        `ngridk` alone previously (docs/design.md #4) -- e.g.
+        get_z2_invariant()'s `plane_offset` needs a k-mesh offset to 0.5 in
+        one direction to sample the k_i=pi TRI plane, not just k_i=0.
         """
         self.ensure_ground_state()
         subdir = self.workdir / subdir_name
@@ -269,7 +275,7 @@ class Calculation:
         )
         f = InputFile()
         f.add_block("tasks", [spec.TASKS["ground_state_resume"]] + list(tasks))
-        self._add_base_blocks(f, ngridk=ngridk)
+        self._add_base_blocks(f, ngridk=ngridk, vkloff=vkloff)
         for name, lines in (extra_blocks or {}).items():
             f.add_block(name, lines)
         f.write(subdir / "elk.in")
@@ -788,6 +794,7 @@ class Calculation:
         ist1,
         loop_direction=1,
         pump_direction=2,
+        plane_offset=0.0,
         nkx=41,
         nt=21,
         gap_tol=1e-4,
@@ -829,6 +836,24 @@ class Calculation:
         2*(nt-1) points along this direction (so 0 and 0.5 both land
         exactly on mesh points), of which only the first nt (covering
         [0, 0.5]) are used.
+
+        `plane_offset` (default 0.0, the only value a 2D calculation needs):
+        the fractional (lattice) coordinate the THIRD direction -- the one
+        that is neither `loop_direction` nor `pump_direction` -- is fixed
+        at, via a one-point k-mesh offset in that direction only (`loop_direction`/
+        `pump_direction`'s own offsets are always 0, enforced below). For a
+        genuinely 2D system this third direction is just the vacuum
+        direction and 0.0 is the only sensible value; get_z2_invariant_3d()
+        uses 0.0 and 0.5 -- the two time-reversal-invariant PLANE positions,
+        k_i=0 and k_i=pi -- to compute the six per-plane invariants a 3D
+        strong/weak classification needs (docs/design.md #21).
+
+        Raises ValueError if `self.vkloff` is nonzero in `loop_direction` or
+        `pump_direction`: a nonzero offset there would silently shift the
+        pumping direction's two sampled endpoints off the true
+        time-reversal-invariant momenta, giving a wrong Z2 with no error --
+        the same class of silent-wrong-answer already hit once with mesh
+        aliasing (see the resolvability warning below).
 
         `ist0`/`ist1`: the contiguous, 1-indexed band window, as in
         get_berry_curvature() -- checked gapped at every mesh point via
@@ -873,8 +898,16 @@ class Calculation:
             raise ValueError("loop_direction and pump_direction must differ")
         if nt < 2:
             raise ValueError("nt must be at least 2 (both time-reversal-invariant endpoints)")
+        if self.vkloff[loop_direction - 1] != 0.0 or self.vkloff[pump_direction - 1] != 0.0:
+            raise ValueError(
+                f"self.vkloff must be 0 in loop_direction/pump_direction (got "
+                f"{self.vkloff}) -- a nonzero offset there moves the pumping "
+                f"direction's endpoints off the time-reversal-invariant momenta and "
+                f"silently gives a wrong Z2"
+            )
 
         nky_full = 2 * (nt - 1)
+        normal_direction = 6 - loop_direction - pump_direction  # the direction in {1,2,3} not used above
         directions = (loop_direction, pump_direction)
         blocks = {
             "elkpy_berry": [(directions[0], directions[1], ist0, ist1)],
@@ -883,8 +916,11 @@ class Calculation:
         ngridk = [1, 1, 1]
         ngridk[loop_direction - 1] = nkx
         ngridk[pump_direction - 1] = nky_full
+        vkloff = list(self.vkloff)
+        vkloff[normal_direction - 1] = plane_offset
         subdir = self._run_resumed(
-            label, [spec.TASKS["berry_curvature"]], blocks, ngridk=tuple(ngridk)
+            label, [spec.TASKS["berry_curvature"]], blocks,
+            ngridk=tuple(ngridk), vkloff=tuple(vkloff),
         )
         parsed = berry.parse_berry_overlaps(subdir / spec.OUTPUT_FILES["berry"])
         berry.check_gap(parsed, tol=gap_tol)
@@ -907,6 +943,55 @@ class Calculation:
             "wannier_centers": np.array(theta_by_step),
             "pump": np.array(pump_values),
         }
+
+    def get_z2_invariant_3d(self, ist0, ist1, nkx=41, nt=21, gap_tol=1e-4, label="z2_3d"):
+        """The full 3D strong/weak Z2 classification (nu0; nu1, nu2, nu3) of
+        a 3D time-reversal-invariant insulator's occupied band window
+        [ist0, ist1] (Fu, Kane & Mele, PRL 98, 106803 (2007),
+        arXiv:cond-mat/0607699). See docs/design.md #21 and
+        docs/physics.tex Part X for the physics (why the 6 TRI planes each
+        reduce to a genuine 2D problem, why nu0 is basis-independent but
+        (nu1,nu2,nu3) are not) this implements.
+
+        Needs no new machinery beyond get_z2_invariant() itself: this calls
+        it six times, once per (axis, plane_offset) pair -- axis=i fixed at
+        k_i=0 and at k_i=0.5 (the two TRI values), for i=1,2,3, using the
+        OTHER two reciprocal directions as that call's loop_direction/
+        pump_direction (cyclically: axis 1 fixed -> loop/pump=(2,3); axis 2
+        -> (3,1); axis 3 -> (1,2)) -- then combines the six 0/1 results via
+        wilson.combine_3d_invariants() (FKM eqs. 2-3), which also checks
+        that the strong index nu0 agrees across all three axis choices (an
+        algebraic guarantee per FKM, so disagreement raises ValueError as a
+        bug, not a physical result -- see combine_3d_invariants()'s
+        docstring).
+
+        This is SIX FULL runs of get_z2_invariant()'s own mesh (six
+        separate task-1-resumed Elk subprocesses, not just six overlap
+        exports) -- six times the cost of a single 2D get_z2_invariant()
+        call at the same nkx/nt. Same `ist0`/`ist1`/`nkx`/`nt`/`gap_tol`
+        meaning as get_z2_invariant() (including its resolvability warning
+        -- a gap passing check_gap() is not evidence nkx resolves it),
+        applied independently to each of the six planes.
+
+        Returns a dict: {"nu0": 0 or 1, "nu": (nu1, nu2, nu3), "nu0_by_axis":
+        (nu0 via axis 1, via axis 2, via axis 3) -- see
+        combine_3d_invariants(), "planes": {(axis, offset):
+        get_z2_invariant()'s own full return dict} for every one of the six
+        planes, keyed by (1|2|3, 0.0|0.5)}.
+        """
+        axis_loop_pump = {1: (2, 3), 2: (3, 1), 3: (1, 2)}
+        planes = {}
+        for axis, (loop, pump) in axis_loop_pump.items():
+            for offset in (0.0, 0.5):
+                planes[(axis, offset)] = self.get_z2_invariant(
+                    ist0, ist1, loop_direction=loop, pump_direction=pump,
+                    plane_offset=offset, nkx=nkx, nt=nt, gap_tol=gap_tol,
+                    label=f"{label}_axis{axis}_{'0' if offset == 0.0 else 'pi'}",
+                )
+        z_by_axis_offset = {key: result["z2"] for key, result in planes.items()}
+        combined = wilson.combine_3d_invariants(z_by_axis_offset)
+        combined["planes"] = planes
+        return combined
 
     def eigenstate_session(self, label="eigenstates"):
         """Start an interactive eigenstate/overlap query session (task

@@ -46,6 +46,7 @@ python3 -m pip install -e .        # add .[ase] for Structure.from_ase()/to_ase(
 - Berry curvature $F_{12}(\mathbf k)=\partial_1A_2-\partial_2A_1$ and Chern numbers $c_n=\frac1{2\pi i}\int_{T^2}\!d^2k\,F_{12}\in\mathbb Z$, via a gauge-invariant Wilson-loop discretization [[notebook]](notebooks/05_berry_curvature.ipynb)
 - Berry curvature at an arbitrary k-point with no periodic mesh required, e.g. to resolve individual valleys of a 2D material [[notebook]](notebooks/05_berry_curvature.ipynb)
 - The $\mathbb Z_2$ invariant $\nu\in\{0,1\}$ of a time-reversal-invariant 2D insulator, via Wannier-charge-center pumping and the non-Abelian Wilson loop $D(k_2)=\prod_iU(F_i)$, distinguishing an ordinary insulator from a quantum spin Hall insulator [[notebook]](notebooks/12_z2_invariant.ipynb)
+- The full 3D strong/weak classification $(\nu_0;\nu_1\nu_2\nu_3)$ of a 3D time-reversal-invariant insulator, from the $Z_2$ invariant of each of the Brillouin zone's six time-reversal-invariant planes, distinguishing an ordinary insulator from a strong or weak topological insulator [[notebook]](notebooks/13_z2_invariant_3d.ipynb)
 
 ## Quantum geometry ##
 - The full quantum geometric tensor $Q_{ab}=g_{ab}-\tfrac i2F_{ab}$ at an arbitrary k-point: Berry curvature $F_{ab}$ *and* the quantum metric $g_{ab}$ (Fubini-Study distance between neighbouring Bloch states), from the same wavefunction-overlap queries used for eigenstates below [[notebook]](notebooks/07_quantum_geometry.ipynb)
@@ -104,6 +105,16 @@ result["z2"]                 # 1: quantum spin Hall (0 would be an ordinary insu
 result["wannier_centers"]    # (nt, ist1) Wannier-charge-center angles vs. pumping k
 ```
 ![Alt text](images/graphene_z2_invariant.png?raw=true "Wannier charge centers of monolayer graphene with enhanced intrinsic spin-orbit coupling, showing an odd number of crossings")
+
+## 3D strong/weak Z2 classification of a dimerized diamond lattice ##
+Fu & Kane's own minimal lattice model for introducing $(\nu_0;\nu_1\nu_2\nu_3)$ -- diamond
+structure with the second basis atom displaced along [111], shortening one bond per atom:
+```python
+result = cs.get_z2_invariant_3d(1, ist1, nkx=12, nt=7)
+result["nu0"]         # 1: strong topological insulator (matches Fu-Kane's dimerized prediction)
+result["nu0_by_axis"] # (1, 1, 1): the strong index agrees identically across all three axes
+```
+![Alt text](images/cs_dimerized_z2_invariant_3d.png?raw=true "Wannier charge centers on the k1=0 and k1=pi planes of a dimerized diamond lattice, showing an odd vs. even number of crossings")
 
 ## Quantum metric alongside Berry curvature, along Gamma-K-M-K'-Gamma of monolayer h-BN ##
 Time-reversal symmetry requires $g_{ab}(K)=g_{ab}(K')$ even though $\Omega(K')=-\Omega(K)$ --

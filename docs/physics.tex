@@ -1952,4 +1952,255 @@ Preserved by Hydrogenation},
 J.\ Phys.\ Chem.\ C \textbf{119}, 23599 (2015).
 \end{thebibliography}
 
+\part{The 3D strong/weak $\mathbb Z_2$ classification via the six time-reversal-invariant planes}
+\label{part:z2threed}
+
+\section{Setting: from a 2D invariant to a 3D classification}
+
+Part~\ref{part:z2}'s $\nu\in\{0,1\}$ classifies a genuinely 2D time-reversal-invariant
+insulator. A 3D time-reversal-invariant insulator needs four such numbers -- a
+``strong'' index $\nu_0$ and three ``weak'' indices $\nu_1,\nu_2,\nu_3$, together
+written $(\nu_0;\nu_1\nu_2\nu_3)$ -- introduced by Fu, Kane \& Mele
+\cite{fukanemele2007}. $\nu_0=1$ (a \emph{strong} topological insulator, STI) is the
+physically robust case: an odd number of protected surface Dirac cones on \emph{any}
+surface termination, immune to weak (symmetry-preserving) disorder. $\nu_0=0$ with some
+$\nu_i=1$ (a \emph{weak} topological insulator) is equivalent to a stack of 2D QSH
+layers along direction $i$ -- protected only on surfaces that do not run parallel to the
+stacking, and not robust to disorder that breaks the layering.
+
+\section{The six time-reversal-invariant planes}
+
+The 3D Brillouin zone has 8 TRIM, $\Gamma_{n_1n_2n_3} = \tfrac12(n_1\mathbf
+b_1+n_2\mathbf b_2+n_3\mathbf b_3)$, $n_j\in\{0,1\}$ -- the vertices of a cube in
+reduced coordinates. Any four that share a fixed $n_i$ (i.e.\ $k_i=0$ or $k_i=\pi$) lie
+in one of 6 time-reversal-invariant (TRI) \emph{planes}. Each such plane, with the
+other two directions free, is itself a genuine 2D time-reversal-invariant system: for
+any $(k_j,k_k)$ on the plane, $-(k_j,k_k)$ (mod a reciprocal lattice vector) is also on
+the same plane, since the fixed component $k_i\in\{0,\pi\}$ satisfies $-k_i\equiv k_i$.
+Part~\ref{part:z2}'s WCC-pumping method therefore applies \emph{unmodified} inside each
+plane, using the plane's own other two reciprocal directions as that computation's
+\texttt{loop\_direction}/\texttt{pump\_direction} -- giving six 2D invariants
+$z(k_i{=}0)$, $z(k_i{=}\pi)$ for $i=1,2,3$.
+
+\section{Combining the six planes: FKM eqs.\ 2--3}
+
+Fu, Kane \& Mele's own definition \cite{fukanemele2007} (their Eqs.\ 1--3, stated there
+via inversion-symmetric parity products $\delta_i=\pm1$ at each TRIM) factors exactly
+into a statement about these six planes. The strong index is the product of the parity
+eigenvalues at \emph{all} 8 TRIM, which splits into the product over the 4 TRIM of the
+$k_i{=}0$ plane times the product over the 4 TRIM of the $k_i{=}\pi$ plane, for
+\emph{any} choice of axis $i$ -- so in mod-2 (XOR) form,
+\begin{equation}
+  \nu_0 = z(k_i{=}0) \oplus z(k_i{=}\pi), \qquad i=1,\ 2,\ \text{or}\ 3,
+  \label{eq:z2-3d-nu0}
+\end{equation}
+and FKM state explicitly that $\nu_0$ ``is independent of the choice of $\mathbf b_k$''
+-- the three axis choices in Eq.~\eqref{eq:z2-3d-nu0} must all agree, since they are
+three different ways of splitting the identical product of 8 numbers into two groups of
+4. This is an algebraic guarantee, not an empirical one:
+\texttt{elkpy.parsers.wilson.combine\_3d\_invariants()} checks it directly and raises
+\texttt{ValueError} on disagreement, treating it as a bug (mesh construction, an
+unresolved gap on one axis' plane -- see Part~\ref{part:z2}'s resolvability warning --
+or a band-window mistake), never as a physical result to report. The weak indices are
+each a single plane's own invariant,
+\begin{equation}
+  \nu_i = z(k_i{=}\pi), \qquad i=1,2,3,
+  \label{eq:z2-3d-nui}
+\end{equation}
+\emph{not} the $k_i{=}0$ plane -- FKM's Eq.\ 3 fixes this convention, it is not
+interchangeable with the other plane. Unlike $\nu_0$, $(\nu_1,\nu_2,\nu_3)$ are
+\emph{basis-dependent}: FKM note they combine into a reciprocal-lattice vector
+$\mathbf G_\nu=\sum_i\nu_i\mathbf b_i$, so their individual values depend on which
+primitive reciprocal vectors $\mathbf b_i$ are used -- here, whichever the
+\texttt{Structure}'s own \texttt{avec} happens to give. This is not a defect of the
+method; it is why $\nu_0$, not $(\nu_1,\nu_2,\nu_3)$ individually, is the physically
+decisive, basis-independent classification.
+
+\texttt{Calculation.get\_z2\_invariant()} (Part~\ref{part:z2}) already supports fixing
+a third direction at an arbitrary fractional coordinate via its \texttt{plane\_offset}
+parameter -- a one-point $k$-mesh offset (\texttt{vkloff}) in that direction only, with
+\texttt{loop\_direction}/\texttt{pump\_direction}'s own offsets required to be exactly
+0 (checked, raising \texttt{ValueError} otherwise: a nonzero offset there would
+silently shift the pumping direction's two sampled endpoints off the true TRI momenta,
+giving a wrong 2D invariant with no error -- the same class of silent-wrong-answer
+already hit once for mesh aliasing, Part~\ref{part:z2}). \texttt{get\_z2\_invariant\_3d()}
+calls \texttt{get\_z2\_invariant()} six times -- axis $i$ fixed at $k_i=0$ and
+$k_i=0.5$, for $i=1,2,3$, cyclically using the other two directions as that call's own
+loop/pump pair -- and combines the six 0/1 results via
+\texttt{combine\_3d\_invariants()} (Eqs.~\eqref{eq:z2-3d-nu0}--\eqref{eq:z2-3d-nui}).
+No new Fortran, and no new mesh machinery beyond \texttt{vkloff} threading: this is
+architecturally identical to six independent Part~\ref{part:z2} computations.
+
+\section{The verified example: cesium on a dimerized diamond lattice}
+
+Rather than picking an arbitrary real material and hoping its published classification
+carries over, this feature is verified directly against the minimal lattice model Fu \&
+Kane use to \emph{introduce} $(\nu_0;\nu_1\nu_2\nu_3)$ in the first place
+\cite{fukane2007} (their eq.\ 4 and \S IV.3, confirmed directly against the arXiv HTML
+source, not just summarized): diamond structure ($Fd\bar3m$ -- the same structure as
+Part~\ref{part:soc}'s Si tests), with the second basis atom displaced along the cubic
+body diagonal [111] by a small $\delta$ -- from the ideal $(0.25,0.25,0.25)$ to
+$(0.25{-}\delta,0.25{-}\delta,0.25{-}\delta)$ -- shortening exactly one of the four
+tetrahedral bonds per atom while lengthening the other three. This is a \emph{trigonal}
+distortion, reducing $Fd\bar3m$ to $R\bar3m$ (\#166) -- \emph{symmorphic} (only a
+3-fold rotation about [111] and inversion survive) -- unlike a [001] \emph{tetragonal}
+strain of the same lattice (see the corrected pitfall discussion below). FKM's own
+sign convention, quoted directly: ``When the 111 distorted bond is stronger than the
+other three bonds, so that the system is dimerized, the system is a strong topological
+insulator $(\nu_0;\nu_1\nu_2\nu_3)=(1;111)$. When the 111 bond is weaker than the other
+three, so that the system is layered, it is a weak topological insulator $(0;111)$.'' A
+shorter bond is $\delta>0$ here (atom 2 moved toward atom 1) -- the sign used below.
+
+Cesium (a single 6$s$ valence electron) was chosen -- per this project's standing rule
+to consult Fable on material/structure questions (CLAUDE.md's ``Development practices''
+section) -- because its low-energy physics sits close to the single-$s$-orbital-per-site
+picture FKM's tight-binding Hamiltonian assumes; this is not a real crystal phase of
+cesium (the $a=16$ Bohr lattice constant is chosen only to keep muffin-tin spheres
+non-overlapping). Real single-band spin-orbit coupling is expected to be extremely weak
+(no orbital angular momentum on a pure $s$ state), so \texttt{soc\_scale=\{"Cs": 3000.0\}}
+enhances it to a numerically convenient scale -- the same reasoning as
+Part~\ref{part:z2}'s graphene test, not a claim about real cesium.
+
+\subsection{Verified}
+
+Against a real compiled binary: a comfortably large gap everywhere sampled on a
+$\Gamma$-L-X-$\Gamma$ path (minimum 0.136~eV, at L -- nowhere near
+Part~\ref{part:z2}'s graphene-aliasing danger zone), and
+\texttt{get\_z2\_invariant\_3d(1, ist1, nkx=12, nt=7)} gives $\nu_0=1$ -- a strong
+topological insulator, matching FKM's $\delta t_1>0$ prediction -- with $\nu_0$
+agreeing identically across all three axis splits (the algebraic guarantee
+\texttt{combine\_3d\_invariants()} checks) and $\nu_1=\nu_2=\nu_3$ (guaranteed by this
+structure's own residual 3-fold rotation about [111], which cyclically permutes the
+three primitive reciprocal directions while fixing both atomic positions)
+(\texttt{tests/test\_calculation\_z2\_3d.py}). $(\nu_1,\nu_2,\nu_3)=(0,0,0)$ here, not
+FKM's own $(1,1,1)$ -- expected, not a discrepancy, since $(\nu_1,\nu_2,\nu_3)$ are
+basis-dependent (Eq.~\eqref{eq:z2-3d-nui}) and FKM's Hamiltonian uses a different
+primitive-lattice-vector convention than this project's \texttt{Structure}.
+
+\section{A corrected pitfall: symmetry-enforced band sticking is not proof of gaplessness}
+
+A first candidate, tried before the cesium model above, was freestanding gray tin
+($\alpha$-Sn, diamond structure -- the same space group as bulk Si -- but with inverted
+$s$-$p$ band ordering, a zero-gap semimetal in its unstrained cubic form), strained
+\emph{uniaxially along [001]} (a tetragonal strain, following a specific epitaxial-growth
+geometry from a 2017 DFT study \cite{huangliu2017} -- not FKM's own [111] model above).
+A real compiled-binary scan found the eigenvalue gap pinning to $\sim10^{-6}$~eV at the
+strained Brillouin-zone boundary, identically, at four different strains tried
+($c/a=0.95,0.99,1.01,1.05$, both signs) -- a value that does not move with strain looks
+like an exact symmetry constraint, not a numerically-small-but-real gap. This project's
+own history initially over-concluded from that finding: [001] strain reduces $Fd\bar3m$
+to $I4_1/amd$ (\#141), a \emph{nonsymmorphic} space group, and nonsymmorphic space
+groups are indeed known to enforce band sticking along zone-boundary lines at any strain
+magnitude of the same symmetry-preserving type (Hirschmann, Leonhardt, Kilic, Fabini \&
+Schnyder \cite{hirschmann2021}, Table II, classify $I4_1/amd$'s specific zone-boundary
+Dirac points/nodal lines explicitly) -- but that sticking groups bands into
+\emph{quartets}; it does not by itself forbid a gap at the material's actual filling.
+Watanabe, Po, Zaletel \& Vishwanath \cite{watanabe2016} show $I4_1/amd$ still admits
+genuine band insulators at fillings that are multiples of 4, and published DFT
+\cite{huangliu2017} reports a genuinely gapped 3D TI for compressive [001]-strained
+$\alpha$-Sn. The measured $\sim10^{-6}$~eV almost certainly reflects a splitting
+measured \emph{inside} one such symmetry-stuck quartet (or the nearly-flat semicore
+manifold), not the true valence-conduction gap -- which specific bands the occupied-count
+window landed on, relative to where the stuck quartets sit, was never checked. The
+correct record is that \textbf{this probe was inconclusive, not a disproof} -- [111]
+distortion (the verified cesium model above) sidesteps the question entirely by staying
+in the symmorphic $R\bar3m$, where no such sticking exists to complicate the diagnosis.
+
+\section{An honestly-recorded inconclusive attempt: Bi\textsubscript{2}Se\textsubscript{3}}
+
+Bulk Bi$_2$Se$_3$ -- the material whose real-material discovery made 3D topological
+insulators a major experimental subfield \cite{zhang2009,xia2009} -- was also tried:
+rhombohedral, $R\bar3m$ (\#166, symmorphic, so none of the sticking above), 5 atoms per
+primitive cell (one quintuple layer, Se--Bi--Se--Bi--Se, the central Se at the inversion
+center), gap ($\sim0.2$--$0.3$~eV, Bi's strong atomic spin-orbit coupling plus a genuine
+band inversion at $\Gamma$) robust and reproduced correctly at plain GGA
+\cite{zhang2009} -- no strain-tuning knob, no artificial \texttt{soc\_scale}.
+
+The primitive-cell atomic coordinates were taken from a real deposited crystal
+structure (COD entry 9011965, digitizing Nakajima's original diffraction refinement
+\cite{nakajima1963}) rather than hand-converted from reported hexagonal-setting Wyckoff
+$z$-parameters -- an earlier attempt at exactly that hand conversion produced a
+self-contradictory structure (a $\sim11$~\AA\ ``bond'' where $\sim3$~\AA\ was
+expected), traced to an error in the hexagonal-to-rhombohedral primitive-vector
+transformation itself, not the $z$-parameters, which were correct all along (CLAUDE.md's
+standing rule on this traces directly to this incident). The corrected structure was
+verified independently before running any DFT: computed nearest-neighbour Bi--Se
+distances of 3.075~\AA\ (to the central, inversion-site Se, 6-fold coordinated) and
+2.851~\AA\ (to the outer Se, 3-fold coordinated), a quintuple-layer span of 7.365~\AA,
+and a van-der-Waals interlayer gap of 2.579~\AA\ -- all matching the well-known physical
+picture of Bi$_2$Se$_3$'s layered structure.
+
+Ground state converged with a robust, correctly-sized gap (0.258~eV at $\Gamma$, the
+Brillouin-zone minimum sampled along a $\Gamma$-Z-F-L-$\Gamma$ path, comfortably above
+the graphene-aliasing danger zone). But
+\texttt{get\_z2\_invariant\_3d(1, 78, nkx=8, nt=5)} gave $\nu_0=0$ on all six planes --
+the \emph{wrong} answer relative to the literature's $(1;000)$. Diagnosed as far as a
+single re-run reasonably allows: the saved mesh data shows $\sim3600$
+near-machine-precision internal degeneracies deep in the semicore manifold (bands
+1--50-ish, likely flat Bi $5d$/Se-derived states) -- but re-running one plane with a
+narrower, cleanly-isolated window (bands 61--78, gapped by 4.9~eV below and 0.28~eV
+above, no internal degeneracies below meV scale) gave the \emph{same} $\nu_0=0$,
+ruling out semicore-window contamination as the cause. Whether this is a genuine
+mesh-convergence problem (\texttt{nkx=8}/\texttt{nt=5} too coarse for Bi$_2$Se$_3$'s
+more intricate, all-electron band structure -- a materially denser mesh would cost
+several times the $\sim45$~minutes the six-plane sweep already took) or something else
+was not resolved, and is left here as an open, explicitly documented question rather
+than silently dropped or chased further without the compute budget to do so properly.
+No test asserts a result for this structure.
+
+\subsection{How to use in code}
+
+\begin{verbatim}
+result = calc.get_z2_invariant_3d(
+    ist0=1, ist1=n_occ,      # e.g. from EIGVAL.OUT occupations
+    nkx=12, nt=7,
+)
+result["nu0"]           # 0 or 1 -- the basis-independent strong index
+result["nu"]             # (nu1, nu2, nu3) -- basis-dependent weak indices
+result["nu0_by_axis"]    # nu0 computed via axis 1, 2, 3 -- all equal, or ValueError already raised
+result["planes"]         # {(axis, offset): get_z2_invariant()'s own full return dict}
+\end{verbatim}
+Six times the cost of a single Part~\ref{part:z2} call at the same \texttt{nkx}/\texttt{nt}
+-- six full mesh runs, not just six overlap exports -- since each of the six planes
+needs its own resumed Elk subprocess at its own \texttt{vkloff}.
+
+\begin{thebibliography}{9}
+\bibitem{fukanemele2007}
+L.~Fu, C.~L.~Kane and E.~J.~Mele,
+\emph{Topological Insulators in Three Dimensions},
+Phys.\ Rev.\ Lett.\ \textbf{98}, 106803 (2007), arXiv:cond-mat/0607699.
+\bibitem{fukane2007}
+L.~Fu and C.~L.~Kane,
+\emph{Topological insulators with inversion symmetry},
+Phys.\ Rev.\ B \textbf{76}, 045302 (2007), arXiv:cond-mat/0611341.
+\bibitem{huangliu2017}
+H.~Huang and F.~Liu,
+\emph{Tensile strained gray tin: Dirac semimetal for observing negative
+magnetoresistance with Shubnikov--de Haas oscillations},
+Phys.\ Rev.\ B \textbf{95}, 201101(R) (2017), arXiv:1612.00987.
+\bibitem{hirschmann2021}
+J.~Hirschmann, N.~Leonhardt, B.~Kilic, D.~H.~Fabini and A.~P.~Schnyder,
+\emph{Symmetry-enforced band crossings in tetragonal materials},
+Phys.\ Rev.\ Materials \textbf{5}, 054202 (2021), arXiv:2102.04134.
+\bibitem{watanabe2016}
+H.~Watanabe, H.~C.~Po, M.~P.~Zaletel and A.~Vishwanath,
+\emph{Filling-Enforced Gaplessness in Band Structures of the 230 Space Groups},
+Phys.\ Rev.\ Lett.\ \textbf{117}, 096404 (2016), arXiv:1603.05646.
+\bibitem{zhang2009}
+H.~Zhang, C.-X.~Liu, X.-L.~Qi, X.~Dai, Z.~Fang and S.-C.~Zhang,
+\emph{Topological insulators in Bi$_2$Se$_3$, Bi$_2$Te$_3$ and Sb$_2$Te$_3$ with a
+single Dirac cone on the surface},
+Nature Physics \textbf{5}, 438 (2009), arXiv:0812.1622.
+\bibitem{xia2009}
+Y.~Xia, D.~Qian, D.~Hsieh, L.~Wray, A.~Pal, H.~Lin, A.~Bansil, D.~Grauer, Y.~S.~Hor,
+R.~J.~Cava and M.~Z.~Hasan,
+\emph{Observation of a large-gap topological-insulator class with a single Dirac cone
+on the surface},
+Nature Physics \textbf{5}, 398 (2009).
+\bibitem{nakajima1963}
+S.~Nakajima,
+\emph{The crystal structure of Bi$_2$Te$_{3-x}$Se$_x$},
+J.\ Phys.\ Chem.\ Solids \textbf{24}, 479 (1963).
+\end{thebibliography}
+
 \end{document}

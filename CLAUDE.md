@@ -396,6 +396,61 @@ Physics writeup (the non-Abelian Wilson loop, Kramers pairing at the two
 time-reversal-invariant pumping endpoints, the largest-gap construction, the additivity
 argument): `docs/design.md` §20 and `docs/physics.tex` (Part IX).
 
+Also implemented, as the seventh entry in the Fortran patch series — though, like §15/§17,
+needing no new Fortran of its own:
+`Calculation.get_z2_invariant_3d(ist0, ist1, nkx=, nt=)` — the full 3D strong/weak
+$Z_2$ classification $(\nu_0;\nu_1\nu_2\nu_3)$ (Fu, Kane & Mele, PRL 98, 106803 (2007)),
+generalizing §20's 2D `get_z2_invariant()` to a 3D time-reversal-invariant insulator by
+computing that same 2D invariant on each of the Brillouin zone's 6 time-reversal-invariant
+(TRI) planes ($k_i=0,\pi$ for $i=1,2,3$ — each plane is itself a genuine 2D
+time-reversal-invariant system) and combining the six 0/1 results via FKM's own
+$\nu_0=z(k_i{=}0)\oplus z(k_i{=}\pi)$ (any axis — an algebraic identity, checked and
+raising `ValueError` on disagreement) / $\nu_i=z(k_i{=}\pi)$ formulas
+(`parsers.wilson.combine_3d_invariants()`, unit-tested on synthetic data). The only new
+plumbing: `get_z2_invariant()` gained a `plane_offset` parameter fixing the third
+(non-loop/pump) direction at an arbitrary fractional coordinate via a one-point k-mesh
+offset, plus a check that `self.vkloff` is exactly 0 in the loop/pump directions
+(otherwise the pumping endpoints silently drift off the true TRI momenta).
+Verified directly against the minimal lattice model Fu & Kane use to *introduce*
+$(\nu_0;\nu_1\nu_2\nu_3)$ in the first place (PRB 76, 045302 (2007),
+arXiv:cond-mat/0611341, their eq. 4/§IV.3, confirmed against the arXiv HTML source):
+diamond structure (same as this project's Si tests) with the second basis atom
+displaced along the cubic body diagonal [111] by a small $\delta$ (shortening one of the
+four tetrahedral bonds, lengthening the other three) — a *trigonal* distortion reducing
+the space group to symmorphic $R\bar3m$. Built with cesium (a single 6$s$ valence
+electron, close to FKM's single-orbital tight-binding picture; not a real crystal phase
+of cesium — chosen per this project's standing rule to ask Fable about material/structure
+questions, see "Development practices" below) plus `soc_scale={"Cs": 3000.0}` (real
+single-band SOC is expected too weak to resolve, same reasoning as §20's graphene test).
+`get_z2_invariant_3d(1, ist1, nkx=12, nt=7)` gives $\nu_0=1$ — a strong topological
+insulator, matching FKM's $\delta t_1>0$ ("dimerized") prediction — with $\nu_0$
+agreeing identically across all three axis splits and $\nu_1=\nu_2=\nu_3$ (guaranteed
+by this structure's residual 3-fold rotation about [111]) (`tests/test_calculation_z2_3d.py`).
+
+Two dead ends/lessons along the way, both corrected rather than silently dropped:
+freestanding gray tin, uniaxially strained along **[001]** (a *tetragonal* distortion,
+space group $I4_1/amd$ — *nonsymmorphic*, unlike the [111]/$R\bar3m$ case above), showed
+a gap pinned to $\sim10^{-6}$ eV at the strained zone boundary across four strains tried.
+Initially over-concluded as proof the material isn't gapped; consulting Fable (per the
+standing rule below) corrected this — $I4_1/amd$'s band sticking groups bands into
+quartets without forbidding a gap at the actual filling (Watanabe, Po, Zaletel &
+Vishwanath, PRL 117, 096404 (2016)), and published DFT confirms compressive [001]-strained
+$\alpha$-Sn genuinely is a gapped TI (Huang & Liu, PRB 95, 201101(R) (2017)) — so this
+probe was *inconclusive* (almost certainly measured a splitting inside a stuck quartet or
+the semicore manifold), not a disproof. Separately, bulk Bi$_2$Se$_3$ (rhombohedral,
+$R\bar3m$, sourced from a real deposited structure — Crystallography Open Database entry
+9011965 — after an earlier *hand-converted* hexagonal-to-rhombohedral attempt gave a
+self-contradictory ~11 Å "bond" from otherwise-correct literature parameters, establishing
+this project's standing preference for database-sourced structures below) converged with
+a correct, robust gap (0.258 eV at $\Gamma$) but gave $\nu_0=0$ on all six planes — wrong
+relative to the literature's $(1;000)$; a narrower band window ruled out semicore
+contamination as the cause, but mesh convergence was never tested (a materially denser
+mesh costs several times the ~45 minutes already spent) — left as an open, explicitly
+documented question, not asserted in any test. Physics writeup (the six-plane
+construction, the FKM combination formulas, both dead ends/lessons in full, the
+Bi$_2$Se$_3$ structure verification): `docs/design.md` §21 and `docs/physics.tex`
+(Part X).
+
 ## Architecture
 
 - `src/elkpy/structure.py` — `Structure`: lattice vectors (`avec`, Bohr) + species, each atom either a
@@ -478,6 +533,25 @@ relates to the underlying published method) — not merely "this function comput
 also include a "how to use in code" part showing the actual elkpy call(s) (e.g. `Calculation(...)`, the
 relevant `get_*()`) that exercise the formalism, so the physics and the API surface stay tied together.
 Keep both in sync with the code in the same change — don't defer either to a follow-up.
+
+When a real material's crystal `Structure` is needed (lattice vectors + atomic positions), prefer
+pulling it from an actual structure database/file (a CIF from the Crystallography Open Database or
+Materials Project, a published paper's POSCAR/Quantum Espresso input, etc.), loaded via ASE
+(`Structure.from_ase()`) where possible, over hand-deriving it from reported lattice
+parameters/Wyckoff positions. A hand conversion (e.g. hexagonal-to-rhombohedral primitive vectors from
+a,c and a Wyckoff z-parameter) is an extra, error-prone derivation step even when every input number is
+correct — hit for real building Bi2Se3's rhombohedral cell, where a wrong hand-derived transformation
+matrix gave physically nonsensical bond lengths (~11 Å instead of ~3 Å) despite starting from correct
+literature z-parameters; re-deriving it wasted significant real-DFT compute chasing a structure that
+was never right. When a database/file source isn't available or a hand derivation is unavoidable,
+numerically verify the result (e.g. actual computed bond lengths/layer spacing against known physical
+values) before running any DFT on it, not just before trusting the final answer.
+
+Whenever picking which real material to use for something (a demonstration, a test, choosing between
+candidate structures), or trying to understand something about a material in terms of its structure
+(crystal symmetry, distortion geometry, why a particular structure does or doesn't have a given
+property), ask Fable (the `fable` model, e.g. via `Agent(..., model="fable")`) rather than relying
+solely on your own judgement or a general-purpose research agent.
 
 ## README and notebook style
 

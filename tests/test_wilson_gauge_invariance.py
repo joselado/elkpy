@@ -202,3 +202,34 @@ def test_z2_matches_spin_chern_number_parity(mass, expect_z2):
     chern_up = _spin_chern_number(_h_up, mass)
     assert round(chern_up) % 2 == expect_z2  # sanity: the model is in the regime this test claims
     assert _kane_mele_like_z2(mass) == expect_z2
+
+
+# --- 3D strong/weak index combination (Fu-Kane-Mele eqs. 2-3) ---
+
+
+def test_combine_3d_invariants_strong_ti():
+    """A synthetic strong-TI-like case: all three axes give the same k_i=0
+    XOR k_i=pi split (nu0=1), and every k_i=pi plane happens to be trivial
+    -- e.g. Yu et al. 2011's own reported Bi2Se3 result (kz=0 nontrivial,
+    kz=pi trivial) generalized isotropically for this synthetic check."""
+    z = {(1, 0.0): 1, (1, 0.5): 0, (2, 0.0): 1, (2, 0.5): 0, (3, 0.0): 1, (3, 0.5): 0}
+    result = wilson.combine_3d_invariants(z)
+    assert result["nu0"] == 1
+    assert result["nu"] == (0, 0, 0)
+    assert result["nu0_by_axis"] == (1, 1, 1)
+
+
+def test_combine_3d_invariants_trivial():
+    z = {(1, 0.0): 0, (1, 0.5): 0, (2, 0.0): 1, (2, 0.5): 1, (3, 0.0): 0, (3, 0.5): 0}
+    result = wilson.combine_3d_invariants(z)
+    assert result["nu0"] == 0
+    assert result["nu"] == (0, 1, 0)
+
+
+def test_combine_3d_invariants_disagreeing_nu0_raises():
+    """axis 1 gives nu0=1 (1 XOR 0), axis 2 gives nu0=0 (1 XOR 1) -- FKM eq. 2
+    guarantees these must agree, so a disagreement must raise, not silently
+    pick one axis's answer."""
+    z = {(1, 0.0): 1, (1, 0.5): 0, (2, 0.0): 1, (2, 0.5): 1, (3, 0.0): 0, (3, 0.5): 0}
+    with pytest.raises(ValueError, match="disagrees across axes"):
+        wilson.combine_3d_invariants(z)
