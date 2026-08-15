@@ -175,7 +175,20 @@ def test_matches_analytic_bloch_sphere_quantum_geometry():
     docstring. Single-band (nst=1), so there is no gauge freedom and
     Loewdin normalization is a no-op (every self-overlap is exactly 1);
     this instead exercises quantum_distance()/the centered stencil against
-    a genuine analytic target."""
+    a genuine analytic target.
+
+    The curvature is an independent absolute pin on elkpy's Berry-phase
+    SIGN convention (parsers.berry._berry_phase), derived here rather than
+    calibrated to the code: with A = i<u|grad u> (Xiao, Chang & Niu),
+    A_phi = i<u|d_phi u> = -sin^2(theta/2) and A_theta = 0, so
+
+        Omega_{theta,phi} = d_theta A_phi - d_phi A_theta = -(1/2) sin(theta),
+
+    which integrates over the sphere to -2*pi -- the spin-1/2 monopole
+    charge, Berry phase = -(1/2) * solid angle. Note the minus: this test
+    asserted +(1/2)sin(theta) while parsers.berry omitted the
+    King-Smith--Vanderbilt/Resta negation, i.e. it had been calibrated to
+    the code rather than to Provost & Vallee. See docs/design.md #22."""
     theta0, phi0 = np.pi / 3, 0.4
     dk = 1e-4
 
@@ -187,7 +200,7 @@ def test_matches_analytic_bloch_sphere_quantum_geometry():
     assert result["g"][0, 0] == pytest.approx(0.25, abs=1e-5)
     assert result["g"][1, 1] == pytest.approx(0.25 * np.sin(theta0) ** 2, abs=1e-5)
     assert result["g"][0, 1] == pytest.approx(0.0, abs=1e-5)
-    assert result["berry_curvature"] == pytest.approx(0.5 * np.sin(theta0), abs=2e-4)
+    assert result["berry_curvature"] == pytest.approx(-0.5 * np.sin(theta0), abs=2e-4)
 
 
 def test_offdiagonal_metric_centered_stencil_converges_quadratically():

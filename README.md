@@ -11,9 +11,10 @@ wraps Elk's `elk.in`/task-number workflow in a small, `pyqula`-style object mode
 (`Structure`, `Calculation`), and adds physics Elk itself does not provide on top:
 per-species spin-orbit coupling scaling, the full quantum geometric tensor (Berry
 curvature/Chern numbers and the quantum metric) via a Wilson-loop method, fast
-eigenstate/wavefunction-overlap queries at arbitrary k-points, and atom-projection,
+eigenstate/wavefunction-overlap queries at arbitrary k-points, atom-projection,
 orbital-character (s/p/d/f), angular momentum, and spin operators applicable to those
-wavefunctions.
+wavefunctions, and optical (velocity) matrix elements with the circular dichroism and
+Kubo-form quantum geometry built from them.
 
 ```python
 from elkpy.structure import Structure
@@ -43,13 +44,19 @@ python3 -m pip install -e .        # add .[ase] for Structure.from_ase()/to_ase(
 - Per-species scaling of the spin-orbit term $\hat H_{\rm soc}(r)=f_{\rm soc}(r)\,\hat{\mathbf L}\cdot\boldsymbol\sigma$, rather than one global scale for the whole cell [[notebook]](notebooks/04_per_species_soc_scaling.ipynb)
 
 ## Topological characterization ##
-- Berry curvature $F_{12}(\mathbf k)=\partial_1A_2-\partial_2A_1$ and Chern numbers $c_n=\frac1{2\pi i}\int_{T^2}\!d^2k\,F_{12}\in\mathbb Z$, via a gauge-invariant Wilson-loop discretization [[notebook]](notebooks/05_berry_curvature.ipynb)
+- Berry curvature $F_{12}(\mathbf k)=\partial_1A_2-\partial_2A_1$ with $A_\mu=i\langle n|\partial_\mu n\rangle$, and Chern numbers $c_n=\frac1{2\pi}\int_{T^2}\!d^2k\,F_{12}\in\mathbb Z$, via a gauge-invariant Wilson-loop discretization in the standard sign convention [[notebook]](notebooks/05_berry_curvature.ipynb)
 - Berry curvature at an arbitrary k-point with no periodic mesh required, e.g. to resolve individual valleys of a 2D material [[notebook]](notebooks/05_berry_curvature.ipynb)
 - The $\mathbb Z_2$ invariant $\nu\in\{0,1\}$ of a time-reversal-invariant 2D insulator, via Wannier-charge-center pumping and the non-Abelian Wilson loop $D(k_2)=\prod_iU(F_i)$, distinguishing an ordinary insulator from a quantum spin Hall insulator [[notebook]](notebooks/12_z2_invariant.ipynb)
 - The full 3D strong/weak classification $(\nu_0;\nu_1\nu_2\nu_3)$ of a 3D time-reversal-invariant insulator, from the $Z_2$ invariant of each of the Brillouin zone's six time-reversal-invariant planes, distinguishing an ordinary insulator from a strong or weak topological insulator [[notebook]](notebooks/13_z2_invariant_3d.ipynb)
 
 ## Quantum geometry ##
 - The full quantum geometric tensor $Q_{ab}=g_{ab}-\tfrac i2F_{ab}$ at an arbitrary k-point: Berry curvature $F_{ab}$ *and* the quantum metric $g_{ab}$ (Fubini-Study distance between neighbouring Bloch states), from the same wavefunction-overlap queries used for eigenstates below [[notebook]](notebooks/07_quantum_geometry.ipynb)
+- The same tensor in its Kubo (sum-over-states) form $T_{ab}=\sum_{n\in W,\,m\notin W}\langle n|v_a|m\rangle\langle m|v_b|n\rangle/(\varepsilon_n-\varepsilon_m)^2$, needing no k-derivative at all — an independent route to $g_{ab}=\mathrm{Re}\,T_{ab}$ and $F_{ab}=-2\,\mathrm{Im}\,T_{ab}$ [[notebook]](notebooks/14_optical_matrix_elements.ipynb)
+
+## Optical response ##
+- Momentum (velocity) matrix elements $p^a_{nm}=\langle\psi_n|(-i\nabla+\tfrac1{4c^2}[\vec\sigma\times\nabla V_s])_a|\psi_m\rangle$ at an arbitrary k-point — the optical dipole matrix elements, and, for a local Kohn-Sham potential in atomic units, the velocity operator $\hat{\mathbf v}=\hat{\mathbf p}$ [[notebook]](notebooks/14_optical_matrix_elements.ipynb)
+- Circular dichroism $\eta=(|P_+|^2-|P_-|^2)/(|P_+|^2+|P_-|^2)$ of an interband transition, $P_\pm=p^x_{cv}\pm ip^y_{cv}$ — the valley-selective optical selection rule of a gapped honeycomb lattice [[notebook]](notebooks/14_optical_matrix_elements.ipynb)
+- Band velocities $\mathbf v_n=\partial\varepsilon_n/\partial\mathbf k$ as the diagonal of the same operator, exact by Hellmann-Feynman [[notebook]](notebooks/14_optical_matrix_elements.ipynb)
 
 ## Eigenstates and wavefunction overlaps ##
 - Second-variational energies and eigenvectors at an arbitrary k-point [[notebook]](notebooks/06_eigenstate_session.ipynb)
@@ -122,7 +129,7 @@ a genuinely new prediction about the metric, not derivable from curvature alone:
 ```python
 result = hbn.get_quantum_geometry(path, ist0, ist1, directions=(1, 2), dk=0.01)
 result[0]["g"]                # (2,2) quantum metric [[g11,g12],[g12,g22]], Bohr^2
-result[0]["berry_curvature"]  # Bohr^-2, same convention as get_berry_curvature_path
+result[0]["berry_curvature"]  # Bohr^2, same convention as get_berry_curvature_path
 ```
 ![Alt text](images/hbn_quantum_geometry.png?raw=true "Quantum metric and Berry curvature of monolayer h-BN along Gamma-K-M-K'-Gamma")
 
@@ -192,6 +199,20 @@ with wse2.eigenstate_session() as session:
 ```
 ![Alt text](images/wse2_spin_valley.png?raw=true "Band structure of monolayer WSe2 along Gamma-K-M-K'-Gamma colored by Sz, showing the K/K' sign flip")
 
+## Optical matrix elements: valley-selective circular dichroism of monolayer h-BN ##
+The band-edge transition at the zone corner absorbs one circular polarization only, with
+opposite handedness at the two inequivalent valleys, $\eta(K')=-\eta(K)$ (Yao, Xiao & Niu,
+PRB 77, 235406 (2008); Xiao, Liu, Feng, Xu & Yao, PRL 108, 196802 (2012)):
+```python
+from elkpy.parsers import optical
+
+with hbn.eigenstate_session() as session:
+    for k in path:                                 # path through Gamma-K-M-K'-Gamma
+        m = session.momentum(k)                    # energies AND p^a_nm, one diagonalisation
+        eta.append(optical.circular_polarization(m.pmat, ist1, ist1 + 1)["eta"])
+```
+![Alt text](images/hbn_circular_dichroism.png?raw=true "Band structure of monolayer h-BN along Gamma-K-M-K'-Gamma with the conduction band colored by the optical selectivity eta, showing the K/K' sign flip")
+
 ## Also: Elk's standard DFT workflow (band structure, DOS, charge density) ##
 ```python
 from elkpy.structure import Structure
@@ -208,7 +229,7 @@ points, density = calc.get_density(grid=(24, 24, 24))  # n(r) = sum_i^occ |psi_i
 ![Alt text](images/si_density.png?raw=true "Charge density slice of bulk silicon")
 
 # Notebooks #
-Eleven notebooks under [`notebooks/`](notebooks), one per feature area above, each
+Fourteen notebooks under [`notebooks/`](notebooks), one per feature area above, each
 executed end-to-end against a real compiled Elk binary and checked in with its actual
 output (the DFPT phonon notebook is the exception -- left unexecuted with a note,
 since a single call takes ~11-13 minutes). Listed new-physics-first, matching
@@ -225,6 +246,9 @@ is the place to actually start:
 | [`09_spin_operators.ipynb`](notebooks/09_spin_operators.ipynb) | Spin operators, spin-valley locking in monolayer WSe2 | yes |
 | [`10_orbital_projection.ipynb`](notebooks/10_orbital_projection.ipynb) | Orbital-character (s/p/d/f) operators, p vs. s character across bands of monolayer h-BN | yes |
 | [`11_angular_momentum.ipynb`](notebooks/11_angular_momentum.ipynb) | Angular momentum operators, orbital valley locking in monolayer WSe2 | yes |
+| [`12_z2_invariant.ipynb`](notebooks/12_z2_invariant.ipynb) | The 2D $\mathbb Z_2$ invariant via Wannier-charge-center pumping | yes |
+| [`13_z2_invariant_3d.ipynb`](notebooks/13_z2_invariant_3d.ipynb) | The 3D strong/weak $(\nu_0;\nu_1\nu_2\nu_3)$ classification | yes |
+| [`14_optical_matrix_elements.ipynb`](notebooks/14_optical_matrix_elements.ipynb) | Optical matrix elements, circular dichroism and Kubo quantum geometry of monolayer h-BN | yes |
 | [`01_getting_started.ipynb`](notebooks/01_getting_started.ipynb) | Ground state, band structure, density of states | -- |
 | [`02_relaxation_forces_and_properties.ipynb`](notebooks/02_relaxation_forces_and_properties.ipynb) | Forces, relaxation, effective mass, density, `run_tasks()` | -- |
 | [`03_phonon_dispersion_and_dos.ipynb`](notebooks/03_phonon_dispersion_and_dos.ipynb) | Phonon dispersion/DOS via DFPT | -- |

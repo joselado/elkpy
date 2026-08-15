@@ -391,12 +391,21 @@ every flux value but leaves gauge invariance exactly intact (the phase-cancellat
 algebra is identical either way), so a conjugation-sign bug would pass this test
 undetected. The sign of the Python-side arithmetic (`parsers/berry.py`) is instead
 pinned directly against FHS eq. 8 with hand-constructed overlap matrices of known
-target phase (`test_flux_sign_matches_fhs_eq8_*`); the Fortran overlap convention
-(`M(a,b)=conjg(oq(b,a))` in `elkpy_berry.f90`) is pinned by direct derivation from
-`genolpq.f90`'s documented BLAS (`zgemv`) semantics, cross-checked twice, rather than
-verified at runtime — no test exercises the real Fortran-to-Python sign chain
-end-to-end, since Si's Chern number is 0 regardless of sign ($0=-0$) and no other
-topological reference case is used here. Also verified against a real compiled binary:
+target phase (`test_flux_sign_matches_fhs_eq8_*`).
+
+**Sign convention** (§22): elkpy reports the Berry phase
+$\gamma=-\mathrm{Im}\ln\prod_j\langle u_j|u_{j+1}\rangle$, i.e. minus the argument of
+FHS eq. 8's link product — the King-Smith–Vanderbilt/Resta negation, which puts
+curvature and Chern numbers in the standard $\mathbf A=i\langle u|\nabla_{\mathbf k}u\rangle$,
+$\Omega=\nabla\times\mathbf A$ convention (Xiao, Chang & Niu, RMP 82, 1959 (2010)). It is
+applied in exactly one place, `parsers.berry._berry_phase()`, which every consumer routes
+through. That negation was **missing until §22's independent Kubo-form route exposed it**;
+see §22 for the derivation, the three ways it was confirmed, and why every check here had
+been blind to it. The Fortran overlap convention (`M(a,b)=conjg(oq(b,a))` in
+`elkpy_berry.f90`), originally pinned only by derivation from `genolpq.f90`'s documented
+BLAS (`zgemv`) semantics, is now **confirmed at runtime**: the same factor of $-1$ appeared
+in pure Python and end-to-end through the Fortran, which localizes the error entirely in the
+Python step and leaves the Fortran convention validated. Also verified against a real compiled binary:
 bulk Si's 4 valence bands (a trivial insulator) give a Chern number of $\sim 10^{-19}$
 (floating-point zero) on every slice of a $4\times4\times4$ mesh, with the
 admissibility diagnostic comfortably inside FHS's validity regime
@@ -476,7 +485,7 @@ notes was still missing, though it only catches a discrepancy *between* the two 
 not a sign error shared by both. Also exercised on monolayer h-BN (broken sublattice
 inversion symmetry, so K and K′ are physically inequivalent, unlike Si): the occupied
 manifold's curvature vanishes at Γ and M and is exactly antisymmetric between K and K′
-($\Omega(\mathrm K)=8.568$, $\Omega(\mathrm K')=-8.568$ Bohr$^{-2}$, agreeing to 0.01%) —
+($\Omega(\mathrm K)=-8.568$, $\Omega(\mathrm K')=+8.568$ Bohr$^2$, agreeing to 0.01%; signs in the standard convention of §22 — this measurement predates that fix, which negated both) —
 the sign flip time-reversal symmetry requires for a non-magnetic crystal,
 $\Omega(-k)=-\Omega(k)$, and a much sharper discriminating check than Si's Chern number
 (which is $0=-0$ either way). This also surfaced two real usage pitfalls worth noting
@@ -497,7 +506,7 @@ result = calc.get_berry_curvature_path(
     [(0.0, 0.0, 0.0), (1 / 3, 1 / 3, 0.0)],  # Gamma, K -- fractional coordinates
     1, 4, directions=(1, 2), dk=0.005,
 )
-result[0]["curvature"]  # Bohr^-2, one dict per requested k-point
+result[0]["curvature"]  # Bohr^2, one dict per requested k-point
 ```
 
 `ist0`/`ist1` must be a contiguous, 1-indexed band window (e.g. the occupied bands)
@@ -759,7 +768,7 @@ result = calc.get_quantum_geometry(
     1, 4, directions=(1, 2), dk=0.01,
 )
 result[1]["g"]                # (2,2) real array [[g11,g12],[g12,g22]], Bohr^2
-result[1]["berry_curvature"]  # Bohr^-2, identical convention to get_berry_curvature_path
+result[1]["berry_curvature"]  # Bohr^2, identical convention to get_berry_curvature_path
 result[1]["Q"]                # (2,2) complex array, Q = g - (i/2)*berry_curvature*[[0,1],[-1,0]]
 ```
 
@@ -1459,3 +1468,249 @@ $\sim45$ minutes the six-plane sweep already took) or something else was not res
 and is left here as an open, explicitly documented question rather than silently
 dropped or chased further without the compute budget to do so properly. No test asserts
 a result for this structure.
+
+## 22. Momentum/velocity matrix elements, optical selection rules, and Kubo-form quantum geometry
+
+`Calculation.get_momentum_matrix(k)` / `EigenstateSession.momentum(k)` (task 9002's
+`MOMENTUM` query, `patches/0007-momentum-matrix-elements.patch`, `elkpy_momentum` in
+`src/elkpy_eigenstates.f90`) return the momentum matrix elements
+
+$$ p^a_{nm}(\mathbf k)=\langle\psi_{n\mathbf k}|\Big(-i\nabla+\tfrac{1}{4c^2}\big[\vec\sigma\times\nabla V_s(\mathbf r)\big]\Big)_a|\psi_{m\mathbf k}\rangle,\qquad a=x,y,z, $$
+
+for every pair of second-variational states at an arbitrary $k$-point, together with the
+eigenvalues of that same diagonalisation. In Hartree atomic units ($\hbar=m_e=1$) and for
+Elk's **local** Kohn-Sham potential, $\hat{\mathbf v}=\hat{\mathbf p}$ numerically, so this
+is equally the velocity operator; the $(1/4c^2)[\vec\sigma\times\nabla V_s]$ term is the
+spin-orbit correction that keeps that identity true under `spinorb=True` (Rathgen &
+Katsnelson, *Physica Scripta* **T109**, 170 (2004), cited in `genpmatk.f90`'s own header).
+
+This is the missing *primitive* rather than a single new observable. §16–§19 built a family
+of operators at arbitrary $k$ (atom, $\ell$-channel, spin, orbital angular momentum), and
+§13/§15 built a family of *geometric* quantities from finite-difference wavefunction
+overlaps. The velocity operator is what connects them: it turns the geometric quantities
+into sum-over-states expressions that need no $k$-derivative at all, and it is the matrix
+element every optical response is built from.
+
+**Fortran side: almost nothing new.** `genpmatk.f90` is used unmodified — the same
+subroutine Elk's own task-120 `PMAT.OUT` export (`putpmat.f90`) calls. `putpmat` reads
+previously-diagonalised *mesh* eigenvectors via `getevecfv`/`getevecsv`, so it only ever
+knows mesh points; `elkpy_momentum` substitutes a fresh on-the-fly diagonalisation plus a
+`genwfsv` expansion, the same substitution patch 0002 already makes for the arbitrary-$k$
+Berry-curvature path task (§13). Two `genwfsv` flags differ from `elkpy_wfcorner`'s and are
+load-bearing, not stylistic:
+
+- `tsh=.true.` — muffin-tin part in spherical **harmonics**, not spherical coordinates,
+  because `genpmatk` applies `gradzfmt` to it, which expects $(\ell,m)$ coefficients.
+- `tgp=.true.` — interstitial part as $G+p$ coefficients, because `genpmatk` takes the
+  gradient in reciprocal space itself. With `tgp=.true.` the `ngridg_`/`igfft_` arguments
+  are unused inside `wfirsv.f90`, so this file's coarse-grid `ngdgc`/`igfc` is equivalent to
+  `putpmat`'s fine-grid `ngridg`/`igfft`; `genpmatk`'s own interstitial FFTs are on the
+  coarse grid either way.
+
+`genpmatk`'s `pmat` argument is hard-dimensioned `nstsv`, so there is **no band-window
+variant to expose** — all states are always computed and any windowing happens in Python.
+That suits the intended use: the Kubo sums below run over states *outside* the window of
+interest, so a windowed export would be the wrong object. The eigenvalues travel with the
+matrix elements for the same reason §16's `PROJECTION` returns every atom at once: those
+sums' energy denominators must come from the same diagonalisation as the matrix elements,
+and pairing this response with a separate `EIGENSTATES` query would reintroduce exactly the
+degenerate-subspace basis ambiguity §14 warns about.
+
+**Index convention, and why it is not a guess.** `pmat[a][n, m]` $=\langle\psi_n|p_a|\psi_m\rangle$
+— the conjugated (bra) state on the row. `genpmatk.f90`'s header defines
+$P_{ij}=\int\Psi_i^*(-i\nabla+\ldots)\Psi_j$, and its accumulation is `zgemv('C', ...)` into
+`pmat(1,jst,i)`, placing the conjugated factor on the first index. This matters because a
+transposed `pmat` would flip *both* the Kubo Berry curvature and the circular polarization
+below, so no consistency check between the two could catch it.
+
+**Hermiticity is not evidence here.** Unlike §16/§18/§19's reductions, `genpmatk` enforces
+Hermiticity by construction (upper triangle computed, lower set by conjugation, diagonal
+forced real), so asserting it would say nothing about this export path. The checks with
+teeth are the two below.
+
+### Optical selection rules: valley-selective circular dichroism
+
+With $a,b$ the two in-plane Cartesian axes, the circular-basis interband matrix elements
+$P_\pm=p^a_{cv}\pm i\,p^b_{cv}$ give the degree of circular polarization
+
+$$ \eta(\mathbf k)=\frac{|P_+|^2-|P_-|^2}{|P_+|^2+|P_-|^2}, $$
+
+the normalized difference in absorption strength between left- and right-circularly
+polarized light ($\eta=+1$: couples only to $\sigma^+$; $\eta=-1$: only to $\sigma^-$). In a
+gapped honeycomb lattice the three-fold rotation symmetry at the zone corner forces
+$|\eta|=1$ there, with opposite sign at the two inequivalent valleys — valley-selective
+circular dichroism (Yao, Xiao & Niu, PRB **77**, 235406 (2008); Xiao, Liu, Feng, Xu & Yao,
+PRL **108**, 196802 (2012) — the same paper §17/§19 already cite for $S_z(K)=-S_z(K')$ and
+$L_z(K)=-L_z(K')$; Cao *et al.*, Nat. Commun. **3**, 887 (2012) for the measurement).
+
+`parsers.optical.circular_polarization` accepts a single 1-based band index, an inclusive
+`(lo, hi)` range, or an iterable, and **sums $|P_\pm|^2$ over all $(c,v)$ pairs** when given
+a group — the correct handling for a degenerate manifold, where no individual pair's matrix
+element is separately meaningful. The converse is a real trap: lumping two *non-degenerate*
+bands together (e.g. both partners of a spin-orbit-split valence-band top) averages their
+separate selectivities and dilutes $\eta$, which is a physically different question from the
+band-edge transition's own selectivity.
+
+### Kubo-form quantum geometry, and an independent check on §13/§15
+
+Second-order perturbation theory in $\mathbf k$ replaces the derivative
+$|\partial_a u_n\rangle$ by a sum over the other states,
+$\langle u_m|\partial_a u_n\rangle=\langle m|v_a|n\rangle/(\varepsilon_n-\varepsilon_m)$ for
+$m\neq n$, converting the quantum geometric tensor into velocity matrix elements alone — no
+$k$-derivative, no finite difference, no $dk$. Writing
+
+$$ T_{ab}=\sum_{n\in W}\sum_{m\notin W}\frac{\langle n|v_a|m\rangle\langle m|v_b|n\rangle}{(\varepsilon_n-\varepsilon_m)^2}, $$
+
+$$ g_{ab}=\mathrm{Re}\,T_{ab},\qquad F_{ab}=-2\,\mathrm{Im}\,T_{ab},\qquad Q_{ab}=g_{ab}-\tfrac i2 F_{ab}. $$
+
+Pairs with both states inside the window $W$ do not appear: the window's geometric tensor is
+a property of the projector onto $W$, blind to how $W$ is internally resolved — the same
+multi-band (non-Abelian trace) quantity §13's Wilson loop and §15's overlap stencil compute.
+`parsers.optical.kubo_quantum_geometry` returns the same `{"g", "berry_curvature", "Q"}`
+keys and shapes `parsers.quantum_geometry.compute_quantum_geometry` does, so the two are
+directly comparable. Both are in Bohr² (with $p$ in atomic units and $\varepsilon$ in
+Hartree).
+
+**Truncation.** The $m$-sum runs only over states Elk computed, i.e. up to `nstsv`, which
+`nempty` sets; Elk's default leaves few empty states, so raise it
+(`Calculation(extra_blocks={"nempty": [...]})`) and confirm stability between two values.
+Core states are not in `nstsv` at all and are omitted entirely, suppressed by
+$1/(\Delta\varepsilon)^2$ but not zero. For the metric's *diagonal* components every term is
+$|v^a_{nm}|^2/(\Delta\varepsilon)^2\geq0$, so under-convergence there is a clean
+underestimate; that monotonicity does **not** extend to $g_{ab}$ ($a\neq b$) or to $F_{ab}$,
+whose terms carry either sign. Agreement with §13/§15 is therefore a few-percent claim, not
+a machine-precision one.
+
+A degeneracy guard raises `ValueError` if any window/outside pair is closer in energy than
+`degeneracy_tol`: the window would not be a well-separated band group, its projector would be
+discontinuous in $k$, and the $1/(\Delta\varepsilon)^2$ weight would be dominated by an
+arbitrarily-split near-degenerate pair. Fails loud rather than clipping, matching
+`parsers.quantum_geometry._hermitian_inv_sqrt`.
+
+### The Berry-curvature sign convention, fixed by this cross-check
+
+Adding an independent route to the Berry curvature exposed a sign error in §13's Python
+arithmetic, which this change corrects: **elkpy now uses the standard convention
+$\mathbf A=i\langle u|\nabla_{\mathbf k}u\rangle$, $\Omega=\nabla\times\mathbf A$ (Xiao,
+Chang & Niu, RMP 82, 1959 (2010)) everywhere** — Wilson-loop curvature (§13), quantum-geometry
+curvature (§15), Chern numbers, and the Kubo form here.
+
+**What was wrong.** With link variables
+$U(\mathbf k\to\mathbf k')=\langle u(\mathbf k)|u(\mathbf k')\rangle/|\cdot|$, expanding
+$\langle u|u+\boldsymbol\delta\cdot\nabla u\rangle=1+\boldsymbol\delta\cdot\langle u|\nabla u\rangle=e^{-i\mathbf A\cdot\boldsymbol\delta}$
+makes the product around a closed counterclockwise loop $e^{-i\oint\mathbf A\cdot d\mathbf l}$,
+so its *argument* is minus the Berry phase. The standard discrete Berry phase carries that
+explicit negation, $\gamma=-\mathrm{Im}\ln\prod_j\langle u_j|u_{j+1}\rangle$
+(King-Smith–Vanderbilt/Resta, PRB 47, 1651(R) (1993)); `parsers.berry`'s `flux/area` step
+omitted it, so `curvature` was $-\Omega$ and `chern_number` carried a flipped sign.
+
+**How it was found and confirmed**, three independent ways:
+
+1. *Synthetic, analytic.* On a massive Dirac model, where $\mathbf p=\partial H/\partial\mathbf k$
+   is exact, the Kubo curvature matches direct numerical differentiation of
+   $\Omega=-2\,\mathrm{Im}\langle\partial_x u|\partial_y u\rangle$ to 10 significant figures,
+   while `parsers.berry`'s link arithmetic on the identical eigenvectors gave exactly minus that.
+2. *End-to-end against a real binary.* On monolayer h-BN's occupied manifold the old
+   `get_berry_curvature_path()` gave $+8.101$ at $K$ where the Kubo sum gives $-8.194$ — the same
+   factor of $-1$, so the discrepancy was entirely in that Python step, which **confirmed the
+   Fortran `moverlap`/`genolpq` conjugation convention** (previously resting only on a `zgemv`
+   BLAS-semantics derivation with no runtime test).
+3. *An analytic pin that had itself been mis-calibrated.* §15's Provost–Vallée spin-1/2 test
+   asserted $F_{\theta\phi}=+\tfrac12\sin\theta$. Deriving it properly:
+   $A_\phi=i\langle u|\partial_\phi u\rangle=-\sin^2(\theta/2)$, $A_\theta=0$, so
+   $\Omega_{\theta\phi}=\partial_\theta A_\phi=-\tfrac12\sin\theta$, which integrates over
+   the sphere to $-2\pi$ — the spin-$\tfrac12$ monopole charge, Berry phase $=-\tfrac12\times$
+   solid angle. The old test value had been calibrated to the code rather than to the paper; it
+   now matches the derivation.
+
+**Why it survived until now.** Every existing check was sign-blind: bulk Si's Chern number is
+$0=-0$; the h-BN benchmark is a *relative* $K/K'$ antisymmetry; $Z_2$ is a crossing-count parity;
+§15's $\det g\geq(F_{12}/2)^2$ is even in $F$; and `test_berry_gauge_invariance.py`'s sign pins
+pinned the FHS eq. 8 *arithmetic*, not its identification with $\Omega$. Nothing previously
+reported was wrong except the overall sign of curvature and Chern numbers.
+
+**Scope of the fix.** One place: `parsers.berry._berry_phase()`, which every consumer (mesh
+curvature, path curvature, Chern number, `parsers.quantum_geometry`) now routes through, so the
+convention is set once and cannot diverge again. $Z_2$ (§20/§21) is untouched — `parsers.wilson`
+builds its own Wilson loop from `parse_berry_overlaps()`'s raw overlaps and never consumes
+`flux`, and a crossing-count parity is invariant under reflecting the WCC curves anyway.
+
+**Relationship to pyqula.** §13's path mode was written to follow
+[`pyqula`](https://github.com/joselado/pyqula)'s `berry_curvature`, and pyqula's arithmetic
+carries the same omission: `topologytk/overlap.py`'s `uij(wf1, wf2)[i,j] = <wf1_i|wf2_j>` is the
+same $M(a,b)$ convention, and `topology.py` builds the identical counterclockwise link product
+then takes `arctan2(Im det, Re det) / (4 dk^2)` with no negation. So elkpy's curvature and Chern
+numbers now differ in sign from pyqula's. That is a deliberate choice of the published convention
+over cross-project agreement — worth propagating to pyqula rather than reverting here.
+
+### How to use in code
+
+```python
+hbn = Structure(HBN_AVEC, HBN_SPECIES).get_calculation(
+    "hbn", xc="PW", ngridk=(6, 6, 1), rgkmax=7.0,
+    extra_blocks={"nempty": [12]},  # states for the Kubo sums to run over
+)
+hbn.get_energy()
+
+from elkpy.parsers import optical
+
+with hbn.eigenstate_session() as session:
+    m = session.momentum((1 / 3, 1 / 3, 0))        # energies + p^a_nm at K
+
+    # valley-selective circular dichroism of the band-edge transition
+    optical.circular_polarization(m.pmat, valence=ist1, conduction=ist1 + 1)["eta"]
+
+    # the same Berry curvature get_berry_curvature_path() computes, by a
+    # completely different route -- same sign convention, directly comparable
+    optical.kubo_berry_curvature(m.energies, m.pmat, ist0, ist1, directions=(1, 2))
+    optical.kubo_quantum_metric(m.energies, m.pmat, ist0, ist1, directions=(1, 2))
+
+    # band velocity = dE_n/dk exactly (Hellmann-Feynman, local potential)
+    optical.band_velocity(m.pmat, ist=ist1)
+
+# calc.get_momentum_matrix(kpath=..., npoints=...) does the session-reuse loop for you
+# (same convention as §16's get_atom_projection()), returning a list of dicts.
+path = hbn.get_momentum_matrix(kpath="GKM", npoints=60)
+```
+
+Note that `directions` in `parsers.optical` indexes **Cartesian** axes ($1,2,3=x,y,z$),
+because that is what `genpmatk`'s three components are — unlike the identically-named
+argument of `get_berry_curvature()`/`get_quantum_geometry()`, which indexes **reciprocal
+lattice** axes. The two coincide for the `(1, 2)` default on a $c$-axis-out-of-plane 2D cell
+(graphene/h-BN/WSe₂, where $\mathbf b_1,\mathbf b_2$ span $xy$, so both mean "the $z$
+component"), not in general.
+
+### Verification against a real compiled binary
+
+`tests/test_calculation_momentum.py`, on monolayer h-BN:
+
+- **Band velocity against the eigenvalue slope.** The Hellmann-Feynman identity
+  $\mathbf v_n=\partial\varepsilon_n/\partial\mathbf k$ is exact for a local potential, and
+  the right-hand side comes from eigenvalues alone — no matrix-element machinery — so this
+  exercises the whole export path (matching, `genwfsv` expansion, `genpmatk` reduction, token
+  protocol, parser packing) against a genuinely separate code path. Stepping in *fractional*
+  coordinates differentiates along a reciprocal lattice vector, so the slope is
+  $\mathbf v\cdot\mathbf b_i$, not $v_i$ — one dot product, and it exercises all three
+  Cartesian components at once.
+- **Valley-selective circular dichroism.** $\eta(K)=-\eta(K')$ with $|\eta|>0.98$ — measured
+  $\eta(K)=-1.000000$, $\eta(K')=+1.000000$ to six figures, the $C_3$-enforced perfect
+  selectivity. The relative sign is the published sign-of-the-effect prediction; the absolute
+  sign depends on this structure's own conventions (which sublattice carries B vs N, lattice
+  handedness), as with §17's $S_z(K)$.
+- **Kubo curvature against the Wilson loop**, at $K$ and $K'$, agreeing to 5% in both
+  magnitude and sign. This is the check that exposed the missing negation above: it
+  originally failed with a clean factor of $-1$.
+- **`nempty` stability**, `nempty=12` vs `nempty=20`, so the truncation is checked rather
+  than assumed.
+- **Kubo metric against `get_quantum_geometry()`'s** finite-difference stencil at $K$ (looser
+  tolerance: the Kubo metric truncates at `nstsv`, the finite-difference one carries
+  $O(dk^2)$ error plus `genolpq`'s Löwdin-corrected truncation floor).
+
+`tests/test_parsers_optical.py` pins the arithmetic on synthetic data, ahead of any Elk run,
+using the massive Dirac model $H_\tau=v(\tau k_x\sigma_x+k_y\sigma_y)+\Delta\sigma_z$ where
+$\mathbf p=\partial H/\partial\mathbf k$ is exact: $\eta=\pm1$ at the two valleys and
+decaying away from them; the Kubo curvature against direct differentiation (the sign pin) and
+against the closed form $\pm1/(2\Delta^2)$ at $k=0$ (the magnitude pin), plus the two-band sum
+rule $\sum_n\Omega_n=0$; the metric against its closed form $\mathbb 1/(4\Delta^2)$, its
+positive-semi-definiteness, and $\det g\geq(F/2)^2$ saturating in this two-band case; and both
+guard conditions (a window not separated from the outside, a window covering every state).

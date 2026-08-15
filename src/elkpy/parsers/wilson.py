@@ -76,6 +76,16 @@ def wilson_loop_wannier_centers(link_overlaps):
     |lambda_m| = 1 exactly since D is a product of unitary matrices).
     x_m = theta_m / (2*pi) mod 1 gives the actual hybrid Wannier center
     position, in units of the loop direction's lattice vector spacing.
+
+    Sign note: these angles keep the RAW link-product phase and are
+    deliberately not routed through parsers.berry._berry_phase (which
+    negates, setting elkpy's Berry-curvature convention -- docs/design.md
+    #22). Under that convention the WCC curves here are reflected,
+    theta -> -theta, relative to the pump loop's Berry phase. z2_from_
+    wannier_centers() counts crossings of a largest-gap reference curve
+    and returns their PARITY, which is invariant under reflecting every
+    curve at once -- so Z2 is unaffected either way, and the raw angles
+    are kept because eq. 6 states them that way.
     """
     d = None
     for f in link_overlaps:

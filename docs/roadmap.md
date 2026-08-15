@@ -114,6 +114,19 @@ in this build) — needed a small new Fortran task
 Python after all, since the two Wilson-loop directions being exact `ngridk`
 mesh generators let elkpy skip the shell search entirely.
 
+**The one this tier named explicitly has now landed too**: momentum matrix elements —
+`get_momentum_matrix()` / `EigenstateSession.momentum()` (task 9002's `MOMENTUM` query,
+`patches/0007-momentum-matrix-elements.patch`), see `docs/design.md` §22 /
+`docs/physics.tex` Part XI. Not, in the end, via task 120's `PMAT.OUT` file export as
+sketched above: task 120 writes matrix elements only for the ground-state *mesh*
+$k$-points, whereas everything built on this (§22's circular dichroism, the Kubo-form
+quantum geometric tensor) wants an arbitrary $k$. Upstream's `genpmatk` — the subroutine
+task 120 itself calls — turned out to be directly reusable unmodified once fed a fresh
+on-the-fly diagonalisation instead of file-backed mesh eigenvectors, the same substitution
+the Berry-curvature path task already makes, so this is a ~40-line additive subroutine
+rather than a new file. Everything above the matrix elements is pure Python
+(`parsers/optical.py`).
+
 **A second landed for real**: `get_atom_projection()` (atom-projection
 operators, task 9002's `PROJECTION` query) — see `docs/design.md` §16 /
 `docs/physics.tex` (Part V). Elk's own `dos`/`bandstr` tasks already compute

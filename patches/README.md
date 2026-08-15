@@ -17,6 +17,7 @@ to make it a quick diff-checklist instead of a re-read of the raw patches.
 | [0004](0004-atom-projection.patch) | — | `src/elkpy_eigenstates.f90` (elkpy's own file, added by 0003) | New `elkpy_atomproj` subroutine + a call from `elkpy_eigenstate_session`'s query loop | `PROJECTION` query on the task-9002 session — per-atom muffin-tin projection operators |
 | [0005](0005-orbital-projection.patch) | — | `src/elkpy_eigenstates.f90` (elkpy's own file, added by 0003) | New `elkpy_orbitalproj` subroutine + a call from `elkpy_eigenstate_session`'s query loop | `ORBITAL` query on the task-9002 session — per-atom, l-resolved (s/p/d/f) muffin-tin projection operators |
 | [0006](0006-angular-momentum.patch) | — | `src/elkpy_eigenstates.f90` (elkpy's own file, added by 0003) | New `elkpy_angmomproj` subroutine (reuses upstream `lopzflm.f90` unmodified) + a call from `elkpy_eigenstate_session`'s query loop | `ANGMOM` query on the task-9002 session — per-atom, l-resolved orbital angular momentum operators $L_x,L_y,L_z$ |
+| [0007](0007-momentum-matrix-elements.patch) | — | `src/elkpy_eigenstates.f90` (elkpy's own file, added by 0003) | New `elkpy_momentum` subroutine (reuses upstream `genpmatk.f90` unmodified — the same one `putpmat.f90`/task 120 calls) + a call from `elkpy_eigenstate_session`'s query loop | `MOMENTUM` query on the task-9002 session — momentum (velocity) matrix elements $p^a_{nm}$ for all `nstsv` states, plus that diagonalisation's eigenvalues |
 
 ## Notes
 
@@ -28,9 +29,11 @@ to make it a quick diff-checklist instead of a re-read of the raw patches.
 - 0002 and 0003 both edit `src/Makefile`'s `SRC_ELKPY` variable to register
   their new file — a likely conflict point if upstream ever adds its own
   `SRC_ELKPY`-shaped variable or restructures the source list.
-- 0004 and 0005 only touch elkpy's own `elkpy_eigenstates.f90` (added by
-  0003), not any upstream file — lowest risk of the five on an upstream
-  bump.
+- 0004, 0005, 0006 and 0007 only touch elkpy's own `elkpy_eigenstates.f90`
+  (added by 0003), not any upstream file — lowest risk of the seven on an
+  upstream bump. They do each *call* an upstream subroutine unmodified
+  (`wfmtsv`, `lopzflm`, `genpmatk`), so an upstream signature change to one
+  of those is the realistic breakage mode, not a patch-application conflict.
 - Task numbers 9000-9002 and the `elkpy_`-prefixed block/variable names are
   deliberately in an unused-by-upstream range (`docs/design.md` §8) to
   minimize collision risk on a version bump.

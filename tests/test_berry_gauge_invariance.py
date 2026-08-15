@@ -110,32 +110,41 @@ def _single_band_mesh(ngridk):
 
 
 def test_flux_sign_matches_fhs_eq8_numerator_role():
-    """Pins the *sign* of the Python-side Wilson-loop arithmetic against FHS
-    eq. 8, theta(k) = arg[U1(k) U2(k+e1) U1(k+e2)^-1 U2(k)^-1] -- something
+    """Pins the *sign* of the Python-side Wilson-loop arithmetic -- something
     gauge invariance alone cannot do (conj(M) is exactly as gauge-invariant
     as M, since a global sign flip of theta commutes with the gauge-phase
     cancellation in test_flux_and_chern_number_are_gauge_invariant above).
-    This test only pins the elkpy.parsers.berry convention, i.e. that it
-    implements eq. 8 with the correct overall sign, given overlap matrices
-    in the M(a,b) = <psi_a(k)|psi_b(k+e)> convention -- it does not by
-    itself verify that the Fortran side (elkpy_berry.f90) produces matrices
-    in that convention; that rests on the zgemv derivation documented in
-    docs/physics.tex Part II, section 7 (elkpy's implementation)."""
+
+    FHS eq. 8's link product is
+    w = U1(k) U2(k+e1) U1(k+e2)^-1 U2(k)^-1, and elkpy's reported flux is
+    the BERRY PHASE of that loop, gamma = -arg(w) (parsers.berry._berry_phase
+    -- the King-Smith--Vanderbilt/Resta negation, which puts curvature and
+    Chern numbers in the standard Xiao-Chang-Niu convention; see
+    docs/design.md #22). So a +theta0 phase on U1(k), which enters w's
+    numerator, must give -theta0 flux.
+
+    This pins the elkpy.parsers.berry convention given overlap matrices in
+    the M(a,b) = <psi_a(k)|psi_b(k+e)> convention; that the Fortran side
+    (elkpy_berry.f90) actually produces matrices in that convention is
+    confirmed separately and empirically by
+    tests/test_calculation_momentum.py's Kubo cross-check, which agrees
+    end-to-end against a real binary."""
     ngridk = (2, 2, 1)
     directions = (1, 2)
     theta0 = 0.7
     overlaps = _single_band_mesh(ngridk)
-    # U1(k=(0,0,0)) enters eq. 8 in the numerator (no inverse) -> +theta0
+    # U1(k=(0,0,0)) enters eq. 8's product in the numerator (no inverse),
+    # and flux = -arg(product), so -> -theta0
     overlaps[(0, 0, 0)] = (np.array([[np.exp(1j * theta0)]]), overlaps[(0, 0, 0)][1])
     parsed = {"ngridk": ngridk, "directions": directions, "overlaps": overlaps}
     flux = compute_berry_curvature(parsed)["flux"]
-    assert flux[0, 0, 0] == pytest.approx(theta0, abs=1e-12)
+    assert flux[0, 0, 0] == pytest.approx(-theta0, abs=1e-12)
 
 
 def test_flux_sign_matches_fhs_eq8_denominator_role():
-    """Companion to the numerator-role test above: U1(k+e2) enters eq. 8
-    inverted (denominator) -> a +theta0 link phase there must give -theta0
-    flux at k, not +theta0."""
+    """Companion to the numerator-role test above: U1(k+e2) enters eq. 8's
+    product inverted (denominator), so with flux = -arg(product) a +theta0
+    link phase there must give +theta0 flux at k, not -theta0."""
     ngridk = (2, 2, 1)
     directions = (1, 2)
     theta0 = 0.7
@@ -144,7 +153,7 @@ def test_flux_sign_matches_fhs_eq8_denominator_role():
     overlaps[(0, 1, 0)] = (np.array([[np.exp(1j * theta0)]]), overlaps[(0, 1, 0)][1])
     parsed = {"ngridk": ngridk, "directions": directions, "overlaps": overlaps}
     flux = compute_berry_curvature(parsed)["flux"]
-    assert flux[0, 0, 0] == pytest.approx(-theta0, abs=1e-12)
+    assert flux[0, 0, 0] == pytest.approx(theta0, abs=1e-12)
 
 
 # --- path mode (task 9001, small Wilson loop per arbitrary point) ---
@@ -202,11 +211,13 @@ def test_path_flux_and_curvature_are_gauge_invariant(seed):
 def test_path_flux_matches_product_of_link_variables():
     """Pins the sign/formula of compute_berry_curvature_path: with a single
     band and only one edge carrying a nonzero phase (others exactly the
-    identity), the flux must equal exactly that phase -- unlike the mesh
-    formula (eq. 8, two numerator/two denominator terms), the path formula
-    is a plain product of all four edge link variables around the loop, so
-    every edge enters with the same (positive) sign; verified independently
-    by direct derivation against eq. 8 in docs/physics.tex Part II."""
+    identity), the flux must equal exactly minus that phase: the path
+    formula is a plain product of all four edge link variables around the
+    loop (so every edge enters the product identically, unlike the mesh
+    formula's two numerator/two denominator terms), and the reported flux
+    is the Berry phase, gamma = -arg(product) -- parsers.berry._berry_phase,
+    the King-Smith--Vanderbilt/Resta negation putting curvature in the
+    standard Xiao-Chang-Niu convention (docs/design.md #22)."""
     theta0 = 0.6
     identity = np.array([[1.0 + 0j]])
     phased = np.array([[np.exp(1j * theta0)]])
@@ -220,7 +231,7 @@ def test_path_flux_matches_product_of_link_variables():
             "points": [((0.0, 0.0, 0.0), tuple(edges))],
         }
         result = compute_berry_curvature_path(parsed)[0]
-        assert result["flux"] == pytest.approx(theta0, abs=1e-12)
+        assert result["flux"] == pytest.approx(-theta0, abs=1e-12)
 
 
 def test_path_curvature_area_normalization():
@@ -243,4 +254,4 @@ def test_path_curvature_area_normalization():
     edge1 = 2 * dk * bvec[0]
     edge2 = 2 * dk * bvec[1]
     expected_area = np.linalg.norm(np.cross(edge1, edge2))
-    assert result["curvature"] == pytest.approx(theta0 / expected_area, rel=1e-10)
+    assert result["curvature"] == pytest.approx(-theta0 / expected_area, rel=1e-10)

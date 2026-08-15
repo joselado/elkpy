@@ -17,6 +17,7 @@ from collections import namedtuple
 from .parsers.eigenstates import (
     parse_angular_momentum_response,
     parse_eigenstates_response,
+    parse_momentum_response,
     parse_orbital_projection_response,
     parse_overlap_response,
     parse_projection_response,
@@ -36,6 +37,7 @@ Eigenstates = namedtuple("Eigenstates", ["k", "energies", "evecsv"])
 AtomProjection = namedtuple("AtomProjection", ["k", "matrices"])
 OrbitalProjection = namedtuple("OrbitalProjection", ["k", "matrices"])
 SpinOperator = namedtuple("SpinOperator", ["k", "sx", "sy", "sz"])
+Momentum = namedtuple("Momentum", ["k", "energies", "pmat"])
 AngularMomentum = namedtuple(
     "AngularMomentum", ["k", "lx", "ly", "lz", "lx_orbital", "ly_orbital", "lz_orbital"]
 )
@@ -320,6 +322,61 @@ class EigenstateSession:
             ly_orbital=ly_orbital,
             lz_orbital=lz_orbital,
         )
+
+    def momentum(self, k, ist0=None, ist1=None):
+        """The momentum matrix elements p^a_nm = <psi_n|p_a|psi_m>,
+        a = x, y, z, for every pair of second-variational states at an
+        arbitrary k-point, together with the eigenvalues of that same
+        diagonalisation -- via elkpy_momentum (src/elkpy_eigenstates.f90,
+        calling upstream genpmatk unmodified, the same subroutine Elk's own
+        task-120 PMAT.OUT export uses, but at an arbitrary k-point rather
+        than a previously-diagonalised mesh point). See docs/design.md #22
+        and docs/physics.tex Part XI for the physics.
+
+        In Hartree atomic units (hbar = m_e = 1) and for Elk's LOCAL
+        Kohn-Sham potential, p is numerically the velocity operator v, so
+        this is equally the velocity matrix; genpmatk includes the
+        (1/4c^2)[sigma x grad V_s] spin-orbit correction that keeps that
+        identity true under spinorb=True.
+
+        Returns a Momentum(k, energies, pmat) namedtuple: energies shape
+        (nstsv,) Hartree, pmat shape (3, nstsv, nstsv) complex (atomic
+        units), pmat[a] the a-th CARTESIAN component (a = 0, 1, 2 for
+        x, y, z -- note that parsers.optical's `directions` argument
+        indexes these Cartesian axes, unlike get_berry_curvature()'s
+        identically-named argument, which indexes reciprocal lattice
+        axes).
+
+        `ist0`/`ist1` optionally restrict the returned arrays to a
+        contiguous, 1-indexed band window; both default to None, meaning
+        all nstsv states, which is what the Kubo-form sums in
+        parsers.optical need (they run over states OUTSIDE the window of
+        interest, so a pre-windowed pmat is the wrong object for them --
+        pass the window to those functions instead, not here). Unlike
+        every other query here the window is applied in Python, not
+        Fortran: genpmatk's array is hard-dimensioned nstsv, so there is
+        no windowed variant to ask for.
+
+        pmat and energies come from ONE diagonalisation, which is what
+        makes it safe to use these energies as the denominators of a sum
+        over these matrix elements -- do not substitute a separate
+        get_eigenstates() call's energies (docs/design.md #14).
+        """
+        k = tuple(float(x) for x in k)
+        self._send(f"MOMENTUM {_fmt(k[0])} {_fmt(k[1])} {_fmt(k[2])}")
+        tokens = self._read_until_sentinel()
+        energies, pmat = parse_momentum_response(tokens)
+        if ist0 is not None or ist1 is not None:
+            nstsv = len(energies)
+            lo = 1 if ist0 is None else int(ist0)
+            hi = nstsv if ist1 is None else int(ist1)
+            if not (1 <= lo <= hi <= nstsv):
+                raise ValueError(
+                    f"invalid band window (ist0={lo}, ist1={hi}, nstsv={nstsv})"
+                )
+            energies = energies[lo - 1 : hi]
+            pmat = pmat[:, lo - 1 : hi, lo - 1 : hi]
+        return Momentum(k=k, energies=energies, pmat=pmat)
 
     def spin_operator(self, k, ist0, ist1):
         """The spin operators S_x, S_y, S_z (hbar=1, so eigenvalues +-1/2

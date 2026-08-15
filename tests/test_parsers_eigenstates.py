@@ -8,6 +8,7 @@ import pytest
 from elkpy.parsers.eigenstates import (
     parse_angular_momentum_response,
     parse_eigenstates_response,
+    parse_momentum_response,
     parse_orbital_projection_response,
     parse_overlap_response,
     parse_projection_response,
@@ -108,3 +109,27 @@ def test_parse_angular_momentum_response_round_trip():
 
     assert parsed.shape == (natmtot, nl, ncomp, nst, nst)
     assert parsed == pytest.approx(mats, abs=1e-12)
+
+
+def test_parse_momentum_response_round_trip():
+    rng = np.random.default_rng(5)
+    nstsv, ncomp = 4, 3
+    energies = rng.normal(size=nstsv)
+    pmat = rng.normal(size=(ncomp, nstsv, nstsv)) + 1j * rng.normal(
+        size=(ncomp, nstsv, nstsv)
+    )
+
+    # src/elkpy_eigenstates.f90's MOMENTUM case writes nstsv, then nstsv
+    # eigenvalues, then "do comp; do b; do a" (a innermost) -- each
+    # Cartesian component's block column-major, the three blocks
+    # consecutive. Unlike every other query here there is no band window
+    # in the protocol at all (genpmatk's array is hard-dimensioned nstsv).
+    tokens = [str(nstsv)] + [repr(float(e)) for e in energies]
+    for comp in range(ncomp):
+        tokens += _complex_matrix_tokens(pmat[comp])
+    parsed_energies, parsed_pmat = parse_momentum_response(tokens)
+
+    assert parsed_energies.shape == (nstsv,)
+    assert parsed_energies == pytest.approx(energies, abs=1e-12)
+    assert parsed_pmat.shape == (ncomp, nstsv, nstsv)
+    assert parsed_pmat == pytest.approx(pmat, abs=1e-12)

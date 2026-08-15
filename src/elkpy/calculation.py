@@ -579,8 +579,14 @@ class Calculation:
         Requires reducek=0 (set automatically) so that eigenvectors are
         available on the full, non-reduced ngridk mesh the Wilson loop walks.
 
+        Sign convention: the standard A = i<u|grad_k u>, Omega = curl A
+        (Xiao, Chang & Niu, RMP 82, 1959 (2010)), set in one place --
+        parsers.berry._berry_phase() -- and shared by get_quantum_geometry()
+        and parsers.optical's independent Kubo route. See docs/design.md #22.
+
         Returns a dict: {"flux": (n1,n2,n3) array (dimensionless plaquette
-        flux, eq. 8), "chern_number": (n_free,) array (one Chern number per
+        Berry phase, minus the argument of eq. 8's link product),
+        "chern_number": (n_free,) array (one Chern number per
         slice along the direction not in `directions`), "max_flux": float
         (admissibility diagnostic -- keep well under pi)}.
         """
@@ -655,7 +661,7 @@ class Calculation:
 
         Returns a list of dicts, one per requested k-point, in the order
         given: {"k": (kx,ky,kz), "flux": dimensionless plaquette phase in
-        (-pi,pi], "curvature": flux / loop area (1/Bohr^2)}, plus a
+        (-pi,pi], "curvature": flux / loop area (Bohr^2)}, plus a
         "distance" entry when `kpath` was used.
         """
         if (kpoints is None) == (kpath is None):
@@ -727,7 +733,7 @@ class Calculation:
         Returns a list of dicts, one per requested k-point, in the order
         given: {"k": (kx,ky,kz) fractional, "g": (2,2) array
         [[g11,g12],[g12,g22]] (quantum metric, Bohr^2), "berry_curvature":
-        float (Bohr^-2, identical convention/value to
+        float (Bohr^2, identical convention/value to
         get_berry_curvature_path()'s "curvature" -- see
         test_curvature_matches_berry_curvature_path_on_identical_corners), "Q": (2,2)
         complex array, Q = g - (i/2)*berry_curvature*[[0,1],[-1,0]]}, plus a
@@ -1063,11 +1069,13 @@ class Calculation:
             return session.overlap(k_a, k_b, ist0, ist1)
 
     def _session_query_path(
-        self, session_method, k, kpoints, kpath, ist0, ist1, npoints, label
+        self, session_method, k, kpoints, kpath, ist0, ist1, npoints, label,
+        require_window=True,
     ):
-        """Shared plumbing for the four eigenstate_session() query wrappers
+        """Shared plumbing for the five eigenstate_session() query wrappers
         below (get_atom_projection/get_orbital_projection/
-        get_spin_operator/get_angular_momentum): a single `k=` call opens
+        get_spin_operator/get_angular_momentum/get_momentum_matrix): a
+        single `k=` call opens
         (and tears down) its own session and returns the underlying
         EigenstateSession method's namedtuple unchanged, same as before --
         for `kpoints=`/`kpath=`, opens ONE session and reuses it across
@@ -1078,10 +1086,14 @@ class Calculation:
         point: "k" plus the namedtuple's own fields, plus "distance" when
         `kpath` was used) -- the same list-of-dicts shape
         get_berry_curvature_path()/get_quantum_geometry() already return.
+
+        `require_window=False` is for get_momentum_matrix(), whose band
+        window is optional (its underlying query has no window at all --
+        see EigenstateSession.momentum()).
         """
         if sum(x is not None for x in (k, kpoints, kpath)) != 1:
             raise ValueError("pass exactly one of k=, kpoints=, or kpath=")
-        if ist0 is None or ist1 is None:
+        if require_window and (ist0 is None or ist1 is None):
             raise ValueError("ist0 and ist1 are required")
         if k is not None:
             with self.eigenstate_session() as session:
@@ -1193,6 +1205,44 @@ class Calculation:
         """
         return self._session_query_path(
             "angular_momentum", k, kpoints, kpath, ist0, ist1, npoints, label
+        )
+
+    def get_momentum_matrix(
+        self, k=None, ist0=None, ist1=None, kpoints=None, kpath=None, npoints=100,
+        label="momentum",
+    ):
+        """The momentum (equivalently, in atomic units for a local
+        Kohn-Sham potential, velocity) matrix elements p^a_nm for all
+        second-variational states, plus the eigenvalues of the same
+        diagonalisation. A one-off convenience wrapper around
+        eigenstate_session() -- see get_eigenstates()'s docstring about
+        preferring eigenstate_session() directly for repeated queries, and
+        EigenstateSession.momentum() for what this computes, its
+        (3, nstsv, nstsv) return shape and Cartesian component order, and
+        why the energies must travel with the matrix elements.
+
+        Pass exactly one of `k` (single point, returns a Momentum
+        namedtuple), `kpoints`, or `kpath` -- see get_atom_projection()'s
+        docstring for what the latter two do.
+
+        Unlike the other session wrappers, `ist0`/`ist1` are OPTIONAL and
+        default to all states: the Kubo-form quantities in
+        `elkpy.parsers.optical` (kubo_berry_curvature/kubo_quantum_metric,
+        an independent code path for get_berry_curvature_path()/
+        get_quantum_geometry()) sum over states outside a window, so they
+        take the window themselves and need an unwindowed pmat here.
+        `elkpy.parsers.optical.circular_polarization` turns the same pmat
+        into the valley-selective circular dichroism of an interband
+        transition. See docs/design.md #22.
+
+        The number of empty states in the sum is set by Elk's `nempty`
+        (Calculation(extra_blocks={"nempty": ...})); the default is low,
+        and every Kubo quantity built from this converges from below as it
+        rises.
+        """
+        return self._session_query_path(
+            "momentum", k, kpoints, kpath, ist0, ist1, npoints, label,
+            require_window=False,
         )
 
     def run_tasks(self, tasks, blocks=None, resume=True, label=None):

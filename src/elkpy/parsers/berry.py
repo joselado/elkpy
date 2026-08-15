@@ -83,6 +83,41 @@ def parse_berry_overlaps(path):
     }
 
 
+def _berry_phase(w):
+    """The Berry phase of a closed loop whose link-variable product is `w`.
+
+    This is where elkpy's Berry-curvature sign convention is set, in ONE
+    place, so every consumer (mesh curvature, path curvature, Chern number,
+    parsers.quantum_geometry) inherits it identically.
+
+    The negation is not cosmetic. With link variables
+    U(k -> k') = <u(k)|u(k')>/|.|, expanding
+    <u|u + delta.grad u> = 1 + delta.<u|grad u> = exp(-i A.delta)
+    (using that <u|grad u> is purely imaginary, with
+    A = i<u|grad_k u> real) makes the product around a closed
+    counter-clockwise loop equal to exp(-i * closed integral of A). Its
+    ARGUMENT is therefore minus the Berry phase, which is why the standard
+    discrete Berry phase carries an explicit negation,
+
+        gamma = -Im ln prod_j <u_j|u_{j+1}>
+
+    (the King-Smith--Vanderbilt/Resta convention, PRB 47, 1651(R) (1993)).
+    Omitting it yields -Omega in the standard convention A = i<u|grad_k u>,
+    Omega = curl A (Xiao, Chang & Niu, RMP 82, 1959 (2010)) -- and hence a
+    Chern number of the wrong sign relative to the literature.
+
+    That omission was elkpy's behaviour until this convention was
+    unified: it went unnoticed because every check on the Berry/Z2
+    machinery is sign-blind (bulk Si's Chern number is 0 = -0; the h-BN
+    benchmark is a RELATIVE K/K' antisymmetry; Z2 is a parity of
+    crossings; det g >= (F/2)^2 is even in F). It was caught only when
+    parsers.optical added an independent Kubo-form route whose sign is
+    pinned analytically against direct differentiation
+    (tests/test_parsers_optical.py). See docs/design.md #22.
+    """
+    return -float(np.angle(w))
+
+
 def _link_variable(mat):
     d = np.linalg.det(mat)
     if d == 0:
@@ -123,10 +158,16 @@ def compute_berry_curvature(parsed):
     """FHS discretized Berry curvature and Chern number from parsed
     ELKPY_BERRY.OUT data (parse_berry_overlaps()).
 
+    Sign convention (see _berry_phase() below): A = i<u|grad_k u>,
+    Omega = curl A -- the standard Xiao, Chang & Niu (RMP 82, 1959 (2010))
+    convention, which is what the literature's Chern numbers and curvature
+    plots use, and what parsers.optical's independent Kubo-form route
+    computes.
+
     Returns a dict:
-      "flux": (n1, n2, n3) array -- the dimensionless plaquette flux
-          theta(k) in (-pi, pi] (eq. 8 of FHS), i.e. -i times the lattice
-          field strength; NOT yet divided by plaquette area.
+      "flux": (n1, n2, n3) array -- the dimensionless plaquette Berry
+          phase theta(k) in (-pi, pi], i.e. the negated argument of FHS
+          eq. 8's link product; NOT yet divided by plaquette area.
       "chern_number": (n_free,) array -- one Chern number per slice along
           the direction not spanned by the loop (eq. 9: sum of flux/(2*pi)
           over each (dir1, dir2) plane).
@@ -157,7 +198,7 @@ def compute_berry_curvature(parsed):
                 k_plus_1 = neighbor(k, dir1)
                 k_plus_2 = neighbor(k, dir2)
                 w = link(k, dir1) * link(k_plus_1, dir2) / (link(k_plus_2, dir1) * link(k, dir2))
-                flux[i1, i2, i3] = np.angle(w)
+                flux[i1, i2, i3] = _berry_phase(w)
 
     dir1_axis, dir2_axis = dir1 - 1, dir2 - 1
     chern_number = flux.sum(axis=(dir1_axis, dir2_axis)) / (2 * np.pi)
@@ -249,7 +290,8 @@ def compute_berry_curvature_path(parsed):
 
     Returns a list of dicts, one per requested k-point, in the order given:
     {"k": (kx, ky, kz) fractional, "flux": dimensionless plaquette phase in
-    (-pi, pi], "curvature": flux / loop area (1/Bohr^2, since bvec is
+    (-pi, pi], "curvature": flux / loop area (Bohr^2 -- flux is dimensionless and the
+    area is Bohr^-2, since bvec is
     Cartesian reciprocal Bohr^-1)}.
     """
     dir1, dir2 = parsed["directions"]
@@ -267,7 +309,7 @@ def compute_berry_curvature_path(parsed):
             * _link_variable(m34)
             * _link_variable(m41)
         )
-        flux = float(np.angle(w))
+        flux = _berry_phase(w)
         results.append({"k": k0, "flux": flux, "curvature": flux / area})
     return results
 

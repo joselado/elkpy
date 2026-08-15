@@ -17,7 +17,7 @@ Loewdin-normalization step this module adds.
 
 import numpy as np
 
-from .berry import _link_variable
+from .berry import _berry_phase, _link_variable
 
 
 def _hermitian_inv_sqrt(mat, floor=1e-8):
@@ -54,7 +54,7 @@ def _normalize_overlap(m, s_a, s_b):
     Elk's `genolpq` overlap has a real-space truncation floor of order
     1e-3 (CLAUDE.md: overlap(k,k,...) is the identity only to that
     tolerance, not exactly). Berry curvature (parsers.berry) is immune to
-    this: it's built from arg(det(.)) around a *closed* loop, where a
+    this: it's built from -arg(det(.)) around a *closed* loop, where a
     common-mode modulus error in every link variable cancels exactly. The
     quantum metric is not -- quantum_distance() below is built directly
     from |M|^2, so an overlap deficient by a relative factor (1-eps)
@@ -133,7 +133,9 @@ def compute_quantum_geometry(overlaps, v1, v2):
         g12 = [D(v1+v2) + D(-v1-v2) - D(v1-v2) - D(-v1+v2)] / (8 dk1 dk2)
     (g12's stencil is the standard centered mixed-partial-derivative
     formula applied to D; see docs/physics.tex Part IV for the full
-    odd-term-cancellation derivation.) Curvature is built from arg(det M)
+    odd-term-cancellation derivation.) Curvature is built from -arg(det M)
+    (_berry_phase, parsers.berry -- the sign convention is set there, once,
+    for every consumer; see docs/design.md #22)
     around a *closed* loop (FHS eq. 8), which is already exact to O(dk^2)
     on the plain forward sub-loop k, k+v1, k+v1+v2, k+v2 -- centering it
     would cost more corners for no accuracy gain, so it's left as-is
@@ -141,7 +143,7 @@ def compute_quantum_geometry(overlaps, v1, v2):
     specific forward anchoring).
 
     Returns {"g": (2,2) real array [[g11,g12],[g12,g22]] (quantum metric,
-    Bohr^2), "berry_curvature": float (Bohr^-2, identical convention/value
+    Bohr^2), "berry_curvature": float (Bohr^2, identical convention/value
     to parsers.berry.compute_berry_curvature_path), "Q": (2,2) complex
     Hermitian array, Q[0,0]=g11, Q[1,1]=g22, Q[0,1]=g12-(i/2)*F_12,
     Q[1,0]=conj(Q[0,1])}.
@@ -173,10 +175,11 @@ def compute_quantum_geometry(overlaps, v1, v2):
     # anchored at k (not centered): w = U1(k)*U2(k+e1) / (U1(k+e2)*U2(k)).
     # Loewdin normalization cannot change this: S_a^{-1/2}/S_b^{-1/2} are
     # Hermitian positive-definite, so det(S^{-1/2}) is real positive and
-    # cannot shift arg(det M) -- normalizing here is for uniformity with
+    # cannot shift arg(det M), and _berry_phase's negation is a global sign
+    # that commutes with it -- normalizing here is for uniformity with
     # the metric computation above, not a correctness requirement.
     w = _link_variable(m1p) * _link_variable(edge_b) / (_link_variable(edge_c) * _link_variable(m2p))
-    flux = float(np.angle(w))
+    flux = _berry_phase(w)
     area = float(np.linalg.norm(np.cross(v1, v2)))
     curvature = flux / area
 

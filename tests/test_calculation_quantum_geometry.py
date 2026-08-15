@@ -179,7 +179,7 @@ def test_hbn_gkm_valley_quantum_geometry(hbn_calculation):
     # Gamma/M are time-reversal-invariant momenta, forcing curvature to
     # vanish there exactly in the continuum -- the residual here is pure
     # dk=0.01 discretization noise (M's is larger than Gamma's, ~0.08 vs
-    # ~0.0001, but both are <1% of the genuine ~8 Bohr^-2 valley signal at
+    # ~0.0001, but both are <1% of the genuine ~8 Bohr^2 valley signal at
     # K/K' checked below, not a comparable-magnitude effect).
     assert by_name["Gamma"]["berry_curvature"] == pytest.approx(0.0, abs=0.1)
     assert by_name["M"]["berry_curvature"] == pytest.approx(0.0, abs=0.1)
@@ -187,7 +187,7 @@ def test_hbn_gkm_valley_quantum_geometry(hbn_calculation):
     k_curv = by_name["K"]["berry_curvature"]
     kp_curv = by_name["Kprime"]["berry_curvature"]
     assert k_curv == pytest.approx(-kp_curv, rel=0.02)
-    assert abs(k_curv) > 5  # sanity: a real, non-vanishing valley curvature (~8 Bohr^-2 expected)
+    assert abs(k_curv) > 5  # sanity: a real, non-vanishing valley curvature (~8 Bohr^2 expected)
 
     k_g, kp_g = by_name["K"]["g"], by_name["Kprime"]["g"]
     assert k_g[0, 0] == pytest.approx(kp_g[0, 0], rel=1e-8)

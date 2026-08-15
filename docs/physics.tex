@@ -149,15 +149,21 @@ For a family of Bloch states $|n(\mathbf k)\rangle$ (a non-degenerate band, or a
 gapped multiplet of bands) over the Brillouin zone, the Berry connection and the
 associated field strength (Berry curvature) are
 \begin{equation}
-  A_\mu(\mathbf k) = \langle n(\mathbf k) | \partial_\mu | n(\mathbf k) \rangle, \qquad
+  A_\mu(\mathbf k) = i\,\langle n(\mathbf k) | \partial_\mu | n(\mathbf k) \rangle, \qquad
   F_{12}(\mathbf k) = \partial_1 A_2(\mathbf k) - \partial_2 A_1(\mathbf k),
   \label{eq:berry}
 \end{equation}
 with $\mu=1,2$ two reciprocal-space directions and $\partial_\mu = \partial/\partial
-k_\mu$. When the Fermi energy lies in a gap, the (2D) Hall conductance is
-$\sigma_{xy} = -(e^2/h)\sum_n c_n$, where the Chern number of band $n$,
+k_\mu$. The factor of $i$ (absent in FHS's own notation, which writes the connection as
+$\langle n|\partial_\mu|n\rangle$ and compensates with an $i$ in the Chern-number
+prefactor) makes $A_\mu$ real and fixes the overall sign to the standard convention of
+Xiao, Chang \& Niu \cite{xiaochangniu2010}; this is the convention elkpy reports, in every
+route to the curvature --- see Part~\ref{part:momentum} for how that was established and
+for the derivation of the corresponding negation in the discretized formula
+Eq.~\eqref{eq:fhsflux} below. When the Fermi energy lies in a gap, the (2D) Hall
+conductance is $\sigma_{xy} = -(e^2/h)\sum_n c_n$, where the Chern number of band $n$,
 \begin{equation}
-  c_n = \frac{1}{2\pi i} \int_{T^2} d^2k\, F_{12}(\mathbf k),
+  c_n = \frac{1}{2\pi} \int_{T^2} d^2k\, F_{12}(\mathbf k),
   \label{eq:chern}
 \end{equation}
 is an integer topological invariant (Thouless-Kohmoto-Nightingale-den Nijs,
@@ -180,8 +186,9 @@ gauge invariant on the discretized zone, for {\it any} choice of per-$\mathbf k$
 phase, by never differentiating a phase directly and instead multiplying wavefunction
 overlaps ("Wilson loops") around each mesh plaquette -- the same idea used for Berry
 curvature in tight-binding/lattice models, e.g.\ \texttt{pyqula}'s
-\texttt{berry\_curvature} (which this implementation was cross-checked against for
-convention, per this project's development-practices policy).
+\texttt{berry\_curvature} (whose loop construction this implementation follows, per this
+project's development-practices policy --- though \emph{not} its overall sign: see
+Eq.~\eqref{eq:elkpyflux} below and Part~\ref{part:momentum}).
 
 For a mesh point $\mathbf k_\ell$ and the two lattice directions $\hat\mu$ ($\mu=1,2$)
 spanning the loop, and a (possibly multi-band) manifold $\psi(\mathbf k) =
@@ -220,6 +227,24 @@ continuum limit), converging to Eq.~\eqref{eq:chern} as the mesh is refined, cor
 even on a coarsely discretized zone provided the \emph{admissibility condition}
 $|\tilde F_{12}(\mathbf k_\ell)| < \pi$ holds at every plaquette (their Eq.~14) -- a
 value approaching $\pi$ signals a mesh too coarse to trust.
+
+Eqs.~\eqref{eq:fieldstrength}--\eqref{eq:latticechern} are FHS's own notation, in which
+the connection is written without the factor of $i$ that Eq.~\eqref{eq:berry} carries.
+Translating to the standard convention of Eq.~\eqref{eq:berry}, the quantity elkpy
+reports for each plaquette is the \emph{Berry phase}
+\begin{equation}
+  \gamma(\mathbf k_\ell)
+    = -\arg\bigl[\,U_1(\mathbf k_\ell)\, U_2(\mathbf k_\ell+\hat 1)\,
+        U_1(\mathbf k_\ell+\hat 2)^{-1}\, U_2(\mathbf k_\ell)^{-1}\bigr]
+    = -\frac{1}{i}\tilde F_{12}(\mathbf k_\ell),
+  \label{eq:elkpyflux}
+\end{equation}
+with the curvature $\gamma$ divided by the plaquette area and the Chern number
+$c_n=\frac{1}{2\pi}\sum_\ell\gamma(\mathbf k_\ell)$. The minus sign is the
+King-Smith--Vanderbilt/Resta negation; it is implemented in exactly one place,
+\texttt{parsers.berry.\_berry\_phase()}, and Part~\ref{part:momentum} derives it, records
+how its earlier absence was detected, and explains why every check in this part had been
+blind to it.
 
 \section{elkpy's implementation}
 
@@ -476,8 +501,9 @@ where the resulting curvature plateaus (Section~9.4) before trusting a full path
     sublattice inversion symmetry between B and N, unlike Si -- so K and K$'$ are
     physically inequivalent valleys rather than related by a crystal symmetry): the
     occupied manifold's curvature vanishes at $\Gamma$ and M and is exactly
-    antisymmetric between K and K$'$ ($\Omega(\mathrm K)=8.568$,
-    $\Omega(\mathrm K')=-8.568$ Bohr$^{-2}$, agreeing to 0.01\%) -- the sign flip
+    antisymmetric between K and K$'$ ($\Omega(\mathrm K)=-8.568$,
+    $\Omega(\mathrm K')=+8.568$ Bohr$^2$, agreeing to 0.01\%; signs in the standard
+    convention of Part~\ref{part:momentum}, which negated both) -- the sign flip
     time-reversal symmetry requires for a non-magnetic crystal, $\Omega(-\mathbf
     k)=-\Omega(\mathbf k)$, and a substantially sharper discriminating check than Si's
     Chern number, which is $0=-0$ regardless of sign. Getting to that result surfaced
@@ -501,7 +527,7 @@ result = calc.get_berry_curvature_path(
     [(0.0, 0.0, 0.0), (1/3, 1/3, 0.0)],  # Gamma, K -- fractional coordinates
     1, 4, directions=(1, 2), dk=0.005,
 )
-result[0]["curvature"]  # Bohr^-2, one dict per requested k-point
+result[0]["curvature"]  # Bohr^2, one dict per requested k-point
 \end{verbatim}
 \texttt{kpoints} need not lie on any mesh; \texttt{ist0}/\texttt{ist1}/\texttt{directions}
 match mesh mode's meaning. Unlike mesh mode, the requested window is \emph{not}
@@ -945,8 +971,10 @@ only the normalized result recovers it); and, pinning the \emph{absolute} normal
 $|n(\theta,\phi)\rangle = (\cos\tfrac\theta2, e^{i\phi}\sin\tfrac\theta2)$, Provost \&
 Vallee's own original worked example -- the metric converges to the exact round-sphere
 result $g = \tfrac14\,\mathrm{diag}(1,\sin^2\theta)$ and the curvature to
-$F_{\theta\phi}=\tfrac12\sin\theta$ (the sign this module's overlap-matrix convention
-produces; magnitude is the solid-angle/2 result standard for a spin-1/2); and, on a
+$F_{\theta\phi}=-\tfrac12\sin\theta$ (the standard convention of
+Part~\ref{part:momentum}, derived there; magnitude is the solid-angle/2 result standard
+for a spin-1/2, and the sign makes it integrate to $-2\pi$, the spin-1/2 monopole
+charge -- this test asserted $+\tfrac12\sin\theta$ until that derivation was done); and, on a
 skewed reparametrization of the same state where $g_{12}\ne0$ analytically, the centered
 stencil's error against the analytic value shrinks by $\approx4\times$ per
 \texttt{dk}-halving where the forward stencil it replaced shrinks only $\approx2\times$
@@ -984,7 +1012,7 @@ result = calc.get_quantum_geometry(
     1, 4, directions=(1, 2), dk=0.01,
 )
 result[1]["g"]                # (2,2) real array [[g11,g12],[g12,g22]], Bohr^2
-result[1]["berry_curvature"]  # Bohr^-2, identical convention to get_berry_curvature_path
+result[1]["berry_curvature"]  # Bohr^2, identical convention to get_berry_curvature_path
 result[1]["Q"]                # (2,2) complex array, Q = g - (i/2)*berry_curvature*[[0,1],[-1,0]]
 \end{verbatim}
 Same \texttt{kpoints=}/\texttt{kpath=}/\texttt{ist0}/\texttt{ist1}/\texttt{directions}/
@@ -2201,6 +2229,336 @@ Nature Physics \textbf{5}, 398 (2009).
 S.~Nakajima,
 \emph{The crystal structure of Bi$_2$Te$_{3-x}$Se$_x$},
 J.\ Phys.\ Chem.\ Solids \textbf{24}, 479 (1963).
+\end{thebibliography}
+
+
+\part{Momentum matrix elements, optical selection rules and Kubo-form quantum geometry}
+\label{part:momentum}
+
+\section{The missing primitive: the velocity operator}
+
+Parts~\ref{part:atomprojection}--\ref{part:angularmomentum} built a family of operators
+evaluated at an arbitrary $k$-point (atom, $\ell$-channel, spin, orbital angular
+momentum). Parts~\ref{part:berry} and~\ref{part:quantumgeometry} built a family of
+\emph{geometric} quantities from finite-difference wavefunction overlaps. The operator
+that connects the two families is the velocity, and until now elkpy had no access to it.
+
+The momentum matrix elements between two second-variational eigenstates at the same
+$k$-point are
+\begin{equation}
+  p^a_{nm}(\mathbf k) = \big\langle \psi_{n\mathbf k}\big|
+    \Big(-i\nabla + \tfrac{1}{4c^2}\big[\vec\sigma\times\nabla V_s(\mathbf r)\big]\Big)_a
+  \big|\psi_{m\mathbf k}\big\rangle,
+  \qquad a\in\{x,y,z\},
+  \label{eq:pmat}
+\end{equation}
+where $V_s$ is the Kohn-Sham effective potential, $\vec\sigma$ the vector of Pauli
+matrices and $c$ the speed of light. The first term is the ordinary canonical momentum;
+the second is the spin-orbit correction to it \cite{rathgen2004}, present only when
+spin-orbit coupling is enabled.
+
+Why Eq.~\eqref{eq:pmat} \emph{is} the velocity operator, and not merely proportional to
+it in some limit: the velocity is defined by $\hat{\mathbf v}=i[\hat H,\hat{\mathbf r}]$
+(Heisenberg equation, $\hbar=1$). For a Hamiltonian $\hat H=\hat p^2/2m_e+V(\mathbf r)$
+with a \emph{local} potential, the potential commutes with $\hat{\mathbf r}$ and drops
+out, leaving $\hat{\mathbf v}=\hat{\mathbf p}/m_e$ exactly. In Hartree atomic units
+($\hbar=m_e=1$) the two are numerically identical. Elk's Kohn-Sham potential is local
+(it is a multiplicative function of $\mathbf r$, unlike a Hartree-Fock exchange kernel or
+a nonlocal pseudopotential), so no correction term is needed --- \emph{except} the one
+spin-orbit coupling introduces, which is precisely the second term of
+Eq.~\eqref{eq:pmat}. This is the sense in which the same array serves as both $\mathbf p$
+and $\mathbf v$.
+
+Three consequences follow immediately, and they are the physics content of this part.
+
+\section{The diagonal: band velocities by Hellmann-Feynman}
+
+Setting $n=m$ in Eq.~\eqref{eq:pmat} gives the group velocity of band $n$. The
+Hellmann-Feynman theorem applied to the $\mathbf k$-dependent Hamiltonian gives
+\begin{equation}
+  \frac{\partial\varepsilon_n(\mathbf k)}{\partial k_a}
+  = \Big\langle u_{n\mathbf k}\Big|\frac{\partial \hat H(\mathbf k)}{\partial k_a}
+    \Big|u_{n\mathbf k}\Big\rangle
+  = v^a_{nn}(\mathbf k),
+  \label{eq:hellmann}
+\end{equation}
+exact for a non-degenerate band. This is an unusually strong statement to be able to
+check numerically, because the two sides are computed by entirely disjoint machinery:
+the right-hand side by the muffin-tin gradient and interstitial FFT of
+Eq.~\eqref{eq:pmat}, the left-hand side by finite-differencing eigenvalues, which
+involves no matrix elements at all.
+
+One practical subtlety: differentiating with respect to a \emph{fractional} coordinate
+$\lambda_i$ (where $\mathbf k=\sum_i\lambda_i\mathbf b_i$) gives
+$\partial\varepsilon/\partial\lambda_i = \mathbf v\cdot\mathbf b_i$, not the Cartesian
+component $v_i$. The reciprocal lattice vectors $\mathbf b_i$ are generally neither
+orthogonal nor of unit length, so the dot product is not optional.
+
+\section{The off-diagonal, part one: optical selection rules}
+
+The interband matrix elements of Eq.~\eqref{eq:pmat} are exactly the dipole matrix
+elements of light-matter coupling. In the velocity gauge the transition rate from an
+occupied state $v$ to an empty state $c$ under a monochromatic field with polarization
+vector $\boldsymbol\epsilon$ is proportional to
+$|\boldsymbol\epsilon\cdot\mathbf p_{cv}|^2$ (Fermi's golden rule). For circularly
+polarized light propagating along $z$, $\boldsymbol\epsilon_\pm =
+(\hat{\mathbf x}\pm i\hat{\mathbf y})/\sqrt2$, so the two handednesses couple through
+\begin{equation}
+  P_\pm(\mathbf k) = p^x_{cv}(\mathbf k) \pm i\,p^y_{cv}(\mathbf k),
+  \label{eq:ppm}
+\end{equation}
+and the \emph{degree of circular polarization} (optical selectivity) of that transition is
+\begin{equation}
+  \eta(\mathbf k) = \frac{|P_+(\mathbf k)|^2-|P_-(\mathbf k)|^2}
+                         {|P_+(\mathbf k)|^2+|P_-(\mathbf k)|^2}\ \in[-1,1].
+  \label{eq:eta}
+\end{equation}
+$\eta=+1$ means the transition absorbs $\sigma^+$ light only; $\eta=-1$, $\sigma^-$ only;
+$\eta=0$ means it is equally coupled to both.
+
+\paragraph{Why $|\eta|=1$ at a honeycomb zone corner.} The zone corner $K$ of a gapped
+honeycomb lattice is invariant under the three-fold rotation $C_3$, so the band-edge
+states there are eigenstates of $C_3$ with definite eigenvalues
+$e^{2\pi i m/3}$. The operators $P_\pm$ of Eq.~\eqref{eq:ppm} are themselves $C_3$
+eigenoperators: a rotation by $2\pi/3$ multiplies $p_x\pm ip_y$ by $e^{\mp 2\pi i/3}$.
+The matrix element $\langle c|P_\pm|v\rangle$ therefore vanishes unless the angular
+momenta match modulo 3, and for the band-edge pair only \emph{one} of the two
+handednesses can satisfy that selection rule --- so one of $|P_\pm|^2$ is exactly zero
+and $|\eta|=1$ \cite{yaoxiaoniu2008}. Time-reversal symmetry maps $K\to K'$ while
+conjugating the field, exchanging $\sigma^+$ and $\sigma^-$, hence
+\begin{equation}
+  \eta(K') = -\eta(K).
+  \label{eq:valleycd}
+\end{equation}
+This is \emph{valley-selective circular dichroism}: the two inequivalent valleys can be
+addressed independently by choosing the helicity of the light --- the foundation of
+valleytronics in monolayer transition-metal dichalcogenides
+\cite{xiao2012,cao2012,mak2012}. Eq.~\eqref{eq:valleycd} is a symmetry statement and is
+therefore the sharp, falsifiable prediction; $|\eta|=1$ exactly is a two-band $k\cdot p$
+result, approached but not identically attained in all-electron DFT with the full band
+manifold.
+
+\paragraph{Degenerate manifolds.} When either band edge is degenerate, no individual
+$(c,v)$ pair's matrix element is separately meaningful (the states within a degenerate
+subspace are only defined up to a unitary rotation). The correct object is the
+\emph{summed} intensity, $\sum_{c,v}|P_\pm|^2$, which is invariant under such a rotation.
+The converse is a trap that has real consequences: lumping two \emph{non-degenerate}
+bands together --- for example both partners of a spin-orbit-split valence-band top ---
+averages two distinct selectivities and dilutes $\eta$, answering a different physical
+question from the band-edge transition's own selectivity.
+
+\section{The off-diagonal, part two: quantum geometry without derivatives}
+
+Part~\ref{part:quantumgeometry} obtained the quantum geometric tensor from finite
+differences of wavefunction overlaps. The velocity operator gives the same object with no
+$k$-derivative anywhere. Standard first-order perturbation theory in $\mathbf k$ gives,
+for $m\neq n$,
+\begin{equation}
+  \langle u_{m\mathbf k}|\partial_a u_{n\mathbf k}\rangle
+  = \frac{\langle m|\hat v_a|n\rangle}{\varepsilon_n-\varepsilon_m},
+  \label{eq:pt}
+\end{equation}
+which is just the derivative of the eigenvalue equation projected onto another
+eigenstate. Substituting Eq.~\eqref{eq:pt} into the definitions of the quantum metric and
+the Berry curvature, and summing over a band window $W$ (its \emph{trace}, the multi-band
+quantity Parts~\ref{part:berry} and~\ref{part:quantumgeometry} also compute), gives the
+Kubo form: with
+\begin{equation}
+  T_{ab}(\mathbf k) = \sum_{n\in W}\ \sum_{m\notin W}
+    \frac{\langle n|\hat v_a|m\rangle\langle m|\hat v_b|n\rangle}
+         {(\varepsilon_n-\varepsilon_m)^2},
+  \label{eq:kubo-T}
+\end{equation}
+one has
+\begin{equation}
+  g_{ab} = \operatorname{Re}T_{ab},\qquad
+  F_{ab} = -2\operatorname{Im}T_{ab},\qquad
+  Q_{ab} = g_{ab} - \tfrac i2 F_{ab}.
+  \label{eq:kubo-geometry}
+\end{equation}
+Pairs with both states inside $W$ are absent because the window's geometric tensor is a
+property of the projector $P_W=\sum_{n\in W}|n\rangle\langle n|$, which is blind to how
+$W$ is internally resolved --- the same gauge-invariance statement that makes
+Part~\ref{part:berry}'s non-Abelian Wilson loop well defined.
+
+Dimensionally, $[v^2/(\Delta\varepsilon)^2]=$ length$^2$, so both $g_{ab}$ and $F_{ab}$
+come out in Bohr$^2$ with $p$ in atomic units and $\varepsilon$ in Hartree --- the same
+units as Parts~\ref{part:berry}/\ref{part:quantumgeometry}.
+
+\paragraph{What is approximated.} Eq.~\eqref{eq:kubo-T} is exact only if the sum over $m$
+is complete. Two truncations are unavoidable in practice: the sum runs only over the
+$n_{\rm stsv}$ states the calculation actually produced (controlled by Elk's
+\texttt{nempty}), and core states are not among them at all. Both omit terms, suppressed
+by $1/(\Delta\varepsilon)^2$ but nonzero. For the \emph{diagonal} metric components each
+term is $|v^a_{nm}|^2/(\Delta\varepsilon)^2\geq0$, so truncation there is a clean
+underestimate; that monotonicity does not extend to $g_{ab}$ with $a\neq b$, nor to
+$F_{ab}$, whose terms carry either sign. Agreement with the overlap-based route is
+therefore a few-percent statement, not a machine-precision one --- and the two routes are
+worth comparing precisely because their errors are unrelated: a truncated state sum
+versus a finite-difference stencil with its own $O(dk^2)$ error.
+
+\section{A sign convention, fixed by cross-checking}
+
+The Berry connection and curvature admit two sign conventions in circulation, and this
+part's independent route made it possible to determine which one
+Part~\ref{part:berry}'s Wilson-loop code had been implementing --- and to correct it.
+elkpy now uses the standard convention \cite{xiaochangniu2010} throughout,
+\begin{equation}
+  \mathbf A_n(\mathbf k)=i\langle u_n|\nabla_{\mathbf k}u_n\rangle,
+  \qquad
+  \Omega^n_{ab}=\partial_a A^n_b-\partial_b A^n_a
+              = -2\operatorname{Im}\langle\partial_a u_n|\partial_b u_n\rangle,
+  \label{eq:standard-omega}
+\end{equation}
+which is what Eq.~\eqref{eq:kubo-geometry} reproduces.
+
+The discretized Berry phase built from link variables
+$U(\mathbf k\to\mathbf k')=\langle u(\mathbf k)|u(\mathbf k')\rangle/
+|\langle u(\mathbf k)|u(\mathbf k')\rangle|$ carries an explicit negation,
+\begin{equation}
+  \gamma = -\operatorname{Im}\ln\prod_j\langle u_j|u_{j+1}\rangle,
+  \label{eq:discrete-berry}
+\end{equation}
+the King-Smith--Vanderbilt/Resta convention \cite{ksv1993}. The reason is elementary:
+expanding $\langle u|u+\boldsymbol\delta\cdot\nabla u\rangle
+=1+\boldsymbol\delta\cdot\langle u|\nabla u\rangle=e^{-i\mathbf A\cdot\boldsymbol\delta}$
+(using that $\langle u|\nabla u\rangle$ is purely imaginary) makes the product around a
+closed counterclockwise loop equal to $e^{-i\oint\mathbf A\cdot d\mathbf l}$, so its
+\emph{angle} is $-\gamma$, not $\gamma$. Omitting the negation yields $-\Omega_{ab}$, and
+a Chern number of the wrong sign relative to the literature.
+
+That omission was elkpy's behaviour until this part was added. It was caught three ways,
+all pointing the same direction. First, on the massive Dirac model the Kubo expression
+agrees with direct numerical differentiation of Eq.~\eqref{eq:standard-omega} to ten
+significant figures, while the link-variable arithmetic applied to the \emph{same}
+eigenvectors gave exactly minus that. Second, on real monolayer h-BN the identical factor
+of $-1$ appeared end-to-end (Section~\ref{sec:momentum-verification}); because it is the
+same in pure Python and through the full Fortran path, the error is localized entirely in
+the Python flux step, which \emph{confirms} the Fortran overlap-conjugation convention
+that Part~\ref{part:berry} could previously only justify by reading BLAS semantics. Third,
+Part~\ref{part:quantumgeometry}'s Provost--Vall\'ee spin-$\tfrac12$ pin had asserted
+$F_{\theta\phi}=+\tfrac12\sin\theta$; deriving it from Eq.~\eqref{eq:standard-omega} gives
+$A_\phi=i\langle u|\partial_\phi u\rangle=-\sin^2(\theta/2)$, $A_\theta=0$, hence
+\begin{equation}
+  \Omega_{\theta\phi}=\partial_\theta A_\phi = -\tfrac12\sin\theta,
+\end{equation}
+integrating over the sphere to $-2\pi$ --- the spin-$\tfrac12$ monopole charge, Berry
+phase $=-\tfrac12\times$ solid angle. That test had been calibrated to the code rather
+than to the paper, and now matches the derivation.
+
+The correction is confined to one function, so the convention is set once and cannot
+diverge again; the $\mathbb Z_2$ machinery of Parts~\ref{part:z2}/\ref{part:z2threed} is
+untouched, since it builds its own Wilson loop from the raw overlaps and a crossing-count
+parity is in any case invariant under reflecting the Wannier-center curves. Nothing
+previously reported by this project was wrong apart from the overall sign of curvature and
+Chern numbers: every check in Parts~\ref{part:berry}/\ref{part:z2}/\ref{part:z2threed} is
+sign-blind (a vanishing Chern number, a \emph{relative} $K/K'$ antisymmetry, a parity of
+crossings, an inequality even in $F$).
+
+\section{Implementation in elkpy}
+
+The Fortran side adds essentially no new physics: upstream Elk's \texttt{genpmatk}
+computes Eq.~\eqref{eq:pmat} and is used unmodified --- the same subroutine Elk's own
+task-120 \texttt{PMAT.OUT} export calls. What is new is supplying it with the arrays it
+needs at an \emph{arbitrary} $k$-point (a fresh on-the-fly diagonalization plus a
+\texttt{genwfsv} expansion) instead of reading previously-diagonalized mesh eigenvectors
+from file. Everything in Eqs.~\eqref{eq:eta}--\eqref{eq:kubo-geometry} is then done in
+Python (\texttt{src/elkpy/parsers/optical.py}), so it is unit-testable against analytic
+models without an Elk run.
+
+\paragraph{How to use in code.}
+\begin{verbatim}
+from elkpy.structure import Structure
+from elkpy.parsers import optical
+
+hbn = Structure(HBN_AVEC, HBN_SPECIES).get_calculation(
+    "hbn", xc="PW", ngridk=(6, 6, 1), rgkmax=7.0,
+    extra_blocks={"nempty": [12]},   # empty states for the Kubo sums
+)
+hbn.get_energy()
+
+K = (1/3, 1/3, 0.0)
+
+with hbn.eigenstate_session() as session:
+    m = session.momentum(K)          # energies + p^a_nm, one diagonalization
+
+    # Eq. (eta): valley-selective circular dichroism of the band-edge transition
+    optical.circular_polarization(m.pmat, valence=ist1, conduction=ist1 + 1)["eta"]
+
+    # Eqs. (kubo-T)/(kubo-geometry): quantum geometry with no k-derivative
+    optical.kubo_berry_curvature(m.energies, m.pmat, ist0, ist1, directions=(1, 2))
+    optical.kubo_quantum_metric(m.energies, m.pmat, ist0, ist1, directions=(1, 2))
+
+    # Eq. (hellmann): band velocity = dE_n/dk
+    optical.band_velocity(m.pmat, ist=ist1)
+
+# one session reused across a whole path, returning a list of dicts
+path = hbn.get_momentum_matrix(kpath="GKM", npoints=60)
+\end{verbatim}
+
+Note that \texttt{directions} in \texttt{parsers.optical} indexes \emph{Cartesian} axes
+($1,2,3=x,y,z$), since those are \texttt{genpmatk}'s three components --- unlike the
+identically-named argument of \texttt{get\_berry\_curvature()}, which indexes reciprocal
+lattice axes. The two coincide for the default $(1,2)$ on a $c$-axis-out-of-plane 2D cell,
+not in general.
+
+\section{Verification}
+\label{sec:momentum-verification}
+
+On synthetic data (\texttt{tests/test\_parsers\_optical.py}), using the massive Dirac
+model $H_\tau(\mathbf k)=v(\tau k_x\sigma_x+k_y\sigma_y)+\Delta\sigma_z$, for which
+$\mathbf p=\partial H/\partial\mathbf k$ is exact so no numerical differentiation enters
+anywhere: $\eta=\pm1$ at the two valleys (Eq.~\eqref{eq:valleycd}) and decaying away from
+them; the Kubo curvature against direct differentiation of
+Eq.~\eqref{eq:standard-omega} (the sign pin) and against the closed form
+$\pm1/(2\Delta^2)$ at $\mathbf k=0$ (the magnitude pin), together with the two-band sum
+rule $\sum_n\Omega_n=0$; the metric against its closed form $\mathbb 1/(4\Delta^2)$, its
+positive semi-definiteness, and $\det g\geq(F/2)^2$ --- saturated here, as a two-band
+model's lower band is the maximally coherent CP$^1$ case
+Part~\ref{part:quantumgeometry} already pins against.
+
+Against a real compiled binary on monolayer h-BN
+(\texttt{tests/test\_calculation\_momentum.py}): the Hellmann-Feynman identity
+Eq.~\eqref{eq:hellmann} against finite-differenced eigenvalues (an entirely separate code
+path); $\eta(K)=-\eta(K')$ with $|\eta|>0.98$ --- measured $\eta(K)=-1.000000$,
+$\eta(K')=+1.000000$ to six figures, the $C_3$-enforced perfect selectivity of
+Eq.~\eqref{eq:valleycd}; the Kubo curvature against Part~\ref{part:berry}'s Wilson loop at
+$K/K'$ (measured $\mp8.194$ against $\pm8.101$ Bohr$^2$: 1.2\% in magnitude, opposite in
+sign per the previous section); stability of the Kubo sum between \texttt{nempty}$=12$ and
+$20$, so the truncation is checked rather than assumed; and the Kubo metric against
+Part~\ref{part:quantumgeometry}'s finite-difference stencil.
+
+\begin{thebibliography}{9}
+\bibitem{rathgen2004}
+H.~Rathgen and M.~I.~Katsnelson,
+\emph{Symmetry assumptions, Kramers' degeneracy, and the indices of refraction},
+Physica Scripta \textbf{T109}, 170 (2004).
+\bibitem{yaoxiaoniu2008}
+W.~Yao, D.~Xiao and Q.~Niu,
+\emph{Valley-dependent optoelectronics from inversion symmetry breaking},
+Phys.\ Rev.\ B \textbf{77}, 235406 (2008), arXiv:0705.4683.
+\bibitem{xiao2012}
+D.~Xiao, G.-B.~Liu, W.~Feng, X.~Xu and W.~Yao,
+\emph{Coupled Spin and Valley Physics in Monolayers of MoS$_2$ and Other Group-VI
+Dichalcogenides},
+Phys.\ Rev.\ Lett.\ \textbf{108}, 196802 (2012), arXiv:1112.3144.
+\bibitem{cao2012}
+T.~Cao, G.~Wang, W.~Han, H.~Ye, C.~Zhu, J.~Shi, Q.~Niu, P.~Tan, E.~Wang, B.~Liu and
+J.~Feng,
+\emph{Valley-selective circular dichroism of monolayer molybdenum disulphide},
+Nature Communications \textbf{3}, 887 (2012), arXiv:1112.4013.
+\bibitem{mak2012}
+K.~F.~Mak, K.~He, J.~Shan and T.~F.~Heinz,
+\emph{Control of valley polarization in monolayer MoS$_2$ by optical helicity},
+Nature Nanotechnology \textbf{7}, 494 (2012).
+\bibitem{xiaochangniu2010}
+D.~Xiao, M.-C.~Chang and Q.~Niu,
+\emph{Berry phase effects on electronic properties},
+Rev.\ Mod.\ Phys.\ \textbf{82}, 1959 (2010), arXiv:0907.2021.
+\bibitem{ksv1993}
+R.~D.~King-Smith and D.~Vanderbilt,
+\emph{Theory of polarization of crystalline solids},
+Phys.\ Rev.\ B \textbf{47}, 1651(R) (1993).
 \end{thebibliography}
 
 \end{document}

@@ -106,6 +106,46 @@ def parse_orbital_projection_response(tokens):
     return values.reshape(nst, nst, nl, natmtot, order="F").transpose(3, 2, 0, 1)
 
 
+def parse_momentum_response(tokens):
+    """Parse the token stream of a MOMENTUM response: nstsv, then nstsv
+    eigenvalues (Hartree), then the three nstsv x nstsv Cartesian momentum
+    matrices p^x, p^y, p^z as real/imag pairs (same column-major convention
+    as the other parsers here, Cartesian component slowest-varying).
+
+    Returns (energies, pmat): energies shape (nstsv,) Hartree, pmat shape
+    (3, nstsv, nstsv) complex, pmat[a] the a-th Cartesian component
+    (a = 0, 1, 2 for x, y, z) in atomic units, indexed
+    pmat[a][n, m] = <psi_n|p_a|psi_m> -- i.e. the CONJUGATED (bra) state
+    on the row. That index convention is not a guess: genpmatk.f90's own
+    header defines P_ij = integral Psi_i^*(-i grad + ...) Psi_j, and its
+    accumulation is zgemv('C', ...) into pmat(1, jst, i), which places
+    the conjugated factor on the first (row) index. It matters -- a
+    transposed pmat flips both the Kubo Berry curvature and the circular
+    polarization together, so no internal consistency check between them
+    would catch it. Unlike the projection
+    responses this carries NO band window -- genpmatk's array is
+    hard-dimensioned nstsv (see elkpy_momentum), and the Kubo-style sums
+    this feeds need states outside any window of interest anyway.
+
+    The energies are returned alongside deliberately: they come from the
+    same diagonalisation as pmat, which is what makes them safe to use as
+    the energy denominators of those sums. Pairing pmat with a separate
+    EIGENSTATES query's energies would reintroduce the degenerate-subspace
+    basis ambiguity of docs/design.md #14.
+    """
+    pos = 0
+    (nstsv,), pos = _take(tokens, pos, 1, int)
+    energies, pos = _take(tokens, pos, nstsv, float)
+    energies = np.array(energies)
+    flat, pos = _take(tokens, pos, 2 * 3 * nstsv * nstsv, float)
+    reim = np.array(flat).reshape(3 * nstsv * nstsv, 2)
+    values = reim[:, 0] + 1j * reim[:, 1]
+    # Fortran wrote "do comp; do b; do a" with a innermost -- column-major
+    # within each Cartesian component's block, the three blocks consecutive.
+    pmat = values.reshape(nstsv, nstsv, 3, order="F").transpose(2, 0, 1)
+    return energies, pmat
+
+
 def parse_angular_momentum_response(tokens):
     """Parse the token stream of an ANGMOM response: nst, natmtot, nl (always
     4: s, p, d, f), ncomp (always 3: x, y, z), then natmtot*nl*ncomp
