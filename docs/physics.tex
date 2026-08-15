@@ -2094,13 +2094,23 @@ Part~\ref{part:z2}'s graphene test, not a claim about real cesium.
 Against a real compiled binary: a comfortably large gap everywhere sampled on a
 $\Gamma$-L-X-$\Gamma$ path (minimum 0.136~eV, at L -- nowhere near
 Part~\ref{part:z2}'s graphene-aliasing danger zone), and
-\texttt{get\_z2\_invariant\_3d(1, ist1, nkx=12, nt=7)} gives $\nu_0=1$ -- a strong
-topological insulator, matching FKM's $\delta t_1>0$ prediction -- with $\nu_0$
-agreeing identically across all three axis splits (the algebraic guarantee
-\texttt{combine\_3d\_invariants()} checks) and $\nu_1=\nu_2=\nu_3$ (guaranteed by this
-structure's own residual 3-fold rotation about [111], which cyclically permutes the
-three primitive reciprocal directions while fixing both atomic positions)
-(\texttt{tests/test\_calculation\_z2\_3d.py}). $(\nu_1,\nu_2,\nu_3)=(0,0,0)$ here, not
+\texttt{get\_z2\_invariant\_3d(1, ist1, nkx=12, nt=7)} gave $\nu_0=1$ -- apparently a
+strong topological insulator matching FKM's $\delta t_1>0$ prediction. \textbf{That
+value is retracted}; see Part~\ref{part:parity}. The exact, mesh-free parity indicator
+gives $(0;000)$ for this structure across six independently-gapped band windows, and
+refining the WCC mesh on a disputed plane gives $z=1,0,1,0$ for
+$(n_{kx},n_t)=(12,7),(18,9),(24,13),(32,17)$ -- an oscillation, so the original sample
+carried no information. The structure is trivial and the apparent agreement with FKM
+was coincidental: a hypothetical Cs diamond lattice with SOC scaled $3000\times$ does
+not realize the phase of FKM's single-orbital tight-binding model. What survives is the
+\emph{algebraic} check -- $\nu_0$ agreeing identically across all three axis splits (the
+guarantee \texttt{combine\_3d\_invariants()} enforces) and $\nu_1=\nu_2=\nu_3$
+(guaranteed by this structure's own residual 3-fold rotation about [111], which
+cyclically permutes the three primitive reciprocal directions while fixing both atomic
+positions) -- which is what
+\texttt{tests/test\_calculation\_z2\_3d.py} still asserts. The 2D machinery is
+unaffected: it agrees with the parity route on graphene and is separately validated on
+bismuthene. $(\nu_1,\nu_2,\nu_3)=(0,0,0)$ here, not
 FKM's own $(1,1,1)$ -- expected, not a discrepancy, since $(\nu_1,\nu_2,\nu_3)$ are
 basis-dependent (Eq.~\eqref{eq:z2-3d-nui}) and FKM's Hamiltonian uses a different
 primitive-lattice-vector convention than this project's \texttt{Structure}.
@@ -2559,6 +2569,205 @@ Rev.\ Mod.\ Phys.\ \textbf{82}, 1959 (2010), arXiv:0907.2021.
 R.~D.~King-Smith and D.~Vanderbilt,
 \emph{Theory of polarization of crystalline solids},
 Phys.\ Rev.\ B \textbf{47}, 1651(R) (1993).
+\end{thebibliography}
+
+
+\part{Parity eigenvalues and the Fu-Kane symmetry-indicator $\mathbb Z_2$}
+\label{part:parity}
+
+\section{Setting: an invariant without an integral}
+
+Parts~\ref{part:z2} and~\ref{part:z2threed} obtain $\mathbb Z_2$ invariants by tracking
+Wannier charge centres across the Brillouin zone -- a gauge-based construction requiring
+a two-dimensional mesh per plane. When the crystal happens to possess an inversion
+centre, Fu \& Kane \cite{fukane2007inv} showed that the same invariants are determined by
+a handful of numbers at isolated points, with no integration and no mesh at all.
+
+The mechanism is that inversion $\hat I$ commutes with the Hamiltonian, so at any
+momentum satisfying $\hat I\mathbf k\equiv\mathbf k$ modulo a reciprocal lattice vector
+-- equivalently $-\mathbf k\equiv\mathbf k$, i.e.\ the time-reversal-invariant momenta
+(TRIM), whose fractional components are each $0$ or $\tfrac12$ -- the Bloch states can be
+chosen as eigenstates of $\hat I$ with eigenvalues $\xi=\pm1$. Everywhere else inversion
+maps a state at $\mathbf k$ to one at $-\mathbf k$, a different point, and no such
+eigenvalue exists.
+
+Define, at each TRIM $\Gamma_i$,
+\begin{equation}
+  \delta_i=\prod_{m=1}^{N}\xi_{2m}(\Gamma_i),
+  \label{eq:fkdelta}
+\end{equation}
+the product of parity eigenvalues over the $N$ occupied \emph{Kramers pairs}, taking one
+member of each. Then \cite{fukane2007inv,fukanemele2007}
+\begin{equation}
+  (-1)^{\nu_0}=\prod_{i=1}^{8}\delta_i,
+  \qquad
+  (-1)^{\nu_k}=\prod_{\Gamma_i:\,k_i=\pi}\delta_i,
+  \label{eq:fkz2}
+\end{equation}
+with the 2D case using the 4 TRIM of the plane. Eight diagonalisations replace a mesh
+sweep. The price is that the crystal must actually be centrosymmetric; the WCC method of
+Parts~\ref{part:z2}/\ref{part:z2threed} remains the general fallback, and the two are
+complementary rather than redundant -- one is general, the other exact.
+
+\section{Why the Kramers pairing is the whole content}
+
+Eq.~\eqref{eq:fkdelta}'s restriction to one member per pair is not bookkeeping. With
+time-reversal symmetry and $n_{\rm spinor}=2$, every level is two-fold degenerate, and
+the two partners of a Kramers pair carry the \emph{same} parity eigenvalue (inversion
+commutes with time reversal, and acts trivially on spin). The product of $\xi$ over
+\emph{all} occupied states is therefore a product of squares,
+\begin{equation}
+  \prod_{n\in\rm occ}\xi_n=\prod_{m=1}^{N}\xi_{2m}^2=+1
+\end{equation}
+identically -- carrying no information whatsoever, for a topological insulator and a
+trivial one alike. Counting instead the number $N_-$ of $-1$ eigenvalues over all
+occupied states, one member per pair gives
+\begin{equation}
+  \delta_i=(-1)^{N_-/2},
+  \label{eq:deltacount}
+\end{equation}
+which is how elkpy evaluates Eq.~\eqref{eq:fkdelta}. That $N_-$ and the occupied count
+are both even is a genuine check on the band window, not a formality: an odd value means
+the window boundary has split a Kramers pair.
+
+\section{Two properties that make this numerically safe}
+
+\paragraph{$P^2=\mathbb 1$ survives the band-window truncation.} Restricted to a band
+window, the operator $P_{mn}=\langle\psi_m|\hat I|\psi_n\rangle$ is Hermitian with
+$P^2=\mathbb 1$ and eigenvalues exactly $\pm1$ -- \emph{provided} the window is gapped
+from the rest of the spectrum. Because $[\hat I,\hat H]=0$, inversion preserves energy
+eigenspaces, so a gapped group of bands is an invariant subspace and $P$ restricted to it
+is a genuine involution. This is a sharper situation than
+Part~\ref{part:angularmomentum}'s $\mathfrak{su}(2)$ and Casimir identities, which a band
+window genuinely does spoil: those require a resolution of identity over \emph{every}
+state, whereas an invariant subspace supplies its own. The practical consequence is that
+$P^2=\mathbb 1$ and $\xi=\pm1$ are usable as runtime assertions here, and elkpy uses them
+as such.
+
+Note that the eigenvalues must be obtained by \emph{diagonalising} $P$, not by reading
+its diagonal. TRIM spectra are heavily degenerate, and within a degenerate multiplet the
+diagonalisation returns an arbitrary basis, in which the diagonal entries of $P$ are not
+$\pm1$ at all.
+
+\paragraph{A global sign error cannot propagate.} Suppose the overall sign convention of
+$P$ were wrong, flipping every $\xi$ at once. Each invariant in Eq.~\eqref{eq:fkz2} is a
+product over an \emph{even} number of TRIM (8 for $\nu_0$, 4 for each $\nu_k$ and for the
+2D $\nu$), so a global flip cancels identically. This is not a hypothetical reassurance:
+it was observed directly (Section~\ref{sec:parity-verification}), where different band
+windows on the same structure returned all eight $\delta_i$ flipped with $\nu_0$
+unchanged. Consequently elkpy does not chase an absolute per-band parity sign pin -- the
+checks with teeth are structural ($P$ Hermitian, $P^2=\mathbb 1$, $\xi=\pm1$, even
+Kramers counts) plus agreement with the independent WCC route.
+
+\section{Implementation in elkpy}
+
+The Fortran side introduces no new symmetry algebra. The transformation of
+first-variational coefficients under a crystal symmetry is taken from upstream
+\texttt{getevecfv.f90}, which performs exactly this operation to reconstruct
+wavefunctions at symmetry-related $k$-points -- a path exercised by every
+symmetry-reduced Elk run. Elk's own bookkeeping simplifies it further:
+\texttt{findsymcrys.f90} makes inversion crystal symmetry element 2 with a \emph{zero}
+translation whenever inversion is present (clearing its \texttt{tsyminv} flag otherwise,
+having already shifted the basis so the inversion centre sits at the origin), so the
+non-zero-translation branch is unnecessary. The improper rotation is handled by upstream
+\texttt{rotzflm}, which detects $\det R<0$ and applies the corresponding $(-1)^\ell$
+factor.
+
+The overlap needs no new machinery either. Because $\hat I\mathbf k\equiv\mathbf k$ at a
+TRIM, the rotated coefficients lie in the \emph{same} LAPW basis, so
+$\langle\psi_m|\hat I\psi_n\rangle$ follows from \texttt{genwfsv} plus \texttt{genolpq}
+at $q=0$ -- the machinery Part~\ref{part:eigenstates}'s overlap query already uses -- with
+no basis-overlap matrix required. Everything above the matrix elements
+(Eqs.~\eqref{eq:fkdelta}--\eqref{eq:deltacount}) is pure Python in
+\texttt{parsers/symmetry.py}.
+
+Inversion is its own inverse, so upstream's active/passive direction convention is
+immaterial here. That will \emph{not} be true for a generalisation to $C_n$ rotations,
+where the direction must be pinned explicitly before the result can be trusted.
+
+\paragraph{How to use in code.}
+\begin{verbatim}
+from elkpy.parsers import symmetry
+
+calc = Structure(AVEC, SPECIES).get_calculation(
+    "run", xc="PW", ngridk=(4, 4, 4), rgkmax=7.0, spinorb=True)
+calc.get_energy()
+
+result = calc.get_fu_kane_invariant(1, ist1, dimension=3)   # 8 k-points
+result["nu0"], result["nu"], result["deltas"]
+
+p = calc.get_parity(k=(0.5, 0.5, 0.5), ist0=1, ist1=ist1)   # one TRIM
+symmetry.parity_eigenvalues(p.pmat)    # +-1 -- NOT p.pmat's diagonal
+symmetry.trim_delta(p.pmat)            # that TRIM's delta
+\end{verbatim}
+Spin-orbit coupling is required: without it, spin-SU(2) forces the two spin sectors to
+opposite Chern numbers and $\mathbb Z_2$ vanishes identically, so the invariant carries
+no information even where it can be formed.
+
+\section{Verification, and a retraction}
+\label{sec:parity-verification}
+
+Against a real compiled binary (\texttt{tests/test\_calculation\_parity.py}): monolayer
+graphene with enhanced intrinsic spin-orbit coupling gives $\nu=1$ from 4 $k$-points,
+matching the WCC answer of Part~\ref{part:z2} for the same system -- two routes sharing
+no arithmetic, the parity one additionally exercising a Fortran path nothing else in
+elkpy touches. A crystal without an inversion centre (h-BN, whose two sublattices carry
+different species) and a non-TRIM $k$-point are both refused, the latter detected
+independently in Python and in Fortran (as a rotated $G+k$ vector with no partner in the
+same basis). On synthetic data (\texttt{tests/test\_parsers\_symmetry.py}) the counting
+reproduces the Bernevig-Hughes-Zhang model answer: a band inversion at exactly one TRIM
+gives $\nu=1$, at zero or two gives $\nu=0$.
+
+Applied to the $[111]$-dimerized diamond structure of Part~\ref{part:z2threed}, the
+parity indicator gives $(0;000)$ -- \textbf{retracting} the $\nu_0=1$ reported there. The
+evidence:
+
+\begin{center}
+\begin{tabular}{ll}
+\hline
+Parity indicator (exact, no mesh), 6 gapped windows & $(0;000)$ every time \\
+WCC on the disputed plane, $(n_{kx},n_t)=(12,7),(18,9),(24,13),(32,17)$ & $z=1,0,1,0$ \\
+Direct gap on that plane ($13\times13$ scan) & $\geq0.19$ eV, smooth \\
+\hline
+\end{tabular}
+\end{center}
+
+The disagreement localises cleanly -- all three $k_i=0$ planes differ, all three
+$k_i=\pi$ planes agree -- and the WCC value \emph{oscillates} rather than converging, so
+the original $n_{kx}=12$ sample carried no information. The plane is robustly gapped, so
+this is not the mesh-aliasing failure of Part~\ref{part:z2} (where an anticrossing
+$\sim10^{-3}$ wide in fractional coordinates defeated any practical mesh); the crossing
+count is simply under-resolved. The parity result is mesh-free and was checked to be
+independent of the band window across six independently-gapped choices, one of which
+drops a semicore block lying below a $69$~eV gap -- exercising $\mathbb Z_2$'s additivity
+modulo 2 over gapped groups. Between some of those windows all eight $\delta_i$ flipped
+together, leaving $\nu_0$ unchanged, which is the even-TRIM sign immunity above observed
+in practice.
+
+The physical reading is that a hypothetical Cs diamond lattice with spin-orbit coupling
+scaled $3000\times$ does not realise the phase of FKM's \emph{single-orbital
+tight-binding} model, and the earlier agreement was an unconverged number landing on the
+anticipated answer. The WCC \emph{implementation} is not impugned: its algebraic
+axis-split consistency held, it agrees with the parity route on graphene, and it is
+separately validated in 2D on bismuthene. What is impugned is the six-plane 3D sweep at a
+practical mesh -- which also makes under-convergence the leading explanation for
+Part~\ref{part:z2threed}'s other open item, the Bi$_2$Se$_3$ result.
+
+A final guard came out of this. A window boundary lying \emph{inside} a band group passes
+every check above -- Hermitian, $\xi=\pm1$, even Kramers counts -- while describing no
+topological group at all; on this structure a window starting at band 19 did exactly that
+and returned a confident $\nu_0=1$. \texttt{parsers.symmetry.check\_window\_gap()} now
+rejects it, in the same spirit as \texttt{parsers.berry.check\_gap()}.
+
+\begin{thebibliography}{9}
+\bibitem{fukane2007inv}
+L.~Fu and C.~L.~Kane,
+\emph{Topological insulators with inversion symmetry},
+Phys.\ Rev.\ B \textbf{76}, 045302 (2007), arXiv:cond-mat/0611341.
+\bibitem{fukanemele2007}
+L.~Fu, C.~L.~Kane and E.~J.~Mele,
+\emph{Topological Insulators in Three Dimensions},
+Phys.\ Rev.\ Lett.\ \textbf{98}, 106803 (2007), arXiv:cond-mat/0607699.
 \end{thebibliography}
 
 \end{document}

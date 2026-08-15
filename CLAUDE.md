@@ -424,10 +424,15 @@ electron, close to FKM's single-orbital tight-binding picture; not a real crysta
 of cesium — chosen per this project's standing rule to ask Fable about material/structure
 questions, see "Development practices" below) plus `soc_scale={"Cs": 3000.0}` (real
 single-band SOC is expected too weak to resolve, same reasoning as §20's graphene test).
-`get_z2_invariant_3d(1, ist1, nkx=12, nt=7)` gives $\nu_0=1$ — a strong topological
-insulator, matching FKM's $\delta t_1>0$ ("dimerized") prediction — with $\nu_0$
-agreeing identically across all three axis splits and $\nu_1=\nu_2=\nu_3$ (guaranteed
-by this structure's residual 3-fold rotation about [111]) (`tests/test_calculation_z2_3d.py`).
+`get_z2_invariant_3d(1, ist1, nkx=12, nt=7)` gave $\nu_0=1$, apparently matching FKM's
+$\delta t_1>0$ ("dimerized") prediction — **retracted, see §23**: the exact (mesh-free)
+Fu-Kane parity indicator gives $(0;000)$ robustly across six independently-gapped band
+windows, and refining the WCC mesh on a disputed plane oscillates $z=1,0,1,0$ rather than
+converging, so the original number carried no information. This structure is trivial and
+the FKM agreement was coincidental. The *implementation* is not impugned —
+`combine_3d_invariants()`'s axis-split consistency held, and WCC still agrees with parity
+in 2D (graphene) — the 3D six-plane sweep was simply run at too coarse a mesh
+(`tests/test_calculation_z2_3d.py`, `tests/test_calculation_parity.py`).
 
 Two dead ends/lessons along the way, both corrected rather than silently dropped:
 freestanding gray tin, uniaxially strained along **[001]** (a *tetragonal* distortion,
@@ -540,6 +545,63 @@ the labels were wrong, never the numbers. Physics writeup (the velocity
 operator identity, the $C_3$ selection rule, the Kubo derivation, the sign analysis):
 `docs/design.md` §22 and `docs/physics.tex` (Part XI).
 
+Also implemented, as patch 0008 — the eighth in the Fortran patch series:
+`Calculation.get_parity(k, ist0, ist1)` / `get_fu_kane_invariant(ist0, ist1, dimension=)`
+(task 9002's new `PARITY` query) — the inversion operator
+$P_{mn}=\langle\psi_m|\hat I|\psi_n\rangle$ at a time-reversal-invariant momentum, and the
+Fu-Kane symmetry-indicator $Z_2$ built from it (Fu & Kane, PRB 76, 045302 (2007)):
+$\delta_i=\prod_m\xi_{2m}(\Gamma_i)$, $(-1)^{\nu_0}=\prod_{i=1}^{8}\delta_i$,
+$(-1)^{\nu_k}=\prod_{k_i=\pi}\delta_i$. The cheap counterpart to §20/§21's WCC pumping —
+**8 diagonalisations instead of a mesh sweep**, and *exact* rather than convergent — at the
+cost of requiring an inversion centre, so the two are complementary rather than redundant.
+No new symmetry algebra: the transformation of first-variational coefficients is lifted from
+upstream `getevecfv.f90` (exercised by every `reducek=1` run), and Elk makes it simpler than
+expected — `findsymcrys.f90` moves inversion to symmetry element 2 **with zero translation**
+whenever `tsyminv` is true (clearing the flag otherwise, having shifted the basis to put the
+inversion centre at the origin), so upstream's translation branch drops out; `rotzflm` already
+handles the improper rotation ($\det R<0\Rightarrow(-1)^\ell$ via `ylmrot`). The overlap needs
+nothing new either: because $\hat I\mathbf k\equiv\mathbf k$ at a TRIM the rotated coefficients
+live in the SAME LAPW basis, so `genwfsv`+`genolpq` at $q=0$ (§14's `OVERLAP` path, with the
+muffin-tin phase set directly to unity) gives the matrix — no basis-overlap matrix required.
+Three traps, all now guarded: parity eigenvalues are NOT `pmat`'s diagonal (TRIM spectra are
+degenerate, so the diagonalisation returns an arbitrary basis within a multiplet — use
+`parsers.symmetry.parity_eigenvalues()`); with `nspinor=2` Kramers partners share a parity
+eigenvalue, so the product over ALL occupied states is identically $+1$ and carries no
+information — the one-per-pair counting $\delta=(-1)^{N_-/2}$ is the entire content of the
+formula; and a window boundary sitting INSIDE a band group passes every other check
+(Hermitian, $\pm1$, even Kramers counts) while describing no topological group at all
+(`check_window_gap()`, added after `ist0=19` on the cesium structure did exactly that and
+returned a confident $\nu_0=1$). Unlike §19's su(2)/Casimir identities, $P^2=\mathbb 1$ DOES
+survive the band-window truncation — $[\hat I,\hat H]=0$ makes a gapped window an invariant
+subspace rather than a mere slice — so it is usable as a runtime assertion. A global sign error
+in $P$ cannot propagate: every invariant is a product over an EVEN number of TRIM, observed
+directly when different windows returned all eight $\delta_i$ flipped with $\nu_0$ unchanged.
+Verified against a real compiled binary: graphene (`soc_scale=3000`, §20's fixture) gives
+$\nu=1$ from 4 k-points, matching `get_z2_invariant()`; h-BN (no inversion centre) and a
+non-TRIM k-point are both refused with the session left alive
+(`tests/test_calculation_parity.py`). Requires `spinorb=True`, now enforced rather than merely
+documented.
+
+**This feature retracted §21's cesium result.** The [111]-dimerized diamond structure is
+topologically TRIVIAL, $(0;000)$, not the $\nu_0=1$ §21 reported: the parity indicator gives
+$(0;000)$ across six independently-gapped windows (including one dropping a semicore block
+below a 69 eV gap, exercising $Z_2$ additivity mod 2), while refining the WCC mesh on a
+disputed plane gives $z=1,0,1,0$ for $(n_{kx},n_t)=(12,7),(18,9),(24,13),(32,17)$ — an
+oscillation, so the original $n_{kx}=12$ sample carried no information. The disagreement
+localizes cleanly (all three $k_i=0$ planes differ, all three $k_i=\pi$ agree), and the plane
+is robustly gapped (min direct gap 0.19 eV over a 13x13 scan), so this is NOT §20's
+graphene mesh-aliasing mode — the crossing count is simply under-resolved. Physically, a Cs
+diamond lattice with SOC scaled 3000x does not realize FKM's single-orbital tight-binding
+phase; the earlier agreement was coincidental. The WCC *implementation* is not impugned (its
+axis-split algebra held, it agrees with parity on graphene, and 2D is separately validated on
+bismuthene) — the 3D six-plane sweep at a practical mesh is. This also makes
+under-convergence the leading explanation for §21's other open item, Bi$_2$Se$_3$'s
+$\nu_0=0$ against a literature $(1;000)$; that is settleable in minutes by parity (it is
+centrosymmetric) once its structure is re-sourced from COD 9011965 as a checked-in fixture —
+not done here. Physics writeup (the FKM formulas, the Kramers-pairing derivation, the
+even-TRIM sign immunity, why $P^2=\mathbb 1$ survives truncation, the retraction):
+`docs/design.md` §23 and `docs/physics.tex` (Part XII).
+
 ## Architecture
 
 - `src/elkpy/structure.py` — `Structure`: lattice vectors (`avec`, Bohr) + species, each atom either a
@@ -576,8 +638,9 @@ operator identity, the $C_3$ selection rule, the Kubo derivation, the sign analy
   parsing responses off stdout until closed (context manager) or told to `QUIT`. See `docs/design.md`
   §14 for why this is a persistent worker process rather than an f2py in-memory bridge, §16 for
   `PROJECTION` (atom-projection operators), §18 for `ORBITAL` (l-resolved s/p/d/f projectors,
-  `ORBITAL_LABELS`), and §22 for `MOMENTUM` (momentum/velocity matrix elements — the one query
-  here that takes no band window, since `genpmatk`'s array is hard-dimensioned `nstsv`).
+  `ORBITAL_LABELS`), §22 for `MOMENTUM` (momentum/velocity matrix elements — the one query
+  here that takes no band window, since `genpmatk`'s array is hard-dimensioned `nstsv`), and
+  §23 for `PARITY` (the inversion operator at a TRIM, for the Fu-Kane $Z_2$ indicators).
 - `src/elkpy/parsers/` — one small module per output file family (`info`, `totenergy`, `band` — reused
   for phonon dispersion, since `PHDISP.OUT` shares `BAND.OUT`'s exact layout — `dos`, reused for phonon
   DOS, `forces`, `geometry`, `effmass`, `volumetric`), each verified against real Elk output, not
@@ -592,7 +655,9 @@ operator identity, the $C_3$ selection rule, the Kubo derivation, the sign analy
   `get_z2_invariant()` — see §20. `optical` is the same exception again: it turns the
   `MOMENTUM` query's raw matrix elements into circular dichroism and the Kubo-form quantum
   geometric tensor, pinned on synthetic massive-Dirac data (`tests/test_parsers_optical.py`)
-  without an Elk run — see §22.
+  without an Elk run — see §22. `symmetry` is the same again for the `PARITY` query: parity
+  eigenvalue extraction and the Fu-Kane $Z_2$ counting, with the band-window gap guard
+  (`check_window_gap`) that a Kramers-parity check alone cannot supply — see §23.
 - `src/elkpy/config.py` — locates the built `elk` binary (`build/elk/src/elk` by default, override via
   `ELKPY_ELK_BIN`) and the species directory (`vendor/elk/species/` by default).
 

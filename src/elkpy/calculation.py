@@ -25,6 +25,7 @@ from .parsers import (
     geometry,
     info,
     quantum_geometry,
+    symmetry,
     totenergy,
     volumetric,
     wilson,
@@ -1244,6 +1245,82 @@ class Calculation:
             "momentum", k, kpoints, kpath, ist0, ist1, npoints, label,
             require_window=False,
         )
+
+    def get_parity(
+        self, k=None, ist0=None, ist1=None, kpoints=None, kpath=None, npoints=100,
+        label="parity",
+    ):
+        """The inversion (parity) operator P_mn = <psi_m|I|psi_n> over the
+        contiguous band window [ist0, ist1], plus the eigenvalues of the
+        same diagonalisation. A one-off convenience wrapper around
+        eigenstate_session() -- see EigenstateSession.parity() for what
+        this computes, why it is defined only at a time-reversal-invariant
+        momentum, and why the eigenvalues should be taken via
+        parsers.symmetry.parity_eigenvalues() rather than from pmat's
+        diagonal.
+
+        Pass exactly one of `k`, `kpoints` or `kpath` -- see
+        get_atom_projection()'s docstring for the latter two. For the
+        Fu-Kane invariants use get_fu_kane_invariant() instead, which
+        visits the right k-points for you.
+        """
+        return self._session_query_path(
+            "parity", k, kpoints, kpath, ist0, ist1, npoints, label
+        )
+
+    def get_fu_kane_invariant(self, ist0, ist1, dimension=3, label="fu_kane"):
+        """The Z2 topological invariant(s) from parity eigenvalues at the
+        time-reversal-invariant momenta -- the symmetry-indicator route of
+        Fu & Kane, PRB 76, 045302 (2007), requiring only 8 (3D) or 4 (2D)
+        k-points instead of the Wannier-charge-center mesh sweep of
+        get_z2_invariant()/get_z2_invariant_3d() (docs/design.md #20/#21).
+
+        Valid only for a crystal with an inversion centre; without one this
+        raises (Elk's `tsyminv`), and the WCC method remains the general
+        fallback. Requires nspinor=2 (spinorb=True): with spin-orbit
+        coupling absent, spin-SU(2) forces the two spin sectors to have
+        opposite Chern numbers and Z2 is trivially 0, so the invariant
+        carries no information.
+
+        [ist0, ist1] must enclose the occupied manifold as a group gapped
+        from the states above it, with both Kramers partners of every level
+        inside -- a boundary that splits a pair raises rather than silently
+        returning a wrong parity (parsers.symmetry.trim_delta).
+
+        Returns, for dimension=3, {"nu0": int, "nu": (nu1, nu2, nu3),
+        "deltas": {k: +-1}}; for dimension=2, {"nu": int, "deltas": {...}}.
+        See docs/design.md #23.
+        """
+        if dimension not in (2, 3):
+            raise ValueError(f"dimension must be 2 or 3, got {dimension}")
+        if not (self.spinorb or self.spinpol):
+            raise ValueError(
+                "the Fu-Kane Z2 invariant requires a spinor calculation (spinorb=True): "
+                "the delta_i product runs over one member of each KRAMERS PAIR, which "
+                "needs nspinor=2 to exist. Without spin-orbit coupling, spin-SU(2) forces "
+                "the two spin sectors to opposite Chern numbers and Z2 is trivially 0, so "
+                "the invariant would carry no information even if it could be formed"
+            )
+        if self.spinpol and not self.spinorb:
+            raise ValueError(
+                "the Fu-Kane Z2 invariant requires time-reversal symmetry, which "
+                "spinpol=True without spinorb=True breaks (a collinear magnet has no "
+                "Kramers degeneracy); the formula does not apply"
+            )
+        trims = symmetry.TRIM_3D if dimension == 3 else symmetry.TRIM_2D
+        deltas = {}
+        with self.eigenstate_session(label=label) as session:
+            for kpoint in trims:
+                result = session.parity(kpoint, ist0, ist1)
+                # the window must be a gapped band group at EVERY TRIM, not
+                # merely Kramers-consistent -- see check_window_gap
+                symmetry.check_window_gap(result.energies, ist0, ist1)
+                deltas[kpoint] = symmetry.trim_delta(result.pmat)
+        if dimension == 2:
+            return {"nu": symmetry.fu_kane_z2_2d(deltas), "deltas": deltas}
+        out = symmetry.fu_kane_z2_3d(deltas)
+        out["deltas"] = deltas
+        return out
 
     def run_tasks(self, tasks, blocks=None, resume=True, label=None):
         """Escape hatch for any Elk task not covered by a named get_*

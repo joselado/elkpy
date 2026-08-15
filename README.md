@@ -48,6 +48,7 @@ python3 -m pip install -e .        # add .[ase] for Structure.from_ase()/to_ase(
 - Berry curvature at an arbitrary k-point with no periodic mesh required, e.g. to resolve individual valleys of a 2D material [[notebook]](notebooks/05_berry_curvature.ipynb)
 - The $\mathbb Z_2$ invariant $\nu\in\{0,1\}$ of a time-reversal-invariant 2D insulator, via Wannier-charge-center pumping and the non-Abelian Wilson loop $D(k_2)=\prod_iU(F_i)$, distinguishing an ordinary insulator from a quantum spin Hall insulator [[notebook]](notebooks/12_z2_invariant.ipynb)
 - The full 3D strong/weak classification $(\nu_0;\nu_1\nu_2\nu_3)$ of a 3D time-reversal-invariant insulator, from the $Z_2$ invariant of each of the Brillouin zone's six time-reversal-invariant planes, distinguishing an ordinary insulator from a strong or weak topological insulator [[notebook]](notebooks/13_z2_invariant_3d.ipynb)
+- The same $Z_2$ invariants from parity eigenvalues alone, $\delta_i=\prod_m\xi_{2m}(\Gamma_i)$ with $(-1)^{\nu_0}=\prod_i\delta_i$ — exact and mesh-free, needing only the 8 (3D) or 4 (2D) time-reversal-invariant momenta, for crystals with an inversion centre [[notebook]](notebooks/15_parity_invariants.ipynb)
 
 ## Quantum geometry ##
 - The full quantum geometric tensor $Q_{ab}=g_{ab}-\tfrac i2F_{ab}$ at an arbitrary k-point: Berry curvature $F_{ab}$ *and* the quantum metric $g_{ab}$ (Fubini-Study distance between neighbouring Bloch states), from the same wavefunction-overlap queries used for eigenstates below [[notebook]](notebooks/07_quantum_geometry.ipynb)
@@ -118,7 +119,8 @@ Fu & Kane's own minimal lattice model for introducing $(\nu_0;\nu_1\nu_2\nu_3)$ 
 structure with the second basis atom displaced along [111], shortening one bond per atom:
 ```python
 result = cs.get_z2_invariant_3d(1, ist1, nkx=12, nt=7)
-result["nu0"]         # 1: strong topological insulator (matches Fu-Kane's dimerized prediction)
+result["nu0"]         # strong index (this structure: 0 -- see docs/design.md #23,
+                      # which retracts an earlier unconverged nu0=1 for it)
 result["nu0_by_axis"] # (1, 1, 1): the strong index agrees identically across all three axes
 ```
 ![Alt text](images/cs_dimerized_z2_invariant_3d.png?raw=true "Wannier charge centers on the k1=0 and k1=pi planes of a dimerized diamond lattice, showing an odd vs. even number of crossings")
@@ -229,7 +231,7 @@ points, density = calc.get_density(grid=(24, 24, 24))  # n(r) = sum_i^occ |psi_i
 ![Alt text](images/si_density.png?raw=true "Charge density slice of bulk silicon")
 
 # Notebooks #
-Fourteen notebooks under [`notebooks/`](notebooks), one per feature area above, each
+Fifteen notebooks under [`notebooks/`](notebooks), one per feature area above, each
 executed end-to-end against a real compiled Elk binary and checked in with its actual
 output (the DFPT phonon notebook is the exception -- left unexecuted with a note,
 since a single call takes ~11-13 minutes). Listed new-physics-first, matching
@@ -249,6 +251,7 @@ is the place to actually start:
 | [`12_z2_invariant.ipynb`](notebooks/12_z2_invariant.ipynb) | The 2D $\mathbb Z_2$ invariant via Wannier-charge-center pumping | yes |
 | [`13_z2_invariant_3d.ipynb`](notebooks/13_z2_invariant_3d.ipynb) | The 3D strong/weak $(\nu_0;\nu_1\nu_2\nu_3)$ classification | yes |
 | [`14_optical_matrix_elements.ipynb`](notebooks/14_optical_matrix_elements.ipynb) | Optical matrix elements, circular dichroism and Kubo quantum geometry of monolayer h-BN | yes |
+| [`15_parity_invariants.ipynb`](notebooks/15_parity_invariants.ipynb) | Parity eigenvalues at the TRIM and the Fu-Kane symmetry-indicator $Z_2$ | yes |
 | [`01_getting_started.ipynb`](notebooks/01_getting_started.ipynb) | Ground state, band structure, density of states | -- |
 | [`02_relaxation_forces_and_properties.ipynb`](notebooks/02_relaxation_forces_and_properties.ipynb) | Forces, relaxation, effective mass, density, `run_tasks()` | -- |
 | [`03_phonon_dispersion_and_dos.ipynb`](notebooks/03_phonon_dispersion_and_dos.ipynb) | Phonon dispersion/DOS via DFPT | -- |

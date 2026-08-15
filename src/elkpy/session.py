@@ -19,10 +19,12 @@ from .parsers.eigenstates import (
     parse_eigenstates_response,
     parse_momentum_response,
     parse_orbital_projection_response,
+    parse_parity_response,
     parse_overlap_response,
     parse_projection_response,
 )
 from .parsers.spin import compute_spin_operator
+from .parsers.symmetry import is_trim
 
 READY_SENTINEL = "ELKPY_SESSION_READY"
 END_SENTINEL = "ELKPY_SESSION_END"
@@ -38,6 +40,7 @@ AtomProjection = namedtuple("AtomProjection", ["k", "matrices"])
 OrbitalProjection = namedtuple("OrbitalProjection", ["k", "matrices"])
 SpinOperator = namedtuple("SpinOperator", ["k", "sx", "sy", "sz"])
 Momentum = namedtuple("Momentum", ["k", "energies", "pmat"])
+Parity = namedtuple("Parity", ["k", "energies", "pmat"])
 AngularMomentum = namedtuple(
     "AngularMomentum", ["k", "lx", "ly", "lz", "lx_orbital", "ly_orbital", "lz_orbital"]
 )
@@ -377,6 +380,54 @@ class EigenstateSession:
             energies = energies[lo - 1 : hi]
             pmat = pmat[:, lo - 1 : hi, lo - 1 : hi]
         return Momentum(k=k, energies=energies, pmat=pmat)
+
+    def parity(self, k, ist0, ist1):
+        """The inversion (parity) operator P_mn = <psi_m|I|psi_n> over the
+        contiguous, 1-indexed band window [ist0, ist1], plus all nstsv
+        eigenvalues of the same diagonalisation -- via elkpy_parity
+        (src/elkpy_eigenstates.f90, lifting the symmetry transformation of
+        the first-variational coefficients from upstream getevecfv.f90 and
+        reusing genwfsv/genolpq at q=0 for the overlap). See
+        docs/design.md #23 and docs/physics.tex Part XII.
+
+        Defined ONLY at a time-reversal-invariant momentum (every
+        fractional component 0 or 1/2), where inversion maps k to itself
+        modulo a reciprocal lattice vector; elsewhere it maps the state to
+        -k and no such matrix exists. This is checked here before the query
+        is sent (parsers.symmetry.is_trim), and independently in Fortran,
+        which detects it as a G+k vector with no partner in the same basis.
+        Requires a crystal with an inversion centre (Elk's `tsyminv`);
+        without one the query raises ValueError rather than returning
+        something meaningless.
+
+        Returns a Parity(k, energies, pmat) namedtuple: energies shape
+        (nstsv,) Hartree (ALL states, so the degeneracy structure around
+        the window is visible), pmat shape (nst, nst) complex.
+
+        Because [I, H] = 0, inversion preserves energy eigenspaces, so a
+        window gapped from the rest of the spectrum is I-invariant: P is
+        Hermitian with P^2 = 1 and eigenvalues exactly +-1. Note this is
+        NOT spoiled by the band-window truncation, unlike the su(2) and
+        Casimir identities of angular_momentum() (docs/design.md #19) --
+        those need a resolution of identity over every state, whereas an
+        invariant window supplies its own. Use
+        parsers.symmetry.parity_eigenvalues() rather than reading pmat's
+        diagonal: TRIM spectra are heavily degenerate and the diagonal
+        entries are basis-dependent within a multiplet.
+        """
+        k = tuple(float(x) for x in k)
+        if not is_trim(k):
+            raise ValueError(
+                f"parity is only defined at a time-reversal-invariant momentum "
+                f"(every fractional component 0 or 1/2), got {k} -- inversion maps any "
+                f"other k-point to -k, a different point"
+            )
+        self._send(
+            f"PARITY {_fmt(k[0])} {_fmt(k[1])} {_fmt(k[2])} {int(ist0)} {int(ist1)}"
+        )
+        tokens = self._read_until_sentinel()
+        energies, pmat = parse_parity_response(tokens)
+        return Parity(k=k, energies=energies, pmat=pmat)
 
     def spin_operator(self, k, ist0, ist1):
         """The spin operators S_x, S_y, S_z (hbar=1, so eigenvalues +-1/2

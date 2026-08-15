@@ -146,6 +146,35 @@ def parse_momentum_response(tokens):
     return energies, pmat
 
 
+def parse_parity_response(tokens):
+    """Parse the token stream of a PARITY response: nst, nstsv, then nstsv
+    eigenvalues (Hartree), then the nst x nst inversion-operator matrix
+    P(a, b) = <psi_a|I|psi_b> as real/imag pairs (same column-major
+    convention as the other parsers here).
+
+    Returns (energies, pmat): energies shape (nstsv,) Hartree -- ALL states,
+    not just the window -- and pmat shape (nst, nst) complex over the
+    requested band window. The full eigenvalue list travels with the
+    windowed operator (same reasoning as parse_momentum_response) so the
+    caller can see the degeneracy structure around the window and confirm
+    its boundary does not cut a Kramers pair.
+
+    P is Hermitian with P^2 = 1 and eigenvalues +-1 whenever the window is
+    gapped from the rest of the spectrum -- see
+    EigenstateSession.parity() for why that survives the truncation here
+    when the analogous angular-momentum identities (docs/design.md #19) do
+    not.
+    """
+    pos = 0
+    (nst, nstsv), pos = _take(tokens, pos, 2, int)
+    energies, pos = _take(tokens, pos, nstsv, float)
+    energies = np.array(energies)
+    flat, pos = _take(tokens, pos, 2 * nst * nst, float)
+    reim = np.array(flat).reshape(nst * nst, 2)
+    values = reim[:, 0] + 1j * reim[:, 1]
+    return energies, values.reshape(nst, nst, order="F")
+
+
 def parse_angular_momentum_response(tokens):
     """Parse the token stream of an ANGMOM response: nst, natmtot, nl (always
     4: s, p, d, f), ncomp (always 3: x, y, z), then natmtot*nl*ncomp

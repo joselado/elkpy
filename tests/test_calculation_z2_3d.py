@@ -46,7 +46,11 @@ Getting the SAME (nu1,nu2,nu3)=(1,1,1) FKM report is not itself expected:
 (nu1,nu2,nu3) are basis-dependent (docs/design.md #21) and FKM's own
 Hamiltonian is written in a different primitive-lattice-vector convention
 than this module's Structure -- what IS asserted, and IS basis-independent,
-is nu0=1 (agreeing identically across all three axis choices, an algebraic
+was reported as nu0=1 -- RETRACTED, see docs/design.md #23 and
+tests/test_calculation_parity.py: the exact parity indicator gives (0;000) and
+the WCC number on the disputed planes oscillates with mesh rather than
+converging. What still holds is the axis-split consistency (agreeing
+identically across all three axis choices, an algebraic
 guarantee -- see wilson.combine_3d_invariants()) and nu1=nu2=nu3 (guaranteed
 here by this structure's own residual 3-fold rotation about [111], which
 cyclically permutes the three primitive reciprocal directions -- both atomic
@@ -151,15 +155,31 @@ def cs_dimerized_calculation(tmp_path):
     return calc, ist1
 
 
-def test_z2_3d_dimerized_cs_diamond_is_a_strong_topological_insulator(cs_dimerized_calculation):
-    """Fu & Kane, PRB 76, 045302 (2007), Sec. IV.3: their own diamond-lattice
-    model, dimerized (shortened [111] bond, delta>0) is a strong topological
-    insulator, nu0=1. (nu1,nu2,nu3) are basis-dependent (docs/design.md #21)
-    so are not asserted against FKM's own (1;1,1,1) -- only that they come
-    out mutually equal, guaranteed by this structure's residual 3-fold
-    rotation about [111] (see module docstring)."""
+def test_z2_3d_axis_splits_are_algebraically_consistent(cs_dimerized_calculation):
+    """What this structure can still be used to check: the ALGEBRAIC
+    consistency of combine_3d_invariants(), i.e. that nu0 comes out the same
+    from all three axis splits (nu0 = z(k_i=0) XOR z(k_i=pi) for any i), and
+    that the residual 3-fold rotation about [111] makes nu1 = nu2 = nu3.
+
+    What it can NO LONGER be used to check is the VALUE of nu0. This test
+    previously asserted nu0 = 1, read as confirming Fu & Kane's
+    diamond-lattice prediction (PRB 76, 045302 (2007), Sec. IV.3). That
+    assertion has been retracted: the Fu-Kane parity indicator, which is
+    exact and uses no mesh at all, gives (0; 000) for this structure across
+    six independently-gapped band windows, and refining the WCC mesh on a
+    disputed plane gives z = 1, 0, 1, 0 for (nkx, nt) = (12,7), (18,9),
+    (24,13), (32,17) -- it oscillates rather than converging, so nkx=12
+    was sampling noise. See tests/test_calculation_parity.py and
+    docs/design.md #21/#23.
+
+    The physical reading is that this hypothetical Cs diamond lattice with
+    SOC scaled 3000x simply does not realize FKM's single-orbital
+    tight-binding phase; the earlier agreement was coincidental. The 2D
+    machinery is unaffected -- it agrees with the parity route on graphene,
+    and is separately validated on bismuthene.
+    """
     calc, ist1 = cs_dimerized_calculation
     result = calc.get_z2_invariant_3d(1, ist1, nkx=12, nt=7)
-    assert result["nu0"] == 1
     assert len(set(result["nu0_by_axis"])) == 1
     assert len(set(result["nu"])) == 1
+    assert result["nu0"] in (0, 1)
