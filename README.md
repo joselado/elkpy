@@ -59,8 +59,8 @@ python3 -m pip install -e .        # add .[ase] for Structure.from_ase()/to_ase(
 - Circular dichroism $\eta=(|P_+|^2-|P_-|^2)/(|P_+|^2+|P_-|^2)$ of an interband transition, $P_\pm=p^x_{cv}\pm ip^y_{cv}$ — the valley-selective optical selection rule of a gapped honeycomb lattice [[notebook]](notebooks/14_optical_matrix_elements.ipynb)
 - Band velocities $\mathbf v_n=\partial\varepsilon_n/\partial\mathbf k$ as the diagonal of the same operator, exact by Hellmann-Feynman [[notebook]](notebooks/14_optical_matrix_elements.ipynb)
 - Interband absorption resolved by circular polarization, $\mathrm{Im}\,\varepsilon_\pm(\omega)\propto\omega^{-2}\sum_{\mathbf k,v,c}|P_\pm|^2\delta(\omega-\varepsilon_{cv})$ — the spectrum behind valley-selective optical pumping, which stock Elk's dielectric tensor cannot resolve [[docs]](docs/design.md)
-- Effective masses from the k·p sum rule $(1/m^*)^{ab}=\delta_{ab}+2\sum_m\mathrm{Re}[p^a_{nm}p^b_{mn}]/(\varepsilon_n-\varepsilon_m)$, decomposed by which interband coupling produces them [[docs]](docs/design.md)
-- Spin Berry curvature and the intrinsic spin Hall conductivity, from the spin current operator $J^s_a=\tfrac12\{S_s,v_a\}$ [[docs]](docs/design.md)
+- Effective masses from the k·p sum rule $(1/m^*)^{ab}=\delta_{ab}+2\sum_m\mathrm{Re}[p^a_{nm}p^b_{mn}]/(\varepsilon_n-\varepsilon_m)$, decomposed by which interband coupling produces them [[notebook]](notebooks/16_effective_mass.ipynb)
+- Spin Berry curvature and the intrinsic spin Hall conductivity, from the spin current operator $J^s_a=\tfrac12\{S_s,v_a\}$ [[notebook]](notebooks/17_spin_hall.ipynb)
 
 ## Eigenstates and wavefunction overlaps ##
 - Second-variational energies and eigenvectors at an arbitrary k-point [[notebook]](notebooks/06_eigenstate_session.ipynb)
@@ -238,7 +238,7 @@ points, density = calc.get_density(grid=(24, 24, 24))  # n(r) = sum_i^occ |psi_i
 ![Alt text](images/si_density.png?raw=true "Charge density slice of bulk silicon")
 
 # Notebooks #
-Fifteen notebooks under [`notebooks/`](notebooks), one per feature area above, each
+Seventeen notebooks under [`notebooks/`](notebooks), one per feature area above, each
 executed end-to-end against a real compiled Elk binary and checked in with its actual
 output (the DFPT phonon notebook is the exception -- left unexecuted with a note,
 since a single call takes ~11-13 minutes). Listed new-physics-first, matching
@@ -259,6 +259,8 @@ is the place to actually start:
 | [`13_z2_invariant_3d.ipynb`](notebooks/13_z2_invariant_3d.ipynb) | The 3D strong/weak $(\nu_0;\nu_1\nu_2\nu_3)$ classification | yes |
 | [`14_optical_matrix_elements.ipynb`](notebooks/14_optical_matrix_elements.ipynb) | Optical matrix elements, circular dichroism and Kubo quantum geometry of monolayer h-BN | yes |
 | [`15_parity_invariants.ipynb`](notebooks/15_parity_invariants.ipynb) | Parity eigenvalues at the TRIM and the Fu-Kane symmetry-indicator $Z_2$ | yes |
+| [`16_effective_mass.ipynb`](notebooks/16_effective_mass.ipynb) | Effective masses from the k·p sum rule, and which bands produce them | yes |
+| [`17_spin_hall.ipynb`](notebooks/17_spin_hall.ipynb) | Spin Berry curvature, and why the two valleys agree in sign | yes |
 | [`01_getting_started.ipynb`](notebooks/01_getting_started.ipynb) | Ground state, band structure, density of states | -- |
 | [`02_relaxation_forces_and_properties.ipynb`](notebooks/02_relaxation_forces_and_properties.ipynb) | Forces, relaxation, effective mass, density, `run_tasks()` | -- |
 | [`03_phonon_dispersion_and_dos.ipynb`](notebooks/03_phonon_dispersion_and_dos.ipynb) | Phonon dispersion/DOS via DFPT | -- |
