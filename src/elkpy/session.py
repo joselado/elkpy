@@ -24,6 +24,7 @@ from .parsers.eigenstates import (
     parse_projection_response,
 )
 from .parsers.spin import compute_spin_operator
+from .parsers.spin_hall import spin_current_operator as _spin_current_operator
 from .parsers.symmetry import is_trim
 
 READY_SENTINEL = "ELKPY_SESSION_READY"
@@ -39,7 +40,7 @@ Eigenstates = namedtuple("Eigenstates", ["k", "energies", "evecsv"])
 AtomProjection = namedtuple("AtomProjection", ["k", "matrices"])
 OrbitalProjection = namedtuple("OrbitalProjection", ["k", "matrices"])
 SpinOperator = namedtuple("SpinOperator", ["k", "sx", "sy", "sz"])
-Momentum = namedtuple("Momentum", ["k", "energies", "pmat"])
+Momentum = namedtuple("Momentum", ["k", "energies", "pmat", "evecsv"])
 Parity = namedtuple("Parity", ["k", "energies", "pmat"])
 AngularMomentum = namedtuple(
     "AngularMomentum", ["k", "lx", "ly", "lz", "lx_orbital", "ly_orbital", "lz_orbital"]
@@ -342,13 +343,28 @@ class EigenstateSession:
         (1/4c^2)[sigma x grad V_s] spin-orbit correction that keeps that
         identity true under spinorb=True.
 
-        Returns a Momentum(k, energies, pmat) namedtuple: energies shape
-        (nstsv,) Hartree, pmat shape (3, nstsv, nstsv) complex (atomic
+        Returns a Momentum(k, energies, pmat, evecsv) namedtuple: energies
+        shape (nstsv,) Hartree, pmat shape (3, nstsv, nstsv) complex (atomic
         units), pmat[a] the a-th CARTESIAN component (a = 0, 1, 2 for
         x, y, z -- note that parsers.optical's `directions` argument
         indexes these Cartesian axes, unlike get_berry_curvature()'s
         identically-named argument, which indexes reciprocal lattice
-        axes).
+        axes), and evecsv shape (nstsv, nstsv) complex.
+
+        `evecsv` is the second-variational eigenvector matrix of the SAME
+        diagonalisation that produced `pmat` -- which is what makes it
+        legal to multiply an evecsv-derived operator into pmat. The spin
+        operators S_x, S_y, S_z are exactly that (parsers.spin builds them
+        from evecsv's spin-up/spin-down row blocks and nothing else), so
+        this is what the spin current operator J^z_a = (1/2){S_z, v_a} and
+        hence the spin Berry curvature / spin Hall conductivity of
+        parsers.spin_hall need. Using spin_operator()'s own evecsv instead
+        would pair matrices from two independent diagonalisations, free to
+        resolve a degenerate multiplet differently (docs/design.md #14) --
+        a failure no Hermiticity or unitarity check detects. Prefer
+        parsers.spin.compute_spin_operator(m.evecsv, ...) or the
+        spin_current_operator() convenience below over a separate
+        spin_operator() query when combining with pmat.
 
         `ist0`/`ist1` optionally restrict the returned arrays to a
         contiguous, 1-indexed band window; both default to None, meaning
@@ -360,15 +376,22 @@ class EigenstateSession:
         Fortran: genpmatk's array is hard-dimensioned nstsv, so there is
         no windowed variant to ask for.
 
-        pmat and energies come from ONE diagonalisation, which is what
-        makes it safe to use these energies as the denominators of a sum
-        over these matrix elements -- do not substitute a separate
+        pmat, energies and evecsv come from ONE diagonalisation, which is
+        what makes it safe to use these energies as the denominators of a
+        sum over these matrix elements -- do not substitute a separate
         get_eigenstates() call's energies (docs/design.md #14).
+
+        The band window, when given, slices `energies` and `pmat` only;
+        `evecsv` is always returned in full. Its ROW index is the
+        first-variational spinor basis (i = p + (ispn-1)*nstfv), which a
+        band window has no meaning for, and parsers.spin.compute_spin_
+        operator() applies the window itself -- truncating the rows here
+        would break its nstsv == 2*nstfv check.
         """
         k = tuple(float(x) for x in k)
         self._send(f"MOMENTUM {_fmt(k[0])} {_fmt(k[1])} {_fmt(k[2])}")
         tokens = self._read_until_sentinel()
-        energies, pmat = parse_momentum_response(tokens)
+        energies, evecsv, pmat = parse_momentum_response(tokens)
         if ist0 is not None or ist1 is not None:
             nstsv = len(energies)
             lo = 1 if ist0 is None else int(ist0)
@@ -379,7 +402,40 @@ class EigenstateSession:
                 )
             energies = energies[lo - 1 : hi]
             pmat = pmat[:, lo - 1 : hi, lo - 1 : hi]
-        return Momentum(k=k, energies=energies, pmat=pmat)
+        return Momentum(k=k, energies=energies, pmat=pmat, evecsv=evecsv)
+
+    def spin_current_operator(self, k, direction=1, spin="z"):
+        """The spin current operator J^s_a = (1/2){S_s, v_a} at `k`, as an
+        (nstsv, nstsv) Hermitian matrix, together with the energies and
+        momentum matrix it was built from -- one MOMENTUM query and no
+        other Fortran work.
+
+        This exists so the one-diagonalisation rule above cannot be got
+        wrong by accident: S_s and v_a here are guaranteed to share an
+        eigenbasis, since both come from the single MOMENTUM response.
+        See docs/design.md #24 and parsers.spin_hall.
+
+        `direction` is a 1-based CARTESIAN axis (1, 2, 3 = x, y, z),
+        matching parsers.optical's convention; `spin` is "x", "y" or "z".
+
+        Returns (Momentum, j) -- the Momentum namedtuple (unwindowed) and
+        the spin current matrix, so the caller can feed both straight to
+        parsers.spin_hall.spin_berry_curvature().
+        """
+        if self._nspinor != 2:
+            raise ValueError(
+                f"the spin current operator requires a spin-polarized calculation "
+                f"(spinpol=True or spinorb=True), got nspinor={self._nspinor} -- there "
+                f"is no spin-up/spin-down block to build S_a from"
+            )
+        if spin not in ("x", "y", "z"):
+            raise ValueError(f"spin must be 'x', 'y' or 'z', got {spin!r}")
+        m = self.momentum(k)
+        nstsv = m.evecsv.shape[0]
+        nstfv = nstsv // self._nspinor
+        # the whole point: this evecsv and this pmat are ONE diagonalisation
+        s = compute_spin_operator(m.evecsv, nstfv, 1, nstsv)[f"s{spin}"]
+        return m, _spin_current_operator(m.pmat, s, direction=direction)
 
     def parity(self, k, ist0, ist1):
         """The inversion (parity) operator P_mn = <psi_m|I|psi_n> over the
@@ -484,6 +540,13 @@ class EigenstateSession:
                     self._proc.wait()
         self._proc.stdin.close()
         self._proc.stdout.close()
+        # give back the launcher's machine-wide concurrency slot (see
+        # launcher._acquire_slot) -- a live session occupies a core for as
+        # long as it is answering queries, so it holds one for its lifetime
+        from .launcher import _release_slot
+
+        _release_slot(getattr(self._proc, "_elkpy_slot", None))
+        self._proc._elkpy_slot = None
 
     def __enter__(self):
         return self

@@ -6,9 +6,75 @@ Calculation. LocalLauncher is the only implementation for now: a blocking
 local subprocess call.
 """
 
+import fcntl
+import os
 import subprocess
+import time
 
 from . import config
+
+# --- machine-wide concurrency cap -------------------------------------------
+# Every elk run in elkpy goes through this module, so a counting semaphore
+# here bounds total CPU use across ALL concurrent elkpy processes -- including
+# separate Python interpreters that know nothing about each other (e.g.
+# several agents, or several terminals, driving the same machine).
+#
+# The launcher already pins OMP_NUM_THREADS=1 (below), so one elk process is
+# one core and "N slots" means "N cores". OpenBLAS and MKL are pinned too:
+# Elk links -lopenblas, whose threading is NOT governed by OMP_NUM_THREADS
+# when it is built against pthreads rather than OpenMP, so without this a
+# single elk could still fan a zgemm out across every core.
+#
+# Tunable via the environment, so a machine with cores to spare is not
+# throttled by a default chosen elsewhere:
+#   ELKPY_MAX_CONCURRENT  number of simultaneous elk processes (default 4)
+#   ELKPY_SLOT_DIR        where the lock files live (default /tmp/elkpy_slots)
+SLOT_DIR = os.environ.get("ELKPY_SLOT_DIR", "/tmp/elkpy_slots")
+MAX_CONCURRENT = int(os.environ.get("ELKPY_MAX_CONCURRENT", "4"))
+
+
+def _acquire_slot(poll=2.0):
+    """Block until one of MAX_CONCURRENT slots is free; return the locked fd.
+
+    The lock is an flock on a per-slot file, so it is released automatically
+    if the holding process dies -- a crashed or killed run cannot leak a slot
+    and starve the machine, which a counter file or a directory of PID files
+    would both get wrong.
+
+    MAX_CONCURRENT <= 0 disables the cap entirely (returns None).
+    """
+    if MAX_CONCURRENT <= 0:
+        return None
+    os.makedirs(SLOT_DIR, exist_ok=True)
+    while True:
+        for i in range(MAX_CONCURRENT):
+            fd = os.open(os.path.join(SLOT_DIR, f"slot{i}"), os.O_CREAT | os.O_RDWR, 0o666)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return fd
+            except OSError:
+                os.close(fd)
+        time.sleep(poll)
+
+
+def _release_slot(fd):
+    """Release a slot acquired by _acquire_slot(); tolerant of None/double
+    release, since callers free it on several different paths."""
+    if fd is None:
+        return
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
+def _thread_pinned_env(omp_threads):
+    env = dict(os.environ)
+    env["OMP_NUM_THREADS"] = str(omp_threads)
+    # see SLOT_DIR comment: OpenBLAS/MKL have their own thread controls
+    env["OPENBLAS_NUM_THREADS"] = str(omp_threads)
+    env["MKL_NUM_THREADS"] = str(omp_threads)
+    return env
 
 
 class LocalLauncher:
@@ -39,18 +105,19 @@ class LocalLauncher:
         still check INFO.OUT for correctness (see parsers/info.py), not just
         the return code.
         """
-        import os
-
-        env = dict(os.environ)
-        env["OMP_NUM_THREADS"] = str(self.omp_threads)
+        env = _thread_pinned_env(self.omp_threads)
 
         command = [str(self.elk_binary)]
 
         log_path = workdir / log_name
-        with open(log_path, "w") as log:
-            result = subprocess.run(
-                command, cwd=str(workdir), stdout=log, stderr=subprocess.STDOUT, env=env
-            )
+        slot = _acquire_slot()
+        try:
+            with open(log_path, "w") as log:
+                result = subprocess.run(
+                    command, cwd=str(workdir), stdout=log, stderr=subprocess.STDOUT, env=env
+                )
+        finally:
+            _release_slot(slot)
         if result.returncode != 0:
             raise RuntimeError(
                 f"elk exited with code {result.returncode} in {workdir}; see {log_path}"
@@ -70,22 +137,29 @@ class LocalLauncher:
         (e.g. a query that hits a Fortran `stop` deep in reused code; see
         docs/design.md #14).
 
-        Returns the `subprocess.Popen` object.
+        Returns the `subprocess.Popen` object. It carries the concurrency
+        slot this acquired as an `_elkpy_slot` attribute; EigenstateSession
+        releases it on close(), since a live session holds a core for as long
+        as it is answering queries.
         """
-        import os
-
-        env = dict(os.environ)
-        env["OMP_NUM_THREADS"] = str(self.omp_threads)
+        env = _thread_pinned_env(self.omp_threads)
 
         command = [str(self.elk_binary)]
 
-        return subprocess.Popen(
-            command,
-            cwd=str(workdir),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            env=env,
-            text=True,
-            bufsize=1,
-        )
+        slot = _acquire_slot()
+        try:
+            proc = subprocess.Popen(
+                command,
+                cwd=str(workdir),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                env=env,
+                text=True,
+                bufsize=1,
+            )
+        except BaseException:
+            _release_slot(slot)
+            raise
+        proc._elkpy_slot = slot
+        return proc

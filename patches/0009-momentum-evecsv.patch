@@ -1,0 +1,133 @@
+--- a/src/elkpy_eigenstates.f90
++++ b/src/elkpy_eigenstates.f90
+@@ -502,7 +502,7 @@
+ !BOP
+ ! !ROUTINE: elkpy_momentum
+ ! !INTERFACE:
+-subroutine elkpy_momentum(vpl,evalsv_out,pmat)
++subroutine elkpy_momentum(vpl,evalsv_out,evecsv_out,pmat)
+ ! !USES:
+ use modmain
+ ! !DESCRIPTION:
+@@ -511,7 +511,8 @@
+ !    +\frac{1}{4c^2}\left[\vec\sigma\times\nabla V_s({\bf r})\right]\right)_a
+ !    |\psi_{m{\bf k}}\rangle $$
+ !   for every pair of second-variational states at an arbitrary $k$-point,
+-!   together with the eigenvalues of the SAME diagonalisation. In Hartree
++!   together with the eigenvalues AND second-variational eigenvectors
++!   ({\tt evecsv}) of the SAME diagonalisation. In Hartree
+ !   atomic units ($\hbar=m_e=1$) and for Elk's local Kohn-Sham potential,
+ !   $\hat{\bf v}=\hat{\bf p}$ numerically, so this is equally the velocity
+ !   operator; the $(1/4c^2)[\vec\sigma\times\nabla V_s]$ term is the
+@@ -554,6 +555,19 @@
+ !   exactly the degenerate-subspace basis ambiguity docs/design.md \S14
+ !   warns about.
+ !
++!   {\tt evecsv\_out} is returned for exactly the same reason, and is what
++!   patch 0009 adds: the spin operators $S_x,S_y,S_z$ (docs/design.md
++!   \S17) are built in Python from {\tt evecsv}'s spin-up/spin-down row
++!   blocks alone, so returning {\tt evecsv} here -- rather than obtaining
++!   it from a separate {\tt EIGENSTATES} query -- is what makes it legal
++!   to multiply a spin operator by a momentum matrix element, as the spin
++!   current operator $J^z_a=\tfrac12\{S_z,v_a\}$ requires. Two independent
++!   diagonalisations at the same $k$ are free to resolve a degenerate
++!   multiplet in different bases, which would make such a product
++!   meaningless while leaving every Hermiticity/unitarity check intact
++!   (docs/design.md \S14, \S24). No extra work is done to produce it: the
++!   array was already computed here and simply discarded.
++!
+ !   Hermiticity of {\tt pmat} is enforced by {\tt genpmatk} itself (it
+ !   computes the upper triangle, sets the lower by conjugation and forces
+ !   the diagonal real), so it is a property of upstream's construction, not
+@@ -568,6 +582,7 @@
+ ! arguments
+ real(8), intent(in) :: vpl(3)
+ real(8), intent(out) :: evalsv_out(nstsv)
++complex(8), intent(out) :: evecsv_out(nstsv,nstsv)
+ complex(8), intent(out) :: pmat(nstsv,nstsv,3)
+ ! local variables
+ integer ispn,nmatp
+@@ -579,7 +594,7 @@
+ integer, parameter :: idxall(1)=(/0/)
+ ! allocatable arrays
+ complex(8), allocatable :: sfacgp(:,:),apwalm(:,:,:,:,:)
+-complex(8), allocatable :: evecfv(:,:,:),evecsv(:,:)
++complex(8), allocatable :: evecfv(:,:,:)
+ complex(8), allocatable :: wfmt(:,:,:,:),wfgp(:,:,:)
+ if (spinsprl) then
+   write(*,*)
+@@ -590,12 +605,15 @@
+ end if
+ allocate(sfacgp(ngkmax,natmtot))
+ allocate(apwalm(ngkmax,apwordmax,lmmaxapw,natmtot,nspnfv))
+-allocate(evecfv(nmatmax,nstfv,nspnfv),evecsv(nstsv,nstsv))
++allocate(evecfv(nmatmax,nstfv,nspnfv))
+ ! fresh on-the-fly diagonalisation, same pattern as elkpy_atomproj/
+ ! elkpy_orbitalproj/elkpy_angmomproj (kept as its own copy rather than a
+ ! shared call, per this file's existing convention). Unlike those, vgpc is
+ ! kept per first-variational spin channel, since genpmatk indexes it that
+-! way (vgpc(3,ngkmax,nspnfv)) for its interstitial gradient.
++! way (vgpc(3,ngkmax,nspnfv)) for its interstitial gradient. The
++! second-variational eigenvectors are written straight into evecsv_out
++! rather than a discarded local, since patch 0009 returns them (see this
++! routine's description).
+ do ispn=1,nspnfv
+   vl(1:3)=vpl(1:3)
+   vc(1:3)=bvec(1:3,1)*vpl(1)+bvec(1:3,2)*vpl(2)+bvec(1:3,3)*vpl(3)
+@@ -609,13 +627,13 @@
+ end do
+ deallocate(sfacgp)
+ call eveqnsv(ngp(1),igpig(:,1),vgpc(:,:,1),apwalm,evalfv,evecfv,evalsv_out, &
+- evecsv)
++ evecsv_out)
+ ! all nstsv states (idx(1)=0), in spherical harmonics (tsh) and G+p space
+ ! (tgp) -- both required by genpmatk, see this routine's description
+ allocate(wfmt(npcmtmax,natmtot,nspinor,nstsv),wfgp(ngkmax,nspinor,nstsv))
+ call genwfsv(.true.,.true.,nstsv,idxall,ngdgc,igfc,ngp,igpig,apwalm,evecfv, &
+- evecsv,wfmt,ngkmax,wfgp)
+-deallocate(apwalm,evecfv,evecsv)
++ evecsv_out,wfmt,ngkmax,wfgp)
++deallocate(apwalm,evecfv)
+ ! momentum matrix elements from upstream genpmatk, unmodified
+ call genpmatk(ngp,igpig,vgpc,wfmt,wfgp,pmat)
+ deallocate(wfmt,wfgp)
+@@ -915,9 +933,15 @@
+ !    {\tt elkpy\_momentum}; {\tt genpmatk}'s array is hard-dimensioned
+ !    {\tt nstsv}, and the Kubo-style sums this feeds need states outside
+ !    any window of interest anyway, so this query takes no band window),
+-!    together with that same diagonalisation's eigenvalues -- which the
+-!    energy denominators of those sums must come from, rather than from a
+-!    separate {\tt EIGENSTATES} query (docs/design.md \S14).
++!    together with that same diagonalisation's eigenvalues AND its
++!    {\tt evecsv} -- which the energy denominators of those sums, and any
++!    operator multiplied into $p^a_{nm}$, must come from, rather than from
++!    a separate {\tt EIGENSTATES} query (docs/design.md \S14). The response
++!    therefore opens exactly like an {\tt EIGENSTATES} response ({\tt nstsv},
++!    eigenvalues, {\tt evecsv}) and appends the three momentum components;
++!    the {\tt evecsv} block is what makes the spin current operator
++!    $J^z_a=\tfrac12\{S_z,v_a\}$ of docs/design.md \S24 well defined, since
++!    $S_z$ is built from {\tt evecsv} alone.
+ !   \item {\tt PARITY k1 k2 k3 ist0 ist1} -- the inversion (parity) operator
+ !    $\langle\psi_m|\hat I|\psi_n\rangle$ over the band window
+ !    $[ist0,ist1]$, plus all {\tt nstsv} eigenvalues of the same
+@@ -1183,11 +1207,19 @@
+       cycle
+     end if
+     allocate(vmat(nstsv,nstsv,3))
+-    call elkpy_momentum(vpl,evalsv_q,vmat)
++    call elkpy_momentum(vpl,evalsv_q,evecsv_q,vmat)
+     write(*,*) nstsv
+     do a=1,nstsv
+       write(*,*) evalsv_q(a)
+     end do
++! evecsv of the SAME diagonalisation, in the same shape and order the
++! EIGENSTATES response writes it -- so a spin operator built from it shares
++! one eigenbasis with vmat below (docs/design.md \S24)
++    do b=1,nstsv
++      do a=1,nstsv
++        write(*,*) dble(evecsv_q(a,b)),aimag(evecsv_q(a,b))
++      end do
++    end do
+     do comp=1,3
+       do b=1,nstsv
+         do a=1,nstsv
