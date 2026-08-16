@@ -1943,3 +1943,1011 @@ Requires `spinorb=True`: without spin-orbit coupling, spin-SU(2) forces the two 
 sectors to opposite Chern numbers and $Z_2$ is trivially 0, so the invariant carries no
 information. `dimension=2` uses the 4 TRIM of the first two reciprocal directions, holding
 the third (vacuum/stacking) at 0.
+
+## 24. Optical absorption: Elk's dielectric function, and the circular-polarization-resolved spectrum
+
+*Physics writeup: `docs/physics.tex` Part XIII.*
+
+Two related additions, one wrapping upstream Elk and one going beyond it.
+
+### 24.1 `get_dielectric_function()` -- wrapping task 121
+
+`Calculation.get_dielectric_function(components=, wplot=, nwplot=, swidth=,
+intraband=, ngridk=)` runs tasks 120 then 121 (`src/writepmat.f90`,
+`src/dielectric.f90`) and parses `EPSILON_ij.OUT`/`SIGMA_ij.OUT`
+(`parsers/dielectric.py`). Task 121 is the independent-particle
+(random-phase, no local fields, no excitons) dielectric tensor, evaluated
+from the Kubo-Greenwood formula of *Physica Scripta* **T109**, 170 (2004) --
+the same reference `genpmatk.f90` cites for the momentum matrix elements
+(§22):
+
+$$
+\sigma_{ij}(\omega)=\frac{i}{N_k\Omega}\sum_{\mathbf k}\sum_{n,m}
+\frac{f_n\left(1-f_m/f_{\max}\right)}{\varepsilon_{m}-\varepsilon_{n}}
+\left[\frac{p^i_{nm}\,\overline{p^j_{nm}}}{\omega-\varepsilon_{mn}+i\varsigma}
++\frac{\overline{p^i_{nm}\overline{p^j_{nm}}}}{\omega+\varepsilon_{mn}+i\varsigma}\right],
+$$
+
+$$
+\epsilon_{ij}(\omega)=\delta_{ij}+\frac{4\pi i\,\sigma_{ij}(\omega)}{\omega+i\varsigma},
+$$
+
+with $\varepsilon_{mn}=\varepsilon_m-\varepsilon_n$, $\Omega$ the unit-cell
+volume, $N_k$ the number of **non-reduced** $k$-points, $f_n$ the occupation
+numbers, $f_{\max}$ = `occmax` (2 without spin polarization, 1 when
+`nspinor`=2) and $\varsigma$ = `swidth`, whose reciprocal is the relaxation
+time. `getpmat` supplies $p^i_{nm}$ at each non-reduced point by rotating
+task 120's reduced-mesh `PMAT.OUT` with the crystal symmetry that maps it
+there.
+
+Two version-coupled details, both taken from the Fortran rather than the
+manual and both load-bearing:
+
+- **Task 121 needs task 120 first.** `dielectric.f90` calls `getpmat`, which
+  reads `PMAT.OUT` from disk and `stop`s if it is absent or has a different
+  `nstsv`. Pairing the two tasks in one `_run_resumed()` call is why this is
+  a named method rather than a bare `run_tasks([121])`.
+- **The output filenames carry indices** (`EPSILON_11.OUT`, one file per
+  `optcomp` entry), so `spec.py` grew an `OUTPUT_FILE_TEMPLATES` dict beside
+  the fixed-name `OUTPUT_FILES`. The format inside is the two-block layout
+  `moke.f90` also writes: `nwplot` `(omega, value)` pairs for the real part,
+  a blank line, then the same for the imaginary part. The energy grid is
+  $\omega_i = \omega_1 + (\omega_2-\omega_1)(i-1)/N_\omega$ with
+  $\omega_1=\max(\texttt{wplot(1)},0)$ -- non-negative, and **excluding** the
+  upper endpoint.
+
+### 24.2 `get_circular_absorption()` -- the polarization-resolved spectrum
+
+Stock Elk gives $\sigma_{xx}$, $\sigma_{xy}$ and the rest of the Cartesian
+tensor, but never $\sigma_\pm$. The circular channels are what carry the
+valley physics: with the circular-basis interband matrix elements of §22,
+
+$$P_\pm(\mathbf k)=p^x_{cv}(\mathbf k)\pm i\,p^y_{cv}(\mathbf k),$$
+
+the absorption resolved by photon helicity is
+
+$$
+\operatorname{Im}\epsilon_\pm(\omega)=\frac{4\pi^2}{\Omega\,\omega^2}
+\sum_{\mathbf k}W_{\mathbf k}\sum_{v,c}f_v\!\left(1-\frac{f_c}{f_{\max}}\right)
+\tfrac12\left|P_\pm(\mathbf k)\right|^2
+\delta\!\left(\omega-(\varepsilon_c-\varepsilon_v)\right),
+$$
+
+which is exactly the $\varsigma\to0$ limit of §24.1's $\operatorname{Im}
+\epsilon_{ii}$ with the linear intensity $|p^i_{cv}|^2$ replaced by the
+circular one. `Calculation.get_circular_absorption()` evaluates it from
+elkpy's own arbitrary-$k$ momentum matrix elements (§22's task-9002
+`MOMENTUM` query) over the full non-reduced mesh, with all arithmetic in
+`parsers/optical.circular_absorption()`; **no new Fortran at all**, and one
+`eigenstate_session()` for the whole sweep.
+
+Three things make this the right shape:
+
+- **The mesh must not be symmetry-reduced.** $|P_\pm|^2$ is *not* invariant
+  under the operations that fold the mesh -- that non-invariance *is* the
+  dichroism -- so the usual reduced-mesh-with-weights sum, correct for the
+  linear components, is wrong here. `Calculation._kmesh()` reproduces Elk's
+  own non-reduced grid, $\mathbf k=(\mathbf i+\texttt{vkloff})/\texttt{ngridk}$.
+- **Occupations come from Elk's own `EIGVAL.OUT`** (`parsers/eigval.py`), the
+  same `occsv` array `dielectric.f90` reads, and are required to be
+  $k$-independent -- an independent-particle interband spectrum is a gapped
+  system's object, and `occupations_if_uniform()` raises on a metal rather
+  than silently mis-counting a Fermi surface. This also sidesteps §13's
+  standing pitfall of inferring a band count from a valence-electron count.
+- **The $\pm$ labelling follows `circular_polarization()`** (§22), i.e.
+  $|P_+|^2$ is the $\sigma^+$ intensity. The relative sign between valleys is
+  the published physics; the absolute handedness is a
+  structure-convention pin, exactly as for $S_z(K)$ (§17) and $\eta(K)$ (§22).
+
+### 24.3 The two lineshapes, and why the naive one is not enough
+
+The $\delta$-function formula above is the textbook independent-particle
+spectrum, but it is only the $\varsigma\to0$ limit of what task 121 actually
+evaluates. Putting the real intensity $z=|e\cdot p_{cv}|^2$ into §24.1 and
+taking $\operatorname{Im}\epsilon=4\pi\operatorname{Re}[\sigma/(\omega+i\varsigma)]$
+gives, per transition, exactly
+
+$$
+\frac{4\pi\varsigma\,z}{\Omega\,\Delta\,(\omega^2+\varsigma^2)}
+\left[\frac{2\omega-\Delta}{(\omega-\Delta)^2+\varsigma^2}
++\frac{2\omega+\Delta}{(\omega+\Delta)^2+\varsigma^2}\right],
+\qquad \Delta=\varepsilon_c-\varepsilon_v,
+$$
+
+whereas the $\delta$-form with a Lorentzian of width $\varsigma$ gives
+$(4\pi^2 z/\Omega\omega^2)\cdot(\varsigma/\pi)/[(\omega-\Delta)^2+\varsigma^2]$.
+The two agree at resonance, $\omega=\Delta$, and their ratio elsewhere is
+
+$$\frac{2\omega-\Delta}{\Delta}\cdot\frac{\omega^2}{\omega^2+\varsigma^2},$$
+
+which is **first order** in $(\omega-\Delta)/\Delta$: a few percent across one
+linewidth, not a small correction, and *not* a defect of either code. Two
+further consequences worth stating, because both were measured rather than
+anticipated:
+
+- The $\delta$-form has a spurious $1/\omega^2$ blow-up at small $\omega$,
+  where a Lorentzian's fat tail is multiplied by a diverging prefactor. On
+  h-BN this produced a fake "peak" of $\sim2\times10^3$ at
+  $\omega=10^{-3}\,$Ha, dwarfing the real one at $0.236\,$Ha.
+- The exact form's two terms cancel *exactly* at $\omega=0$ (the resonant one
+  alone even turns negative below $\omega=\Delta/2$), so keeping only the
+  resonant term is a real error that no peak-region comparison would catch.
+
+`broadening="elk"` (the default) therefore evaluates the exact finite-$\varsigma$
+response; `"lorentzian"`/`"gaussian"` give the textbook $\delta$-form and are
+kept because that *is* the formula the physics is usually quoted in, and
+because the two agree on the integrated oscillator strength
+$\int\omega^2\operatorname{Im}\epsilon\,d\omega$ at any $\varsigma$.
+
+### 24.4 Verification
+
+The cross-check is an algebraic identity, not a symmetry assumption:
+
+$$|P_+|^2+|P_-|^2=2\left(|p^x_{cv}|^2+|p^y_{cv}|^2\right)
+\;\Longrightarrow\;
+\operatorname{Im}\epsilon_++\operatorname{Im}\epsilon_-
+=\operatorname{Im}\epsilon_{xx}+\operatorname{Im}\epsilon_{yy},$$
+
+so a task-121 run asked for the $(1,1)$ and $(2,2)$ components on the same
+mesh, `nempty` and `swidth` reproduces the polarization-summed elkpy
+spectrum. Nothing is shared between the two routes but the ground state:
+Elk reads reduced-mesh momentum matrix elements off `PMAT.OUT` and rotates
+them, sums in Fortran over `nkptnr`, and forms $\epsilon$ from $\sigma$;
+elkpy re-diagonalises at every non-reduced point through the task-9002
+session and does everything else in NumPy.
+
+Against a real compiled binary, monolayer h-BN (the §22 slab; $6\times6\times1$
+mesh, `nempty`=12, `swidth`=0.005 Ha, `rgkmax`=7):
+
+- **The polarization-summed spectrum reproduces task 121 essentially exactly.**
+  Over the 297 grid points where $\operatorname{Im}\epsilon$ exceeds 2% of its
+  peak, the largest relative deviation is $9.3\times10^{-4}$ and the median is
+  $2.0\times10^{-5}$; at the peak, 15.414871 (elkpy) against 15.414867 (Elk).
+  The integrated oscillator strength
+  $\int\omega^2\operatorname{Im}\epsilon\,d\omega$ agrees to $8\times10^{-5}$
+  relative. The residual is at the level expected from the two subdirectories'
+  independent task-1 SCF continuations and from `getpmat`'s symmetry rotation
+  (Elk's own $\operatorname{Im}\epsilon_{xx}$ vs $\operatorname{Im}\epsilon_{yy}$,
+  which exact symmetry makes equal, differ by $1\times10^{-4}$ of the peak).
+- **The zone-integrated circular channels are equal to machine precision**:
+  $\max|\operatorname{Im}\epsilon_+-\operatorname{Im}\epsilon_-|=5.6\times10^{-13}$
+  against a peak of 15.4, i.e. $4\times10^{-14}$ relative -- the time-reversal
+  statement above, and confirmation that nothing in the $\pm$ bookkeeping is
+  biased.
+- **Restricting the sum to one valley gives perfect circular selectivity**:
+  at the absorption edge ($\omega=0.167$ Ha $=4.5$ eV) $\eta(K)=-0.9999$ and
+  $\eta(K')=+0.9999$, with $\operatorname{Im}\epsilon_-=122.6$ against
+  $\operatorname{Im}\epsilon_+=0.0044$ at $K$. This is §22's $\eta(K)=-1$
+  band-edge result reappearing as a *spectrum*, and it is the output stock Elk
+  cannot produce.
+- **The $\delta$-lineshape's cost is measured, not assumed**: the same sum with
+  `broadening="lorentzian"` at this $\varsigma$ deviates from task 121 by up to
+  13.6% (median 2.2%) across the peak region, plus the $1/\omega^2$ artifact
+  below the edge (a spurious $2\times10^3$ "peak" at $\omega=10^{-3}$ Ha).
+  With `"gaussian"` it is worse still (median 25% in the peak region), as
+  expected: Elk's broadening is Lorentzian by construction.
+
+`tests/test_parsers_absorption.py` pins the arithmetic ahead of any Elk run,
+on the massive Dirac model of §22: the $\delta$-form against its closed form
+(prefactor, $1/\omega^2$, occupation weight and Lorentzian normalization at
+once), the `"elk"` form against `dielectric.f90`'s expression transcribed
+directly, the $\omega=0$ cancellation, the convergence of the two lineshapes
+as $\varsigma$ falls, the circular-vs-linear identity above against an
+independently written linear sum, $\eta$ at the peak against the already
+trusted `circular_polarization()`, the $k\to-k$ cancellation and its recovery
+under a mask, and oscillator-strength conservation for both the Lorentzian
+and the Gaussian.
+
+### 24.5 What this is not
+
+The independent-particle spectrum has no electron-hole interaction, so it
+misses the excitonic physics that dominates real h-BN optics: the measured
+optical gap sits well below the calculated absorption onset, and the
+oscillator strength is redistributed into a bound exciton peak. (Elk's own
+`dielectric_bse.f90` is the route to that; not wrapped here.) The
+Kohn-Sham gap itself is also LDA-underestimated. In addition, for a slab the
+dielectric function is a **supercell** quantity -- $\epsilon-1$ scales like
+$1/L_z$ with the vacuum thickness, so absolute values are not the 2D
+material's own response. None of this affects the comparison above, where both
+sides use the same cell, but all of it affects reading the numbers as h-BN's
+optics.
+
+### How to use in code
+
+```python
+hbn = Structure(HBN_AVEC, HBN_SPECIES).get_calculation(
+    "hbn", xc="PW", ngridk=(6, 6, 1), rgkmax=7.0,
+    extra_blocks={"nempty": [12]},   # both routes must see the same nstsv
+)
+hbn.get_energy()
+
+# Elk's own dielectric tensor (tasks 120 + 121)
+elk = hbn.get_dielectric_function(components=((1, 1), (2, 2)), swidth=0.005)
+w, eps_xx = elk["energies"], elk["epsilon"][(1, 1)]
+
+# elkpy's circular-resolved spectrum over the same non-reduced mesh
+out = hbn.get_circular_absorption(swidth=0.005)
+out["eps2_total"]                      # == Im eps_xx + Im eps_yy
+out["eps2_plus"], out["eps2_minus"]    # equal once summed over the zone
+
+# the valley physics: restrict the k-sum to one valley. The returned dict
+# carries everything the sum needs, so re-weighting costs no Elk time.
+from elkpy.parsers import optical
+v = hbn.get_circular_absorption(kpoints=[(1/3, 1/3, 0), (-1/3, -1/3, 0)],
+                                swidth=0.005)
+one = optical.circular_absorption(
+    v["kdata"], v["omega"], v["occupations"], v["volume"],
+    occmax=v["occmax"], swidth=0.005, weights=[1.0, 0.0],
+)
+one["eta"]     # ~ -1 across the K band edge, +1 for the K' mask
+```
+
+One caveat on `swidth` worth carrying into the docs: it is written into the
+task-121 subdirectory's `elk.in`, so it also governs the smearing of the
+task-1 SCF continuation that runs there, while `get_circular_absorption()`'s
+own session uses whatever the `Calculation` was built with. For a gapped
+system that is immaterial (both give integer occupations and identical
+eigenvalues, which is why the agreement above is at the $10^{-5}$ level); for
+a metal the two sides would be smeared differently and should be aligned via
+`extra_blocks={"swidth": [...]}` on the `Calculation` itself. Elk's own MOKE
+example raises `swidth` after the ground state for exactly this reason.
+
+## 25. The effective-mass tensor from the k·p sum rule
+
+*Physics writeup: `docs/physics.tex` Part XIV.*
+
+## The formula
+
+In the Bloch Hamiltonian obtained by pulling the plane-wave factor out of the
+wavefunction,
+
+$$ H(\mathbf k)=e^{-i\mathbf k\cdot\mathbf r}He^{i\mathbf k\cdot\mathbf r}
+=\tfrac12(\mathbf p+\mathbf k)^2+V_s(\mathbf r) $$
+
+(Hartree atomic units, $\hbar=m_e=1$), the $\mathbf k$-dependence is explicit and
+elementary:
+
+$$ \frac{\partial H}{\partial k_a}=p_a+k_a=v_a,\qquad
+\frac{\partial^2H}{\partial k_a\partial k_b}=\delta_{ab}. $$
+
+Ordinary non-degenerate second-order perturbation theory in $\mathbf k$ then gives
+the band curvature exactly, with no derivative of anything numerical:
+
+$$ \boxed{\;\Big(\frac{1}{m^*}\Big)^{ab}_n=\frac{\partial^2\varepsilon_n}{\partial k_a\partial k_b}
+=\delta_{ab}+2\sum_{m\neq n}\frac{\mathrm{Re}\big[p^a_{nm}p^b_{mn}\big]}{\varepsilon_n-\varepsilon_m}\;} $$
+
+with $p^a_{nm}=\langle\psi_{n\mathbf k}|(-i\nabla+\text{SOC})_a|\psi_{m\mathbf k}\rangle$
+the momentum matrix elements §22 exports (for a local Kohn–Sham potential these are
+equally the velocity matrix elements). The mass tensor $m^*_{ab}$ is the matrix
+inverse; `"inverse_mass"` is the primitive here, and `"mass"` is `None` when that
+inverse does not exist — a direction of vanishing curvature is an infinite mass, not
+an error.
+
+Each symbol: $n$ the band whose mass is asked for, $m$ every other state at the same
+$\mathbf k$, $\varepsilon$ the Kohn–Sham eigenvalues (Hartree), $a,b$ Cartesian axes.
+
+**Reading the formula physically.** The $\delta_{ab}$ is the bare free-electron term:
+an electron with no interband coupling at all has $m^*=m_e$. Every deviation from unit
+mass is interband repulsion — states *below* band $n$ ($\varepsilon_m<\varepsilon_n$,
+positive denominator) push the curvature up, states *above* push it down, each weighted
+by how strongly the velocity operator connects them. That decomposition — *which*
+coupling to *which* band produces the mass — is real physics a finite-difference
+curvature cannot deliver, and `decompose=True` returns it term by term.
+
+**Why `free_electron_term=False` exists.** The $\delta_{ab}$ comes from
+$\tfrac12(\mathbf p+\mathbf k)^2$, i.e. from the fact that the crystal Hamiltonian's
+basis is the complete Hilbert space. A model Hamiltonian written directly in a finite
+band basis — a $\mathbf k\cdot\mathbf p$ or tight-binding $H(\mathbf k)$ — has
+$\partial^2H/\partial k_a\partial k_b=0$ instead, and the sum over the model's own bands
+is the whole answer. The flag is what makes the massive-Dirac unit tests an exact,
+analytic pin rather than an approximate one.
+
+## The Thomas–Reiche–Kuhn f-sum, stated honestly
+
+`parsers.optical.oscillator_strength_sum()` returns
+
+$$ f^{ab}_n=\sum_{m\neq n}\frac{2\,\mathrm{Re}\big[p^a_{nm}p^b_{mn}\big]}{\varepsilon_m-\varepsilon_n}, $$
+
+the usual velocity-form oscillator strengths of the transitions out of band $n$. This is
+the *same arithmetic* as the mass with the denominator reversed, so identically, at every
+$\mathbf k$-point,
+
+$$ f^{ab}_n=\delta_{ab}-\Big(\frac{1}{m^*}\Big)^{ab}_n . $$
+
+"One unit of oscillator strength per electron" is therefore **not** a pointwise statement
+in a crystal — read as one, it would assert that every band is flat. The true statement is
+the Brillouin-zone average: for a filled band the zone average of
+$\partial^2\varepsilon_n/\partial k_a\partial k_b$ vanishes (it is the second derivative of
+a periodic function integrated over a period), hence
+
+$$ \big\langle f^{ab}_n\big\rangle_{\rm BZ}=\delta_{ab}, $$
+
+which is the f-sum rule behind the optical conductivity's spectral weight,
+$\int\sigma_1(\omega)\,d\omega=\pi n/2$. Its practical role here is as a truncation
+diagnostic with an exactly known target.
+
+## Convergence: the first power of $\Delta\varepsilon$ is the whole story
+
+The denominator appears to the **first** power, unlike §22's Kubo geometric sums
+$T_{ab}\sim1/(\Delta\varepsilon)^2$. High-lying intermediate states are suppressed only as
+$1/\Delta\varepsilon$, so the sum converges markedly more slowly in `nempty`, and three
+distinct kinds of missing state matter:
+
+1. everything above `nempty` (fixable, and the thing the sweep below measures);
+2. the core states, which are not among the `nstsv` valence states at all — they lie
+   *below* band $n$, so their omission biases the mass in the **opposite** direction from
+   (1), which is what makes the observed overshoot self-consistently attributable to (1);
+3. the high continuum the finite (`rgkmax`), energy-linearized LAPW basis cannot represent
+   even in principle.
+
+**Sign logic, which is what makes an under-converged number readable.** Every state removed
+by truncation lies *above* band $n$, so each omitted diagonal term
+$-2|p^a_{nm}|^2/|\Delta\varepsilon|$ is negative: a truncated $(1/m^*)^{aa}$ is an
+**overestimate**, and falls monotonically as `nempty` rises. That monotonicity does not
+extend to off-diagonal components, whose terms carry either sign.
+
+`nstates=N` truncates the $m$-sum from Python. That is *exactly* equivalent to having run
+Elk with the corresponding smaller `nempty` — verified directly on bulk Si, where the
+`nempty=8` run's own full sum and the `nempty=40` run truncated to the same 21 states agree
+to $10^{-11}$ (their eigenvalues agree to $10^{-11}$ too), which is what makes a whole
+convergence sweep affordable out of a single ground state.
+
+## Verification against a real compiled binary (bulk Si)
+
+`tests/test_calculation_effective_mass.py`; Si, `ngridk=(4,4,4)`, `rgkmax=7.0`,
+`nempty=40` (85 states), compared against `get_effective_mass()` (Elk task 25,
+`src/effmass.f90`), which fits a polynomial to *eigenvalues* on a 27-point mesh of
+Cartesian displacements `deltaem=0.025` around the point and differentiates it. Task 25's
+"matrix of eigenvalue derivatives" is the inverse-mass tensor; its "effective mass tensor"
+is that matrix inverted.
+
+**Γ, band 1** (the non-degenerate $\Gamma_1$ $s$-bonding band, isolated by 12 eV):
+
+| states retained | $(1/m^*)^{xx}$ | deviation from task 25 | ${\rm Tr}\,f/3$ |
+|---|---|---|---|
+| 4 (occupied only) | 1.0000 | +16.1% | 0.000 |
+| 8 | 0.9276 | +7.7% | 0.217 |
+| 20 | 0.8984 | +4.3% | 0.305 |
+| 40 | 0.8914 | +3.5% | 0.326 |
+| 60 | 0.8900 | +3.4% | 0.330 |
+| 85 (all) | 0.8876 | +3.1% | 0.337 |
+| task 25 (finite difference) | 0.8611 | — | 0.139 |
+
+Monotone from above, exactly as the sign argument requires, and still descending at 85
+states: the sum rule recovers $0.1124/0.1389\approx81\%$ of the interband repulsion that
+lowers the curvature below the free-electron 1. The residual 19% is the missing continuum —
+the highest computed state sits at only 3.7 Ha above the band.
+
+**A generic, low-symmetry k-point** $(0.2,0.15,0.1)$, band 1, where the tensor is not forced
+isotropic and the off-diagonal components are a real test:
+
+| | $xx$ | $yy$ | $zz$ | $xy$ | $xz$ | $yz$ |
+|---|---|---|---|---|---|---|
+| sum rule (85 states) | 0.8675 | 0.8656 | 0.8642 | −0.0199 | −0.0073 | −0.0050 |
+| task 25 | 0.8369 | 0.8360 | 0.8352 | −0.0208 | −0.0076 | −0.0053 |
+
+3.5–3.7% on the diagonal (same convergence trend: 15.1% → 3.6%), and 4–6% on the
+off-diagonals, which are two orders of magnitude smaller and carry the correct sign and
+magnitude.
+
+**Where the two routes disagree more, and whose fault it is.** For bands with a close
+neighbour (min gap $\sim0.02$ Ha) at the generic point, differences reach a few tenths of an
+atomic unit (e.g. band 5, $xx$: −1.14 vs −1.36). Part of that is task 25's, not the sum
+rule's: its polynomial fit samples over $\pm0.025$ Bohr$^{-1}$, comparable to the scale on
+which those bands curve near an avoided crossing, so the quadratic fit is itself
+questionable there. Neither route is ground truth in that regime.
+
+**The decomposition, and a selection rule that could not be a numerical accident.** At Γ,
+diamond Si's states have definite parity about the bond centre and $\mathbf p$ is odd, so a
+transition between two even states is forbidden. Band 1 ($\Gamma_1$, even) accordingly gets
+*exactly nothing* from the even valence triplet $\Gamma_{25'}$ (bands 2–4): those
+contributions are $\sim10^{-30}$, i.e. zero at machine precision, not merely small. Its
+entire mass comes from the odd conduction triplet $\Gamma_{15}$ (bands 5–7, $-0.0241$ each,
+together 64% of the total deviation from 1) and its higher analogues at 1.18 Ha. This is the
+textbook selection rule behind Si's optical spectrum ($\Gamma_{25'}\to\Gamma_{15}$ allowed,
+$\Gamma_1\to\Gamma_{25'}$ forbidden), read straight off the mass decomposition.
+
+**The f-sum rule, Brillouin-zone averaged.** Summing $f_n$ over Si's four occupied bands on a
+generic (unshifted-symmetry-free) $\mathbf k$-mesh and averaging:
+
+| mesh | $\langle{\rm Tr}f/3\rangle$ per occupied band, 85 states | at 40 states |
+|---|---|---|
+| $4^3=64$ points | 1.103 | 1.096 |
+| $6^3=216$ points | 0.971 | 0.964 |
+| $8^3=512$ points | 0.932 | 0.924 |
+
+against the exact value 1. The two error sources are separable and pull in opposite
+directions. Truncation makes $f$ too *small* (equivalently $\langle1/m^*\rangle_{\rm BZ}$ too
+*large*, since every omitted term is negative pointwise): at fixed mesh, adding states raises
+$f$ monotonically (0.888 → 0.932 going from 12 to 85 states on the $8^3$ mesh), and the
+remaining deficit of $\sim7\%$ is the missing continuum, the same physics as the $19\%$ at Γ
+above but averaged over a whole band manifold rather than one state. Mesh discretization of
+the average is the other error and is *not* small at $4^3$ — it is what pushes that row above
+1, i.e. to the physically impossible side, and it is why $\langle1/m^*\rangle_{\rm BZ}$ comes
+out $-0.103$ there instead of the required non-negative value. From $6^3$ on the sign is at
+least correct ($+0.029$, $+0.069$), but the truncation deficit is mesh-independent by
+construction while those two differ by $2.4\times$, so mesh error still cancels roughly half
+the truncation bias at $6^3$; only at $8^3$ is the residual mostly truncation, and it is still
+drifting (successive differences $-0.132$, $-0.039$, extrapolating to $\approx0.92$, a deficit
+of $\approx8\%$). Treat this as a consistency check at the several-percent level, not a sharp
+one.
+
+**Synthetic pins, ahead of any Elk run** (`tests/test_parsers_optical.py`): on the massive
+Dirac model $H_\tau=v(\tau k_x\sigma_x+k_y\sigma_y)+\Delta\sigma_z$, where
+$\mathbf p=\partial H/\partial\mathbf k$ is exact and the two-band basis is complete, the sum
+rule reproduces the analytic Hessian
+$\partial^2\varepsilon_\pm/\partial k_a\partial k_b=\pm(v^2\delta_{ab}/E-v^4k_ak_b/E^3)$,
+$E=\sqrt{v^2k^2+\Delta^2}$, to machine precision at every $k$ tried and for both bands
+(with `free_electron_term=False`, per the argument above) — the same
+eigenvalue-derivative-vs-matrix-element comparison the Si test makes, here with no truncation
+to blur it. Plus: symmetry of the tensor, the two-band cancellation
+$(1/m^*)_1+(1/m^*)_2=0$, the decomposition summing to the total, `nstates` truncation
+matching a genuinely shorter input, the degeneracy guard, and $f^{ab}=\delta_{ab}-(1/m^*)^{ab}$
+together with its closed form $f_{xx}=v^2/\Delta$ at the Dirac point.
+
+## Guard
+
+The sum rule above is *non-degenerate* perturbation theory. If band `ist` is within
+`degeneracy_tol` (default $10^{-4}$ Ha) of any other retained state, `ValueError` is raised
+rather than dividing by an arbitrary splitting: within a degenerate multiplet a single band's
+curvature is not defined at all (the partners' dispersions cross), and Elk's own
+finite-difference task 25 is equally meaningless there. Si's three-fold $\Gamma_{25'}$ valence
+top is the canonical case, and is asserted to raise.
+
+## How to use in code
+
+```python
+si = Structure(SI_AVEC, SI_SPECIES).get_calculation(
+    "si", xc="PW", ngridk=(4, 4, 4), rgkmax=7.0,
+    extra_blocks={"nempty": [40]},      # the k.p sum's slow 1/dE tail needs these
+)
+si.get_energy()
+
+# one-off wrapper: momentum matrix elements at k, then the sum rule
+kp = si.get_effective_mass_sum_rule((0.0, 0.0, 0.0), ist=1)
+kp["inverse_mass"]     # (3,3) d^2 eps/dk_a dk_b, atomic units
+kp["mass"]             # its inverse, or None if a direction is flat
+
+# the independent route Elk already provides, for comparison
+fd = si.get_effective_mass((0.0, 0.0, 0.0))
+fd[0]["derivative_tensor"]   # <- compare against "inverse_mass"
+fd[0]["tensor"]              # <- compare against "mass" (that matrix inverted)
+
+# convergence sweep and the interband decomposition, from ONE run
+from elkpy.parsers import optical
+
+with si.eigenstate_session() as session:
+    m = session.momentum((0.0, 0.0, 0.0))
+
+for n in (8, 20, 40, len(m.energies)):
+    optical.effective_mass_tensor(m.energies, m.pmat, 1, nstates=n)["inverse_mass"]
+
+per_band = optical.effective_mass_tensor(
+    m.energies, m.pmat, 1, decompose=True
+)["contributions"]          # (nstates, 3, 3): which coupling makes the mass
+
+optical.oscillator_strength_sum(m.energies, m.pmat, 1)   # TRK f-sum tensor
+```
+
+## 26. Spin Berry curvature and the intrinsic spin Hall conductivity
+
+*Physics writeup: `docs/physics.tex` Part XV.*
+
+## What was blocking this, and why the fix is one array
+
+Everything this needs already existed, in two halves that could not legally
+be multiplied together:
+
+- the **velocity matrix elements** $v_a=p_a$ of §22's `MOMENTUM` query,
+  which returned `energies` and `pmat`;
+- the **spin operators** $S_x,S_y,S_z$ of §17, built in pure Python from
+  `evecsv`'s spin-up/spin-down row blocks ($i=p+(\mathrm{ispn}-1)\,$`nstfv`),
+  obtained from the `EIGENSTATES` query.
+
+Those are two *separate* diagonalisations at the same $k$. §14 spells out
+why that matters: a degenerate multiplet's eigenvectors are only defined up
+to a unitary rotation within the multiplet, and two independent
+diagonalisations are free to — and empirically do — pick different ones. A
+product $S_z v_a$ formed across that boundary is meaningless, and, crucially,
+**nothing cheap detects it**: $S_z$ stays Hermitian with eigenvalues in
+$[-\tfrac12,\tfrac12]$, `evecsv` stays unitary, `pmat` stays Hermitian, and
+the resulting curvature is a plausible finite number. The failure is silent.
+
+Patch 0009 is therefore small on purpose: `elkpy_momentum` gains one
+`intent(out)` argument, `evecsv_out(nstsv,nstsv)`, written where the routine
+previously wrote a local array it then discarded; and the session's
+`MOMENTUM` case prints that array in the same `do b; do a` column-major
+block the `EIGENSTATES` response already uses. No new upstream subroutine is
+called, no new task number, no extra computation — a `MOMENTUM` response is
+now literally an `EIGENSTATES` response with the three momentum components
+appended. `Momentum` gains an `evecsv` field; `EigenstateSession.momentum()`
+returns it unwindowed even when `ist0`/`ist1` slice `energies`/`pmat`, since
+its *row* index is the first-variational spinor basis, which a band window
+has no meaning for (and truncating it would break
+`compute_spin_operator()`'s `nstsv == 2*nstfv` check).
+
+`EigenstateSession.spin_current_operator(k, direction, spin)` exists so the
+pairing cannot be got wrong by accident: it issues one `MOMENTUM` query and
+builds $S_s$ from *that response's own* `evecsv`.
+
+## The physics
+
+The **conventional spin current operator** is the symmetrized product
+
+$$ J^s_a \;=\; \tfrac12\{S_s,v_a\} \;=\; \tfrac12\left(S_s v_a + v_a S_s\right), $$
+
+with $S_s$ the spin operator for projection $s\in\{x,y,z\}$ and $v_a$ the
+velocity operator along Cartesian axis $a$. The symmetrization is not
+cosmetic: $S_s v_a$ alone is not Hermitian once $[S_s,v_a]\neq0$, which is
+exactly the spin-orbit-coupled case of interest. It is also load-bearing for
+the discretization below — the exact cancellation of intra-window terms
+needs *both* operators Hermitian.
+
+Its Kubo linear response to an electric field along $b$ gives the **spin
+Berry curvature** of an occupied band window $W$,
+
+$$ \Omega^{s}_{ab}(\mathbf k) \;=\; -2\,\mathrm{Im}\sum_{n\in W}\sum_{m\notin W}
+   \frac{\langle n|J^s_a|m\rangle\,\langle m|v_b|n\rangle}{(\varepsilon_n-\varepsilon_m)^2}, $$
+
+and the **intrinsic spin Hall conductivity** is its Brillouin-zone integral,
+
+$$ \sigma^{s}_{ab} \;=\; \int_{\mathrm{BZ}}\frac{d^d k}{(2\pi)^d}\;\Omega^{s}_{ab}(\mathbf k). $$
+
+Structurally this is §22's Kubo quantum geometric tensor with the first
+velocity factor replaced by the spin current, so it reuses that module's
+arithmetic verbatim (`parsers.optical.kubo_sum`, generalized in this change
+from "a `pmat` plus two axis indices" to "two Hermitian operator matrices").
+It therefore inherits §22's sign convention unchanged —
+$\mathbf A=i\langle u|\nabla_{\mathbf k}u\rangle$, $\Omega=\nabla\times\mathbf A$
+(Xiao, Chang & Niu, RMP **82**, 1959 (2010)) — and setting $S\to\mathbb 1$
+recovers the ordinary charge Berry curvature exactly, which is the cheapest
+available pin on that shared sign and on the absence of a stray factor in
+the anticommutator.
+
+**Why only the window sum is exposed.** The textbook per-band $\Omega^s_n$
+sums over *all* $m\neq n$, including states inside $W$. For the
+window-summed quantity those intra-window terms cancel **exactly**, for any
+Hermitian $J$ and $v$: writing $X=\langle n|J|m\rangle$ and
+$Y=\langle m|v|n\rangle$, the reversed pair contributes
+$\langle m|J|n\rangle\langle n|v|m\rangle=X^*Y^*=(XY)^*$ over the identical
+denominator, so the two imaginary parts cancel. Hence
+$\sum_{n\in W}\sum_{m\neq n} = \sum_{n\in W}\sum_{m\notin W}$, and the sum
+never touches an intra-window energy denominator — whereas a per-band
+$\Omega^s_n$ diverges on any degenerate occupied pair. The remaining
+degeneracy guard is §22's unchanged: a window not separated from the states
+outside it raises `ValueError` rather than being clipped.
+
+**The $\tfrac12$, stated once because it is exactly a factor of 2.** elkpy's
+$S_a$ (§17) has eigenvalues $\pm\tfrac12$, i.e. $\hbar=1$ and
+$S=\vec\sigma/2$. So for a system with conserved $S_z$, where the bands
+decouple into two sectors and $J^z_a=s_\sigma v_a$ within each,
+
+$$ \Omega^{s} \;=\; \sum_\sigma s_\sigma\,\Omega^{\sigma} \;=\; \tfrac12\left(\Omega^{\uparrow}-\Omega^{\downarrow}\right), $$
+
+*half* the bare difference. Papers quoting SHC in units of $\hbar/2e$ work
+with the $\pm1$-normalized spin, so multiply by 2 to compare.
+
+**Caveat, and it is a real one.** $\tfrac12\{S_z,v\}$ is the *conventional*
+spin current, which is not conserved once spin-orbit coupling breaks spin
+conservation; a "proper" definition adds a torque-dipole term. elkpy
+computes the conventional one — what essentially all first-principles SHC
+numbers in the literature use — and names it for what it is rather than
+quietly implying conservation.
+
+## Verification
+
+**Synthetic** (`tests/test_parsers_spin_hall.py`, no Elk run), on §22's
+massive Dirac model $H_\tau=v(\tau k_x\sigma_x+k_y\sigma_y)+\Delta\sigma_z$
+where $\mathbf p=\partial H/\partial\mathbf k$ is exact. Two Dirac sectors
+are glued into one four-state system with conserved $S_z$ (states sorted by
+energy, `pmat` and $S_z$ permuted together so the window really is "both
+valence bands"), and the result is checked against
+`parsers.optical.kubo_berry_curvature` — an independent, already
+sign-pinned code path — on each sector alone:
+
+- $\Omega^s=\sum_\sigma s_\sigma\Omega^\sigma$ exactly (to $10^{-10}$), over
+  all four valley combinations. Two of those combinations are the ones with
+  teeth, and neither alone suffices:
+  - **the time-reversal pair** ($\tau_\uparrow=+1$, $\tau_\downarrow=-1$):
+    charge curvature cancels to zero while the spin curvature is maximal —
+    a $J$-vs-$v$ swap would return 0 here instead of a large number;
+  - **two copies of one valley**: charge curvature doubles while the spin
+    curvature cancels — the opposite pattern, catching a dropped or
+    mis-signed $S$ factor that the first case's coincidence hides.
+- $S\to\mathbb 1$ reproduces the ordinary curvature exactly.
+- $J$ is Hermitian for non-commuting random Hermitian $S$ and $v$ (with the
+  unsymmetrized product asserted *not* Hermitian, so the test isn't vacuous).
+- the window sum equals an explicit brute-force sum over all $m\neq n$ on a
+  random Hermitian model — a direct check of the cancellation argument
+  above, not a restatement of it.
+
+**Against a real compiled binary** (`tests/test_calculation_spin_hall.py`),
+on the graphene + `soc_scale={"C": 3000}` fixture §20 already uses. One
+practical note first, because it bit this test: band windows here are
+**explicit and gap-checked**, not read off occupation numbers. Scaling
+carbon's SOC by 3000 reorders the band structure so drastically that the
+cell's 8 valence electrons (confirmed in `INFO.OUT`) do not fill a fixed 8
+states at every $k$ — Elk's own occupancies show 6 occupied at the first
+$k$-point — so `sum(occ > 0.5)` at one $k$-point, the idiom §13/§22's tests
+use on genuine insulators, does not define a band group here. Every
+quantity in this section is a property of a *gapped group's projector*, so
+the tests assert the boundary gap of each window they use. (This is worth
+carrying over to §20's own use of the same fixture.)
+
+Measured, at both valleys, for the two gapped groups used:
+
+| window | boundary gap | $\Omega^{\text{charge}}$ | $\Omega^{s}(K)$ | $\Omega^{s}(K')$ |
+|---|---|---|---|---|
+| [1,4] | 1.25 eV | $\sim2\times10^{-4}$ | $-78.4035$ | $-78.4016$ |
+| [1,6] | 10.4 eV | $<10^{-5}$ | $-0.31936$ | $-0.31936$ |
+
+The $K/K'$ agreement is to $\sim2\times10^{-5}$ relative, across windows
+whose spin curvatures differ by more than two orders of magnitude, while
+the charge curvature is numerical noise about zero in both. The absolute
+sign of $\Omega^s$ is a regression pin, not a prediction — it depends on
+this structure's own conventions and on which `evecsv` row block is
+physically "up", exactly as §17 documents for $S_z(K)$.
+
+Specifically:
+
+- the `MOMENTUM` response's new `evecsv` is unitary to machine precision
+  (not the $\sim10^{-3}$ `genolpq` truncation floor overlaps carry — these
+  are eigenvectors of one Hermitian problem);
+- $S_z$ built from it has the same *spectrum* over the window as
+  $S_z$ from an `EIGENSTATES` query at the same $k$, and the two responses'
+  energies agree exactly. The comparison is of the spectrum, not of matrix
+  elements: graphene is Kramers degenerate at *every* $k$ (inversion +
+  time reversal), so an elementwise comparison would fail with nothing
+  wrong — which is precisely the ambiguity patch 0009 exists to remove;
+- the physics check: graphene's inversion **and** time-reversal symmetry
+  together force the charge Berry curvature to vanish pointwise
+  ($\Omega(-\mathbf k)=+\Omega(\mathbf k)$ from inversion,
+  $-\Omega(\mathbf k)$ from time reversal), while the spin Berry curvature
+  is under no such constraint. $\Omega^s$ is **even** under each symmetry
+  separately: $J^z_a$ picks up sign flips from *both* $S_z$ and $v$ where
+  $v$ alone picks up one, so the two flips cancel. Hence
+  $\Omega^s(K)=+\Omega^s(K')$ — the *opposite* relative sign to the $K/K'$
+  antisymmetry §13's Berry curvature, §17's $S_z$, §19's $L_z$ and §22's
+  circular dichroism all assert, and the reason a spin Hall response is
+  allowed in a time-reversal-symmetric crystal where an anomalous Hall
+  response is not. A large, valley-**symmetric** spin curvature sitting on
+  a vanishing, valley-antisymmetric charge one is the defining signature of
+  a quantum spin Hall system. Note what the test would show if the two
+  operator factors were swapped or $S$ silently dropped: the charge
+  curvature, i.e. zero — so the *magnitude* is as diagnostic as the sign
+  pattern here.
+
+Not asserted: a converged $\sigma^s_{xy}$ against a literature value. The
+spin Berry curvature is sharply peaked near the gapped Dirac points, so the
+BZ integral converges far more slowly than a total energy on the same mesh —
+the same resolution problem §20 documents for the $Z_2$ mesh. The
+conductivity helper is exercised end-to-end on a coarse mesh for shape and
+units only, and says so.
+
+## How to use in code
+
+```python
+from elkpy.parsers import optical, spin_hall
+from elkpy.parsers.spin import compute_spin_operator
+
+calc = Structure(GRAPHENE_AVEC, GRAPHENE_SPECIES).get_calculation(
+    "graphene", xc="PW", ngridk=(6, 6, 1), rgkmax=7.0,
+    spinorb=True, soc_scale={"C": 3000.0},
+    extra_blocks={"nempty": [12]},   # states for the Kubo sums
+)
+calc.get_energy()
+
+ist0, ist1 = 1, 4   # a gapped band group -- CHECK the boundary gap, see above
+
+with calc.eigenstate_session() as session:
+    # one MOMENTUM query: energies, pmat AND evecsv from ONE diagonalisation
+    m = session.momentum((1 / 3, 1 / 3, 0))
+    nstsv = m.evecsv.shape[0]
+    sz = compute_spin_operator(m.evecsv, nstsv // 2, 1, nstsv)["sz"]
+
+    # spin Berry curvature of the occupied window (Bohr^2), sigma^{s_z}_xy
+    spin_hall.spin_berry_curvature(m.energies, m.pmat, sz, ist0, ist1,
+                                   directions=(1, 2))
+
+    # the charge curvature of the same window, for comparison -- zero here,
+    # forced by graphene's inversion x time-reversal symmetry
+    optical.kubo_berry_curvature(m.energies, m.pmat, ist0, ist1)
+
+    # or let the session pair S_z and v for you (same single query):
+    m, j = session.spin_current_operator((1 / 3, 1 / 3, 0), direction=1, spin="z")
+
+# fold a mesh of curvatures into the conductivity (atomic units)
+sigma = spin_hall.spin_hall_conductivity(curvatures, cell_volume=volume)
+```
+
+`directions` here indexes **Cartesian** axes ($1,2,3=x,y,z$), the same as
+`parsers.optical` and for the same reason (`genpmatk`'s components) — not
+the reciprocal-lattice convention of `get_berry_curvature()`.
+
+## References
+
+- Guo, Yao & Niu, *Ab initio calculation of the intrinsic spin Hall effect
+  in semiconductors*, PRL **94**, 226601 (2005), arXiv:cond-mat/0505146 —
+  the ancestor Kubo formula both papers below derive from, and the one whose
+  $\omega\to0$ limit fixes the $e\hbar/V_c$ prefactor used here.
+- Yao & Fang, *Sign Changes of Intrinsic Spin Hall Effect in Semiconductors
+  and Simple Metals*, PRL **95**, 156601 (2005), arXiv:cond-mat/0502351 —
+  prints the curvature with $-2\,\mathrm{Im}$, the form elkpy's own
+  convention coincides with, and states the sign in words.
+- Guo, Murakami, Chen & **Nagaosa**, *Intrinsic spin Hall effect in platinum
+  metal*, PRL **100**, 096401 (2008), arXiv:0705.0409 — prints the same
+  expression with $+2\,\mathrm{Im}$; both papers nevertheless report a
+  positive SHC of comparable size for hole-doped GaAs, so the printed
+  difference is absorbed in the charge vertex, not physical. (Note the
+  fourth author is Nagaosa, not Niu — an easy misattribution given the
+  ancestor paper above.)
+- Shi, Zhang, Xiao & Niu, *Proper definition of spin current in spin-orbit
+  coupled systems*, PRL **96**, 076604 (2006), arXiv:cond-mat/0503505 — the
+  conserved-spin-current objection to $\tfrac12\{S_z,v\}$, not implemented
+  here.
+- Kane & Mele, PRL **95**, 226801 (2005), arXiv:cond-mat/0411737 (the
+  current-level reduction $\mathbf J_s=(\hbar/2e)(\mathbf J_\uparrow-\mathbf
+  J_\downarrow)$) and PRL **95**, 146802 (2005), arXiv:cond-mat/0506581 (the
+  invariant-level one, already cited by §20) — the quantum spin Hall effect
+  in graphene, the fixture's own prediction.
+- Sinova, Valenzuela, Wunderlich, Back & Jungwirth, *Spin Hall effects*, RMP
+  **87**, 1213 (2015), arXiv:1411.3249 — review covering both the Kubo
+  conventions and the proper-current caveat.
+- Xiao, Chang & Niu, RMP **82**, 1959 (2010) — the Berry-phase sign
+  convention elkpy uses throughout (§22).
+
+## 27. Named wrappers for Elk's potential, ELF and MOKE tasks
+
+Routine wrapping of upstream capability rather than new physics, so this is
+recorded compactly; the MOKE verification is the part worth reading.
+
+Doc prose for merging into `docs/design.md` (a new numbered section, or an
+extension of the volumetric/plot3d discussion), `docs/physics.tex` (the MOKE
+part below is written as a `\part{}` draft), `README.md`'s `FUNCTIONALITIES`
+list and `CLAUDE.md`'s project status. Written by the agent that added
+`get_potential()`, `get_elf()` and `get_moke()`; not part of the published
+docs.
+
+**Still outstanding when merging:** a notebook per new capability (README
+`FUNCTIONALITIES` bullets link to one), per the README/notebook style rules.
+A single "volumetric quantities" notebook (density, Kohn-Sham potential,
+ELF, plotted as 2D slices through the Si bond) plus a MOKE spectrum notebook
+(Kerr rotation and ellipticity vs photon energy for the two magnetization
+directions) would cover all three.
+
+Also update `docs/roadmap.md` Tier 3 item 4, which currently says potential
+(43) and ELF (53) "are one `_run_resumed` call away using the same parser but
+don't have named `get_*` methods yet" -- they now do. And `CLAUDE.md`'s
+"Not implemented" list, which mentions "named `get_*` methods for
+potential/ELF volumetric plots (reachable via `run_tasks()` +
+`parsers.volumetric`)".
+
+## 1. Kohn-Sham potential and ELF as 3D plots (tasks 43, 53)
+
+Tasks 33 (density, already wrapped as `get_density()`), 43 (potential) and
+53 (ELF) all end in the same writer, `vendor/elk/src/plot3d.f90`, and take
+the same `plot3d` input block -- a parallelepiped given as an origin plus
+three corner vectors in lattice coordinates, and a grid size. So the
+Python side needs no new parser at all: `parsers/volumetric.py::parse_plot3d`
+already reads the format, and the three methods now share a
+`Calculation._plot3d_lines()` helper that builds the block.
+
+Task numbers and filenames verified in `vendor/elk/src/elk.f90`'s dispatch
+(`case(31,32,33) -> rhoplot`, `case(41,42,43) -> potplot`,
+`case(51,52,53) -> elfplot`) and in the `open(50, file=...)` statements of
+the subroutines themselves, not from the manual.
+
+### Potential (task 43)
+
+`potplot.f90`'s `case(43)` branch writes **two** files from a single run:
+
+* `VCL3D.OUT` -- the electrostatic (Coulomb) potential `v_C`, i.e. the
+  nuclear plus Hartree terms, from `vclmt`/`vclir`.
+* `VXC3D.OUT` -- the exchange-correlation potential
+  `v_xc = delta E_xc / delta n`, from `vxcmt`/`vxcir`.
+
+Their sum is the Kohn-Sham effective potential entering
+`(-1/2 grad^2 + v_C + v_xc) psi_i = eps_i psi_i`. This is the one place the
+new methods do not map one-to-one onto `get_density()`'s shape: a single
+task writes two distinct fields. `get_potential(..., component=)` selects
+which of the two is parsed ("coulomb" by default, or "xc") and keeps
+`get_density()`'s `(points, values)` return contract; asking for the other
+component re-runs the task, which is cheap (no SCF beyond the resumed
+ground state, just `readstate` + `plot3d`) and was judged preferable to a
+method whose return arity changes with an argument.
+
+### ELF (task 53)
+
+`elfplot.f90` writes `ELF3D.OUT`. The (spin-averaged) electron localization
+function is
+
+    f_ELF(r) = 1 / (1 + [D(r)/D0(r)]^2)
+
+with
+
+    D(r)  = (1/2) ( tau(r) - (1/4)|grad n(r)|^2 / n(r) )
+    D0(r) = (3/5) (6 pi^2)^(2/3) (n(r)/2)^(5/3)
+    tau(r) = sum_i |grad psi_i(r)|^2
+
+(the docstring of `elfplot.f90` itself; Becke and Edgecombe, J. Chem. Phys.
+92, 5397 (1990); the reference Elk cites is Burnus, Marques and Gross, PRA
+71, 010501 (2005)). `D` is the excess of the local kinetic energy density
+over its von Weizsaecker (single-orbital) value, i.e. the Pauli-principle
+contribution; `D0` is the same quantity for the homogeneous electron gas at
+the local density. `f_ELF` is therefore dimensionless and bounded to [0, 1]
+by construction: 1 means an electron pair is perfectly localized (a
+covalent bond, a lone pair, a closed shell), 1/2 reproduces the homogeneous
+electron gas, and 0 marks the delocalized limit.
+
+Caveat worth repeating from Elk's own example (`examples/ELF/BN`): the ELF
+depends on density gradients and is not continuous across the muffin-tin
+boundaries at default cut-offs, so a plot can show a visible sphere-boundary
+seam that is a basis-set artefact rather than physics. Raising `rgkmax`,
+`gmaxvr`, `lmaxo`, `lmaxapw` (via `extra_blocks`) or `highq=.true.` smooths it.
+
+### How to use in code
+
+```python
+from elkpy.structure import Structure
+
+si = Structure([(5.13, 5.13, 0.0), (5.13, 0.0, 5.13), (0.0, 5.13, 5.13)],
+               {"Si": [(0.0, 0.0, 0.0), (0.25, 0.25, 0.25)]})
+calc = si.get_calculation("si", xc="PW", ngridk=(4, 4, 4))
+
+# Cartesian grid points (Bohr) and the field sampled on them
+points, rho = calc.get_density(grid=(20, 20, 20))
+points, v_c = calc.get_potential(grid=(20, 20, 20))                  # VCL3D.OUT
+points, v_xc = calc.get_potential(grid=(20, 20, 20), component="xc") # VXC3D.OUT
+points, elf = calc.get_elf(grid=(20, 20, 20))
+
+# a plane through the Si-Si bond instead of the whole cell: origin + two
+# in-plane vectors + a degenerate third, in lattice coordinates
+box = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 0)]
+points, elf_slice = calc.get_elf(box=box, grid=(60, 60, 1))
+```
+
+### What was verified against a real binary
+
+Bulk Si, `ngridk=(2,2,2)`, 4x4x4 plot grid (`tests/test_calculation_si.py`):
+
+* `get_potential()` returns both components on the same grid as
+  `get_density()`, and they are genuinely different fields (catching a
+  filename/spec mix-up that returned the same file twice).
+* **Sharp cross-check, no Elk-internal reference needed:** `xc="PW"` is a
+  *local* density functional, so `v_xc(r)` must be a pointwise function of
+  `n(r)` alone. Measured against the analytic Dirac exchange potential
+  `v_x = -(3n/pi)^(1/3)` on the identical grid, `v_xc/v_x` lies in
+  1.14-1.23 across this cell's density range (0.006-0.085 e/Bohr^3) -- the
+  extra 14-23% being the Perdew-Wang correlation potential. This ties two
+  separate Elk runs' output files (task 33's `RHO3D.OUT`, task 43's
+  `VXC3D.OUT`) to an analytic formula; a shifted column, a wrong file or a
+  unit error breaks it immediately, whereas a shape/sign check would not.
+* ELF lies in [0, 1] everywhere (a hard bound of the formula, not a
+  tolerance), and reaches 0.94 in the Si-Si bonding region -- a covalent
+  crystal must depart strongly from the homogeneous-gas value of 1/2
+  somewhere in the cell.
+
+Note for anyone reading absolute values near a nucleus: the plot3d output
+is an interpolation onto the requested Cartesian grid, and a grid point
+landing exactly on an atom does *not* show the divergent `-Z/r` Coulomb
+potential or the enormous core density (measured on the Si cell: `RHO3D`
+peaks at 0.085 e/Bohr^3, in the bond, not at the nucleus). Treat these
+plots as valence/bonding-scale visualizations.
+
+## 2. Magneto-optic Kerr effect (task 122)
+
+`get_moke()` wraps task 122 (`vendor/elk/src/moke.f90`, dispatched at
+`case(122)` in `elk.f90`), returning `(energies, kerr)` -- the photon-energy
+grid in Hartree and the **complex Kerr angle in degrees**, whose real part
+is the Kerr rotation `theta_K` and whose imaginary part is the Kerr
+ellipticity `eta_K`. Output file `KERR.OUT`, format read off `moke.f90`'s
+own write statements: two blank-line-separated blocks of `(2G18.10)` pairs,
+real part then imaginary part, on a shared energy grid -- parsed by the new
+`parsers/moke.py`.
+
+### The physics
+
+Linearly polarized light reflected from a magnetized surface comes back
+elliptically polarized, with its major axis rotated. The effect is
+first-order in the magnetization and vanishes without spin-orbit coupling:
+it needs the *off-diagonal* conductivity `sigma_xy`, which is odd under time
+reversal, and only SOC ties the (time-reversal-odd) spin magnetization to
+the orbital motion the light actually couples to.
+
+`moke.f90` calls `dielectric` internally with `optcomp` fixed to the 11 and
+12 components, obtaining `sigma_xx` and `sigma_xy` from the Kubo formula
+implemented in `dielectric.f90` (Physica Scripta T109, 170 (2004)), and then
+forms the standard polar-Kerr expression
+
+    theta_K + i eta_K = - sigma_xy / ( sigma_xx sqrt(1 + 4 pi i sigma_xx / omega) )
+
+(atomic units; `moke.f90` writes both parts multiplied by 180/pi, i.e. in
+degrees). The square-root factor is the refractive-index denominator of the
+Fresnel reflection coefficients for the two circular polarizations. Elk
+returns exactly zero at `omega = 0`, where the expression is singular.
+
+Task 122 needs the momentum matrix elements on disk (`dielectric` reads
+`PMAT.OUT` via `getpmat`), so `get_moke()` runs task 120
+(`writepmat.f90`) first in the same directory. That pairing is precisely
+what makes this worth a named method rather than a bare `run_tasks()` call.
+
+Note the interaction with `dielectric` (task 121, wrapped separately): task
+122 *also* writes `SIGMA_11.OUT`, `SIGMA_12.OUT`, `EPSILON_11.OUT` and
+`EPSILON_12.OUT` as a side effect, since it calls the same subroutine. Both
+wrappers run in their own wiped `_run_resumed()` subdirectory, so they
+cannot overwrite each other's output; but a caller who wants both the
+conductivity tensor and the Kerr angle pays for the response function twice.
+
+### Smearing and convergence
+
+`swidth` (Hartree) sets the smearing whose reciprocal is the relaxation time
+entering the response function. Elk's own example
+(`examples/TDDFT-optics/Ni-MOKE`) raises it *after* the ground-state run to
+smooth the spectrum, warning that a large smearing during the SCF cycle
+suppresses the moment -- which is exactly what passing `swidth=` to
+`get_moke()` does, since it runs resumed from an already-converged
+`STATE.OUT` and never feeds `swidth` back into the ground state.
+
+The Kerr angle is a Brillouin-zone integral over interband transitions and
+converges slowly in `ngridk` (Elk's Ni example uses 32x32x32). At a coarse
+mesh the spectrum is dominated by individual transition spikes and the
+near-singular `sigma_xx` denominator, which inflates the peak values by
+orders of magnitude: measured on fcc Ni, `ngridk=(4,4,4)` with default
+smearing gives peaks of tens of degrees, while `ngridk=(10,10,10)` with
+`swidth=0.01` brings them down to the ~0.01-0.1 degree scale of a real Ni
+Kerr spectrum. Treat a coarse-mesh result as a symmetry/sign probe, not a
+spectrum.
+
+### How to use in code
+
+```python
+from elkpy.structure import Structure
+
+# vendor/elk/examples/TDDFT-optics/Ni-MOKE: ferromagnetic fcc Ni
+ni = Structure([(1.0, 1.0, 0.0), (1.0, 0.0, 1.0), (0.0, 1.0, 1.0)],
+               {"Ni": [(0.0, 0.0, 0.0)]}, scale=3.33)
+calc = ni.get_calculation(
+    "ni", xc="PW", spinpol=True, spinorb=True, ngridk=(8, 8, 8),
+    extra_blocks={"bfieldc": [(0.0, 0.0, 0.01)]},  # magnetize along +z
+)
+
+# energies in Hartree, kerr complex in degrees
+energies, kerr = calc.get_moke(wplot=(0.0, 0.5), nwplot=500,
+                               swidth=0.01, ngridk=(16, 16, 16))
+theta_K, eta_K = kerr.real, kerr.imag
+```
+
+`get_moke()` raises `ValueError` before launching anything if
+`spinorb=False` or `spinpol=False`: `sigma_xy` is then identically zero by
+symmetry, so the run could only ever return a flat zero.
+
+### What was verified against a real binary
+
+`tests/test_calculation_moke.py`, fcc Ni (Elk's own MOKE example structure)
+at `ngridk=(4,4,4)`, ~50 s for the whole file:
+
+* The guards fire without running Elk (no SOC / no magnetization).
+* Shapes/dtype, the energy grid (starts at 0 -- `dielectric.f90` clips a
+  negative `wplot(1)` to zero), and `kerr[0] == 0` exactly.
+* **Sign of the effect:** the Kerr angle is odd under reversal of the
+  magnetization. Two *independent* ground states (`bfieldc` along +z and
+  -z), each with its own momentum matrix elements and conductivity tensor,
+  sharing no arithmetic, give spectra that agree in magnitude to 0.6% and
+  cancel to 0.9% of the peak when added:
+  `max|kerr(+M) + kerr(-M)| = 0.0088 max|kerr(+M)|`. This is the check that
+  distinguishes a genuine Kerr response from anything even under time
+  reversal (e.g. `|sigma_xy|`), which a magnitude-only assertion would pass
+  just as happily.
+
+One convention rests on a source read rather than a runtime test: which of
+`KERR.OUT`'s two blocks is the real part. `moke.f90` writes `dble(kerr)`
+first and `aimag(kerr)` second, and `parsers/moke.py` follows that order --
+but every check above (oddness under M reversal, `kerr[0] == 0`, magnitude
+agreement) is invariant under swapping the two, so none of them would catch
+a flip. Same class of source-derived convention as the Fortran conjugation
+sign in the Berry-curvature work. A future denser-mesh comparison against a
+published Ni Kerr spectrum would pin it empirically.
+
+Not verified: the absolute spectrum against experiment or published DFT --
+that needs a k-mesh well beyond what these tests can afford, and the coarse
+mesh inflates peak magnitudes as described above.

@@ -2773,4 +2773,284 @@ L.~Fu, C.~L.~Kane and E.~J.~Mele,
 Phys.\ Rev.\ Lett.\ \textbf{98}, 106803 (2007), arXiv:cond-mat/0607699.
 \end{thebibliography}
 
+\part{Optical absorption: dielectric function and circular dichroism}
+\label{part:optics}
+
+\section{The independent-particle dielectric function}
+
+Linear response of a crystal to a monochromatic field of frequency
+$\omega$ and polarization $\mathbf e$ is governed, in the
+independent-particle (random-phase) approximation, by the
+Kubo--Greenwood conductivity
+%
+\begin{equation}
+  \sigma_{ij}(\omega)=\frac{i}{N_k\Omega}\sum_{\mathbf k}\sum_{n,m}
+  \frac{f_{n\mathbf k}\left(1-f_{m\mathbf k}/f_{\max}\right)}
+       {\varepsilon_{m\mathbf k}-\varepsilon_{n\mathbf k}}
+  \left[\frac{p^i_{nm}\overline{p^j_{nm}}}
+             {\omega-\varepsilon_{mn}+i\varsigma}
+       +\frac{\overline{p^i_{nm}\overline{p^j_{nm}}}}
+             {\omega+\varepsilon_{mn}+i\varsigma}\right],
+  \label{eq:optics-sigma}
+\end{equation}
+%
+where $p^i_{nm}=\langle\psi_{n\mathbf k}|\hat p_i|\psi_{m\mathbf k}\rangle$
+are the momentum matrix elements of Part~\ref{part:momentum},
+$\varepsilon_{mn}=\varepsilon_{m\mathbf k}-\varepsilon_{n\mathbf k}$,
+$f_{n\mathbf k}$ the occupation numbers, $f_{\max}$ their maximum value
+($2$ without spin polarization, $1$ for spinor states), $\Omega$ the
+unit-cell volume, $N_k$ the number of $k$-points in the full (non-reduced)
+Brillouin-zone sampling, and $\varsigma$ a phenomenological inverse
+relaxation time that both broadens the resonances and regularizes them.
+The dielectric tensor follows as
+%
+\begin{equation}
+  \epsilon_{ij}(\omega)=\delta_{ij}
+  +\frac{4\pi i\,\sigma_{ij}(\omega)}{\omega+i\varsigma}.
+  \label{eq:optics-eps}
+\end{equation}
+%
+Physically, $\operatorname{Im}\epsilon_{ij}$ counts vertical (momentum
+conserving) transitions from an occupied state to an empty one, each
+weighted by the squared matrix element of the velocity operator along the
+field. What is neglected is the electron--hole interaction: there are no
+excitons here, and no local-field corrections either, so the calculated
+absorption edge lies at the Kohn--Sham gap rather than at the true optical
+gap.
+
+Taking $\varsigma\to0$ in \eqref{eq:optics-sigma}--\eqref{eq:optics-eps},
+$1/(\omega-\Delta+i\varsigma)\to\mathcal P(\cdot)-i\pi\delta(\omega-\Delta)$,
+leaves the familiar Fermi-golden-rule form
+%
+\begin{equation}
+  \operatorname{Im}\epsilon_{\mathbf e}(\omega)=
+  \frac{4\pi^2}{\Omega\,\omega^2}\sum_{\mathbf k}W_{\mathbf k}
+  \sum_{v,c} f_v\!\left(1-\frac{f_c}{f_{\max}}\right)
+  \left|\mathbf e\cdot\mathbf p_{cv}(\mathbf k)\right|^2
+  \delta\!\left(\omega-(\varepsilon_c-\varepsilon_v)\right).
+  \label{eq:optics-golden}
+\end{equation}
+
+\section{Circular polarization and valley selectivity}
+
+For light propagating along $\hat z$ the two helicities correspond to
+$\mathbf e_\pm\propto\hat x\pm i\hat y$, so the relevant matrix elements are
+%
+\begin{equation}
+  P_\pm(\mathbf k)=p^x_{cv}(\mathbf k)\pm i\,p^y_{cv}(\mathbf k),
+  \qquad
+  \left|P_+\right|^2+\left|P_-\right|^2
+  =2\left(\left|p^x_{cv}\right|^2+\left|p^y_{cv}\right|^2\right).
+  \label{eq:optics-circular}
+\end{equation}
+%
+Substituting $\tfrac12|P_\pm|^2$ for $|\mathbf e\cdot\mathbf p_{cv}|^2$ in
+\eqref{eq:optics-golden} defines the helicity-resolved spectra
+$\operatorname{Im}\epsilon_\pm$, whose sum is
+$\operatorname{Im}\epsilon_{xx}+\operatorname{Im}\epsilon_{yy}$ by the
+identity in \eqref{eq:optics-circular}.
+
+In a gapped honeycomb crystal the three-fold rotation about the zone corner
+forces the band-edge transition to be an eigenstate of $C_3$ with a definite
+angular-momentum change, so only one helicity couples: $|P_-|=0$ at $K$ and
+$|P_+|=0$ at $K'$ (or vice versa, depending on the structure's own
+orientation conventions). This is valley-selective circular dichroism, and it
+is the reason a circular-resolved spectrum carries information the Cartesian
+tensor does not. Time reversal, however, relates the two valleys,
+$\mathbf p_{cv}(-\mathbf k)=-\overline{\mathbf p_{cv}(\mathbf k)}$, so a sum
+over a Brillouin-zone sampling closed under $\mathbf k\to-\mathbf k$ gives
+$\operatorname{Im}\epsilon_+=\operatorname{Im}\epsilon_-$ identically in a
+non-magnetic crystal: the dichroism is a $\mathbf k$-resolved property, and
+is measured by exciting one valley selectively, not by illuminating the whole
+zone.
+
+\section{Finite broadening}
+
+At the finite $\varsigma$ any practical calculation uses, the
+$\delta$-function form \eqref{eq:optics-golden} and the exact response
+\eqref{eq:optics-sigma}--\eqref{eq:optics-eps} are not the same function.
+Carrying the algebra through for a single transition of energy $\Delta$ and
+real intensity $z$ gives
+%
+\begin{equation}
+  \operatorname{Im}\epsilon(\omega)=
+  \frac{4\pi\varsigma z}{\Omega\,\Delta\,(\omega^2+\varsigma^2)}
+  \left[\frac{2\omega-\Delta}{(\omega-\Delta)^2+\varsigma^2}
+       +\frac{2\omega+\Delta}{(\omega+\Delta)^2+\varsigma^2}\right],
+  \label{eq:optics-exact-line}
+\end{equation}
+%
+against the Lorentzian-broadened $\delta$-form
+$4\pi\varsigma z/[\Omega\omega^2((\omega-\Delta)^2+\varsigma^2)]$. The two
+coincide at resonance and differ elsewhere by the factor
+$[(2\omega-\Delta)/\Delta]\,\omega^2/(\omega^2+\varsigma^2)$, first order in
+$(\omega-\Delta)/\Delta$. The second (anti-resonant) term of
+\eqref{eq:optics-exact-line} is not optional: the first alone changes sign
+below $\omega=\Delta/2$, and the two cancel exactly at $\omega=0$, as they
+must for a system with a gap.
+
+\section{How to use in code}
+
+\begin{verbatim}
+hbn = Structure(HBN_AVEC, HBN_SPECIES).get_calculation(
+    "hbn", xc="PW", ngridk=(6, 6, 1), rgkmax=7.0,
+    extra_blocks={"nempty": [12]},
+)
+hbn.get_energy()
+
+# Elk's own dielectric tensor (tasks 120 then 121)
+elk = hbn.get_dielectric_function(components=((1, 1), (2, 2)), swidth=0.005)
+
+# elkpy's helicity-resolved spectrum on the same non-reduced mesh
+out = hbn.get_circular_absorption(swidth=0.005)
+out["eps2_total"]                    # = Im eps_xx + Im eps_yy
+out["eps2_plus"], out["eps2_minus"]  # equal when summed over the whole zone
+
+# one valley at a time: the dichroism the zone sum cancels
+from elkpy.parsers import optical
+optical.circular_absorption(valleys["kdata"], w, occ, volume,
+                            swidth=0.005, weights=[1.0, 0.0])["eta"]
+\end{verbatim}
+
+
+\part{The effective-mass tensor from the $k\cdot p$ sum rule}
+\label{part:effmass}
+
+\section{Curvature as a sum over states}
+
+Part~\ref{part:momentum} obtained the first derivative of a band from the
+diagonal momentum matrix element (Eq.~\eqref{eq:hellmann}). The second
+derivative follows from second-order $k\cdot p$ perturbation theory: expanding
+$H(\mathbf k+\mathbf q)$ about $\mathbf k$, the $O(q^2)$ shift of a
+non-degenerate level $n$ has a free-electron piece and a level-repulsion piece,
+giving the inverse effective-mass tensor (atomic units, $\hbar=m_e=1$)
+\begin{equation}
+  \left(\frac{1}{m^*}\right)^{ab}_{n}
+    = \delta_{ab} + 2\sum_{m\neq n}
+      \frac{\operatorname{Re}\big[p^a_{nm}p^b_{mn}\big]}
+           {\varepsilon_n-\varepsilon_m}.
+  \label{eq:kp-mass}
+\end{equation}
+Each term pushes band $n$ away from band $m$: intermediate states \emph{below}
+$n$ raise the curvature, states \emph{above} lower it. In a crystal the bare
+$\delta_{ab}$ is usually a small part of the answer and the sum dominates.
+
+\paragraph{A different convergence problem from Part~\ref{part:momentum}.} The
+denominator here is $\Delta\varepsilon$ to the \emph{first} power, where the
+quantum geometric tensor of Eq.~\eqref{eq:kubo-T} carries $\Delta\varepsilon^2$.
+Truncating the sum at the highest computed state therefore costs
+proportionally more: measured on bulk Si from the identical set of states, the
+mass's truncation error is $\sim$36\% of its interband signal where the Kubo
+metric's is $\sim$15\%. Since every omitted state lies \emph{above} band $n$,
+each omitted diagonal term is negative and the truncated
+$(1/m^*)$ approaches its limit monotonically \emph{from above} --- a directional
+prediction, not merely a magnitude bound, and one the numbers must respect.
+
+\section{What the decomposition buys}
+
+Because Eq.~\eqref{eq:kp-mass} is a sum over intermediate bands, it can be
+reported per band rather than only in total --- something a finite-difference
+effective mass structurally cannot provide. On bulk Si at $\Gamma$ the
+$\Gamma_1$ conduction level receives \emph{exactly zero} (to $\sim10^{-30}$)
+from the even $\Gamma_{25'}$ valence triplet and 64\% from the odd
+$\Gamma_{15}$ triplet: the parity selection rule behind Si's optical spectrum,
+read directly off the mass breakdown.
+
+\section{The Thomas--Reiche--Kuhn sum, stated honestly}
+
+Comparing Eq.~\eqref{eq:kp-mass} with the oscillator-strength sum
+$f^{ab}_n=\sum_{m\neq n}2\operatorname{Re}[p^a_{nm}p^b_{mn}]/
+(\varepsilon_m-\varepsilon_n)$ gives, pointwise in $\mathbf k$,
+\begin{equation}
+  f^{ab}_n(\mathbf k)=\delta_{ab}-\left(\frac{1}{m^*}\right)^{ab}_{n}(\mathbf k),
+\end{equation}
+identically. So ``$f=1$ per electron'' is \emph{not} a pointwise statement in a
+crystal --- it holds only after averaging over the Brillouin zone, where
+$\langle 1/m^*\rangle$ vanishes for a filled band. Measured on Si's valence
+manifold: 1.103, 0.971, 0.932 on $4^3$, $6^3$, $8^3$ meshes against the exact 1,
+the coarsest mesh overshooting to the physically impossible side.
+
+\section{Verification}
+
+Against a real compiled binary (\texttt{tests/test\_calculation\_effective\_mass.py}),
+Eq.~\eqref{eq:kp-mass} is checked against \texttt{get\_effective\_mass()} ---
+Elk's task 25, which finite-differences eigenvalues and shares no code with the
+matrix-element path. On bulk Si the two agree to 3.1\% at $\Gamma$ with the
+full band set, the deviation falling monotonically from above
+(16.1\%, 7.7\%, 4.3\%, 3.5\%, 3.1\% as the retained states go 4, 8, 20, 40, 85)
+exactly as the sign argument requires. Truncating the sum in Python reproduces a
+smaller \texttt{nempty} to $10^{-11}$, which is what makes the whole sweep
+affordable from a single ground state. On the massive Dirac model of
+Part~\ref{part:momentum}, where the two-band basis is complete and
+$\mathbf p=\partial H/\partial\mathbf k$ is exact, the same code reproduces the
+analytic Hessian to machine precision.
+
+Where the two routes disagree most --- bands with neighbours $\sim$0.02~Ha away
+--- part of the discrepancy is task 25's: its polynomial fit samples over
+\texttt{deltaem}$=0.025$~Bohr$^{-1}$, comparable to the scale on which those
+bands curve near an avoided crossing. Neither route is ground truth there.
+
+\part{Spin Berry curvature and the intrinsic spin Hall conductivity}
+\label{part:spinhall}
+
+\section{The spin current operator, and why it needed a Fortran change}
+
+The conventional spin current operator is the symmetrised product
+\begin{equation}
+  J^{s}_{a}=\tfrac12\{S_s,v_a\}=\tfrac12\left(S_s v_a+v_a S_s\right),
+  \label{eq:spincurrent}
+\end{equation}
+symmetrised because $S_s$ and $v_a$ need not commute. Its Kubo response gives
+the spin Berry curvature of band $n$,
+\begin{equation}
+  \Omega^{s}_{n,ab}=-2\operatorname{Im}\sum_{m\neq n}
+    \frac{\langle n|J^{s}_{a}|m\rangle\langle m|v_b|n\rangle}
+         {(\varepsilon_n-\varepsilon_m)^2},
+  \label{eq:spinberry}
+\end{equation}
+whose Brillouin-zone integral over occupied states is the intrinsic spin Hall
+conductivity. Setting $S_s\to\mathbb 1$ must recover the ordinary charge Berry
+curvature of Eq.~\eqref{eq:standard-omega}, and elkpy fixes the sign of
+Eq.~\eqref{eq:spinberry} by exactly that requirement rather than by matching a
+printed convention --- Yao--Fang print this with $-2\operatorname{Im}$ and Guo
+\emph{et al.} with $+2\operatorname{Im}$, yet both report a positive spin Hall
+conductivity, so the printed difference is absorbed in the charge vertex.
+
+Evaluating Eq.~\eqref{eq:spincurrent} requires $S_s$ and $v_a$ \emph{in the same
+basis}. The spin operators of Part~\ref{part:spin} are built from
+\texttt{evecsv}'s spin row blocks, while the velocity comes from
+Part~\ref{part:momentum}'s momentum query, and those were separate
+diagonalisations --- which Part~\ref{part:eigenstates} shows are free to resolve
+a degenerate multiplet in different bases. Their product would then be
+meaningless while remaining perfectly Hermitian and unitary, i.e.\ undetectable
+by any structural check. Patch 0009 returns \texttt{evecsv} from the momentum
+query itself, at no extra cost: the array was already computed there and
+discarded.
+
+\section{Why the two valleys agree in sign}
+
+Under time reversal the charge Berry curvature is odd, $\Omega(-\mathbf k)=
+-\Omega(\mathbf k)$, which is what makes the $K/K'$ antisymmetry of
+Parts~\ref{part:berry} and~\ref{part:momentum} a sharp test. The spin Berry
+curvature is \emph{even}: time reversal flips both the spin and the velocity, so
+Eq.~\eqref{eq:spinberry} returns the same sign at $K$ and $K'$. This is the
+opposite relative sign to every other valley check in this project, and it is
+the discriminating observable --- an accidental exchange of the two operators in
+Eq.~\eqref{eq:spincurrent} could not produce it.
+
+Measured on graphene with enhanced intrinsic spin-orbit coupling
+(\texttt{tests/test\_calculation\_spin\_hall.py}): $\Omega^{s}(K)=+\Omega^{s}(K')$
+to $\sim2\times10^{-5}$ relative, across two band windows whose values differ by
+two orders of magnitude, while the charge curvature at the same points is
+symmetry-forced numerical noise. The exported \texttt{evecsv} is unitary to
+$10^{-10}$, and its $S_z$ spectrum matches an independent eigenstate query at the
+same $k$ --- compared as a \emph{spectrum}, since graphene is Kramers-degenerate
+everywhere and an elementwise comparison would fail with nothing wrong, which is
+precisely the ambiguity this part removes.
+
+\paragraph{Not yet exercised.} Graphene conserves $S_z$ exactly, so
+Eq.~\eqref{eq:spincurrent}'s symmetrisation is covered only by synthetic tests
+with random non-commuting operators; a system with genuine spin mixing (a
+monolayer transition-metal dichalcogenide) would close that.
+
 \end{document}

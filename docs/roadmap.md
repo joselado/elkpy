@@ -168,10 +168,30 @@ unchanged.
 
 ## Tier 6 — Housekeeping
 
-1. `README.md` quickstart (none exists yet).
-2. CI: run `scripts/build_elk.sh` + `pytest` on push. Add the "patch series
-   still applies cleanly" check from `docs/design.md` §8 -- `patches/` now
-   has real content (`0001-per-species-soc-scale.patch`), so a version bump
-   of `vendor/elk/` could silently break it without this check.
+1. `README.md` quickstart -- DONE.
+2. **CI -- DONE** (`.github/workflows/ci.yml`): four staged jobs, cheapest
+   first. `unit-tests` runs the whole suite with `ELKPY_ELK_BIN` pointed at a
+   nonexistent path, so the binary-free tests select themselves (a `-k`
+   expression drifts and under-selects: it misses the three binary-free tests
+   living inside `test_calculation_soc.py`), with a minimum-test-count guard
+   because pytest exits 0 if everything skips. `patch-series` is §8's check.
+   Two findings shaped it:
+
+   - **A per-patch `--dry-run` against pristine `vendor/elk/` cannot work.**
+     The series is cumulative -- 0004-0009 all edit a file 0003 *creates* --
+     so 8 of 9 fail that way. Patches must be applied sequentially, each
+     dry-run against the partially-patched tree.
+   - **`patch` exits 0 on a FUZZY apply.** A reworded comment near a hunk
+     gives `fuzz 1` and success, so an exit-code check alone would pass a
+     silently mis-applied series. The job greps for fuzz explicitly.
+
+   `build-elk` runs `scripts/build_elk.sh` (measured 3m15s locally for 410
+   objects, so viable on a public runner). The binary is deliberately never
+   cached or shared between jobs: `build-config/make.inc` uses `-march=native`
+   and CI runner fleets are heterogeneous, so a cached binary risks `SIGILL`.
+   `integration` is manual/scheduled only.
 3. Packaging polish (dependency version pins, a changelog) once the API
-   surface is less likely to change week to week.
+   surface is less likely to change week to week. One real bug found and
+   fixed meanwhile: a non-editable `pip install .` put the package in
+   site-packages, where `config.py`'s repo-root inference resolves into the
+   venv and every default path becomes nonsense; it now names the cause.

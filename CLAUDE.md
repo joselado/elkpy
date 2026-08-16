@@ -610,6 +610,60 @@ behind `ELKPY_RUN_SLOW_TESTS=1`. Physics writeup (the FKM formulas, the Kramers-
 even-TRIM sign immunity, why $P^2=\mathbb 1$ survives truncation, the retraction):
 `docs/design.md` §23 and `docs/physics.tex` (Part XII).
 
+Also implemented in a parallel batch, each cross-validated against an independent code
+path rather than against itself — §§24-27, with `docs/physics.tex` Parts XIII-XV:
+
+- **`get_dielectric_function()` (task 121) and `get_circular_absorption()`** (§24) —
+  polarization-resolved interband absorption summed over a k-mesh from §22's `MOMENTUM`
+  query. The polarization-summed spectrum reproduces Elk's own task 121 to 2e-5 median /
+  9.3e-4 max on h-BN. Matching it required `dielectric.f90`'s ACTUAL finite-`swidth`
+  response, not the textbook Lorentzian-δ form, which differs by a derived
+  $(2\omega-\Delta)/\Delta$ factor and diverges as $1/\omega^2$ below the edge — hence
+  `broadening="elk"` (the default). Zone-integrated $\varepsilon_+=\varepsilon_-$ to 4e-14
+  (time reversal forces it, since the mesh is closed under $k\to-k$), so valley dichroism is
+  invisible in a full-zone integral and only appears valley-restricted: $\eta(K)=-0.9999$,
+  $\eta(K')=+0.9999$.
+- **`get_effective_mass_sum_rule()`** (§25) — the k·p sum rule
+  $(1/m^*)^{ab}=\delta_{ab}+2\sum\mathrm{Re}[p^ap^b]/(\varepsilon_n-\varepsilon_m)$, checked
+  against `get_effective_mass()` (task 25, finite differences of eigenvalues): +3.1% on Si,
+  converging monotonically FROM ABOVE (16.1→7.7→4.3→3.5→3.1% as retained states go
+  4→85), the direction the sign argument demands since every omitted state lies above band
+  $n$. NOTE the denominator is $\Delta\varepsilon$ to the FIRST power, unlike §22's Kubo
+  sums — measured truncation error 36% vs 15% from identical states. Its per-band
+  decomposition gives Si's $\Gamma_1$ mass exactly zero (~1e-30) from the even
+  $\Gamma_{25'}$ triplet — the parity selection rule, which finite differences cannot
+  show. Thomas-Reiche-Kuhn is a BZ-AVERAGED statement, not pointwise: pointwise
+  $f^{ab}=\delta_{ab}-(1/m^*)^{ab}$ identically.
+- **Spin Berry curvature / spin Hall** (§26, patch 0009) — `MOMENTUM` now also returns
+  `evecsv`, at no extra cost (the array was already computed and discarded), which is what
+  makes $J^z_a=\tfrac12\{S_z,v_a\}$ legal: §17's spin operators are built from `evecsv`,
+  and combining them with §22's velocity across two diagonalisations would silently mix two
+  arbitrary resolutions of a degenerate multiplet (§14) while passing every Hermiticity and
+  unitarity check. Verified on graphene: $\Omega^s(K)=+\Omega^s(K')$ — the SAME sign at both
+  valleys, since spin Berry curvature is EVEN under time reversal, the opposite relative
+  sign to every other K/K′ check here and something a J↔v swap could not produce.
+- **`get_potential()` / `get_elf()` / `get_moke()`** (§27, tasks 43/53/122) — routine
+  wrapping, closing roadmap Tier 3 item 4. `v_xc` verified as a pointwise function of $n$
+  against the analytic Dirac-exchange formula; the Kerr angle verified odd under
+  magnetization reversal on two independent ground states.
+
+Infrastructure from the same batch: `.github/workflows/ci.yml` (roadmap Tier 6 — unit
+tests, the patch-series check §8 asks for, a build job; note `patch` exits 0 on a FUZZY
+apply, so a fuzz tripwire is included, which earlier "applies cleanly" checks lacked);
+a flock-based semaphore in `launcher.py` bounding concurrent `elk` processes machine-wide
+(`ELKPY_MAX_CONCURRENT`, default 4) plus OpenBLAS/MKL thread pinning, since Elk links
+`-lopenblas` whose threading is NOT governed by `OMP_NUM_THREADS` when built against
+pthreads; and `config.py` now diagnoses a non-editable `pip install .`, which put the
+module in site-packages and made every default path nonsense with no indication why.
+
+**Open, deliberately not addressed**: the graphene `soc_scale=3000` fixture is METALLIC
+(per-k occupancies 6,8,8,8,8,8,9), confirmed independently twice. The tested window is a
+legitimately gapped 6-band group, so §20's and §23's WCC/parity cross-validation stands,
+but §20's "spans every occupied valence band" prose overstates it. That is a physics claim
+and wants its own investigation. Relatedly, the `sum(occ > 0.5)` idiom used by several
+fixtures reads the count at the FIRST k-point and is only valid when the filling is
+k-independent.
+
 ## Architecture
 
 - `src/elkpy/structure.py` — `Structure`: lattice vectors (`avec`, Bohr) + species, each atom either a

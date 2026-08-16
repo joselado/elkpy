@@ -58,6 +58,9 @@ python3 -m pip install -e .        # add .[ase] for Structure.from_ase()/to_ase(
 - Momentum (velocity) matrix elements $p^a_{nm}=\langle\psi_n|(-i\nabla+\tfrac1{4c^2}[\vec\sigma\times\nabla V_s])_a|\psi_m\rangle$ at an arbitrary k-point — the optical dipole matrix elements, and, for a local Kohn-Sham potential in atomic units, the velocity operator $\hat{\mathbf v}=\hat{\mathbf p}$ [[notebook]](notebooks/14_optical_matrix_elements.ipynb)
 - Circular dichroism $\eta=(|P_+|^2-|P_-|^2)/(|P_+|^2+|P_-|^2)$ of an interband transition, $P_\pm=p^x_{cv}\pm ip^y_{cv}$ — the valley-selective optical selection rule of a gapped honeycomb lattice [[notebook]](notebooks/14_optical_matrix_elements.ipynb)
 - Band velocities $\mathbf v_n=\partial\varepsilon_n/\partial\mathbf k$ as the diagonal of the same operator, exact by Hellmann-Feynman [[notebook]](notebooks/14_optical_matrix_elements.ipynb)
+- Interband absorption resolved by circular polarization, $\mathrm{Im}\,\varepsilon_\pm(\omega)\propto\omega^{-2}\sum_{\mathbf k,v,c}|P_\pm|^2\delta(\omega-\varepsilon_{cv})$ — the spectrum behind valley-selective optical pumping, which stock Elk's dielectric tensor cannot resolve [[docs]](docs/design.md)
+- Effective masses from the k·p sum rule $(1/m^*)^{ab}=\delta_{ab}+2\sum_m\mathrm{Re}[p^a_{nm}p^b_{mn}]/(\varepsilon_n-\varepsilon_m)$, decomposed by which interband coupling produces them [[docs]](docs/design.md)
+- Spin Berry curvature and the intrinsic spin Hall conductivity, from the spin current operator $J^s_a=\tfrac12\{S_s,v_a\}$ [[docs]](docs/design.md)
 
 ## Eigenstates and wavefunction overlaps ##
 - Second-variational energies and eigenvectors at an arbitrary k-point [[notebook]](notebooks/06_eigenstate_session.ipynb)
@@ -71,6 +74,7 @@ python3 -m pip install -e .        # add .[ase] for Structure.from_ase()/to_ase(
 - Self-consistent total energy $E[n]$, band structure $\epsilon_i(\mathbf k)$, density of states [[notebook]](notebooks/01_getting_started.ipynb)
 - Hellmann-Feynman forces, structural relaxation, effective mass tensor, charge density $n(\mathbf r)$ [[notebook]](notebooks/02_relaxation_forces_and_properties.ipynb)
 - Phonon dispersion and density of states via density functional perturbation theory [[notebook]](notebooks/03_phonon_dispersion_and_dos.ipynb)
+- Kohn-Sham potential and the electron localization function as 3D fields, the dielectric tensor, and the magneto-optic Kerr effect [[docs]](docs/design.md)
 
 # EXAMPLES #
 Full worked notebooks (formulas + code + real Elk output) are in [`notebooks/`](notebooks); short examples below, in the same order as FUNCTIONALITIES.
