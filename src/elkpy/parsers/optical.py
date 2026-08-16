@@ -8,7 +8,7 @@ same diagonalisation, and every physical quantity built on them lives here
 in Python, unit-testable against synthetic models without an Elk run
 (tests/test_parsers_optical.py).
 
-Two families live here:
+Four families live here:
 
   * `circular_polarization()` -- the degree of circular polarization of an
     interband transition, i.e. valley-selective circular dichroism.
@@ -17,6 +17,15 @@ Two families live here:
     sum-over-states (perturbation-theory) form, an INDEPENDENT code path
     for quantities parsers/berry.py and parsers/quantum_geometry.py
     already compute from finite-difference wavefunction overlaps.
+  * `circular_absorption()` -- the polarization-resolved interband
+    absorption spectrum, summed over a k-mesh; its polarization-SUMMED
+    total is what Elk's own task 121 (src/dielectric.f90, wrapped as
+    Calculation.get_dielectric_function()) computes for the linear
+    Cartesian components, giving an independent-Fortran cross-check.
+  * `effective_mass_tensor()` / `oscillator_strength_sum()` -- the k.p
+    sum rule for the inverse effective mass, likewise an INDEPENDENT code
+    path for a quantity Calculation.get_effective_mass() (Elk task 25)
+    already computes by finite-differencing EIGENVALUES.
 
 See docs/design.md #22 and docs/physics.tex Part XI for the physics.
 
@@ -310,3 +319,477 @@ def band_velocity(pmat, ist):
     if not (1 <= ist <= nstsv):
         raise ValueError(f"band index {ist} outside 1..{nstsv}")
     return np.array([pmat[a, ist - 1, ist - 1].real for a in range(3)])
+
+
+def _as_energies_pmat(point):
+    """Accept either a Momentum namedtuple (EigenstateSession.momentum()),
+    the dict Calculation.get_momentum_matrix(kpoints=...) returns, or a
+    bare (energies, pmat) pair."""
+    if hasattr(point, "energies") and hasattr(point, "pmat"):
+        return np.asarray(point.energies, dtype=float), np.asarray(point.pmat)
+    if isinstance(point, dict):
+        return np.asarray(point["energies"], dtype=float), np.asarray(point["pmat"])
+    energies, pmat = point
+    return np.asarray(energies, dtype=float), np.asarray(pmat)
+
+
+def circular_transitions(point, occupations, occmax=2.0, directions=(1, 2)):
+    """Every allowed interband transition at ONE k-point, as
+    (delta_e, i_plus, i_minus, factor) flat arrays over the (v, c) pairs.
+
+    `delta_e` is the transition energy eps_c - eps_v (Hartree),
+    `i_plus`/`i_minus` are (1/2)|P_pm|^2 with
+    P_pm = p^a_cv +- i p^b_cv (a, b = `directions`, CARTESIAN axes) --
+    the same circular-basis matrix elements circular_polarization() forms,
+    with the same convention that the CONDUCTION state carries the bra
+    (<c|p|v>, absorption of a photon promoting v to c), and `factor` is
+    Elk's own occupation weight f_v (1 - f_c/f_max).
+
+    The 1/2 in the intensities is what makes the two circular channels
+    add up to the two linear ones: |P_+|^2 + |P_-|^2 = 2(|p^a|^2 +
+    |p^b|^2), so (i_plus + i_minus) = |p^a_cv|^2 + |p^b_cv|^2 exactly.
+    That identity is the basis of the cross-check in
+    circular_absorption()'s docstring.
+
+    Only UPWARD pairs (delta_e > 0) are kept, where dielectric.f90 sums
+    over every ordered pair with |e_ji| > 1e-8. The two agree for a gapped
+    system: a pair carrying nonzero f_v (1 - f_c/f_max) there always has
+    the empty state above the occupied one. They would differ for a metal,
+    which parsers.eigval.occupations_if_uniform() refuses anyway.
+    """
+    a, b = int(directions[0]), int(directions[1])
+    if not (1 <= a <= 3 and 1 <= b <= 3) or a == b:
+        raise ValueError(f"directions must be two distinct Cartesian axes in 1..3, got {directions}")
+    energies, pmat = _as_energies_pmat(point)
+    occupations = np.asarray(occupations, dtype=float)
+    if occupations.shape != energies.shape:
+        raise ValueError(
+            f"occupations shape {occupations.shape} does not match the "
+            f"{energies.shape} states at this k-point"
+        )
+    # Elk's own weight (src/dielectric.f90): occupied initial state, and an
+    # empty share of the final one. Formed as an outer product over all
+    # (v, c) pairs and then masked, rather than assuming a band count.
+    factor = occupations[:, None] * (1.0 - occupations[None, :] / occmax)
+    delta_e = energies[None, :] - energies[:, None]
+    allowed = (factor > 1e-10) & (delta_e > 1e-8)
+    iv, ic = np.nonzero(allowed)
+    pa = pmat[a - 1][ic, iv]  # <c|p_a|v>
+    pb = pmat[b - 1][ic, iv]
+    p_plus = pa + 1j * pb
+    p_minus = pa - 1j * pb
+    return (
+        delta_e[iv, ic],
+        0.5 * np.abs(p_plus) ** 2,
+        0.5 * np.abs(p_minus) ** 2,
+        factor[iv, ic],
+    )
+
+
+def _broadened_delta(x, width, shape):
+    if shape == "lorentzian":
+        return (width / np.pi) / (x**2 + width**2)
+    if shape == "gaussian":
+        return np.exp(-((x / width) ** 2) / 2.0) / (width * np.sqrt(2.0 * np.pi))
+    raise ValueError(f"broadening must be 'lorentzian' or 'gaussian', got {shape!r}")
+
+
+def _transition_weights(omega, delta_e, swidth, broadening):
+    """The (nw, ntransitions) array each transition's occupation-weighted
+    intensity is multiplied by, i.e. everything in Im eps except 1/Omega
+    and the matrix elements themselves.
+
+    Two lineshapes, differing only in how the finite broadening is taken:
+
+    "lorentzian"/"gaussian" -- the delta-function form,
+
+        4 pi^2 / w^2 * d(w - Delta),
+
+    the s -> 0 limit of the response, with a normalized broadened delta of
+    width `swidth` standing in for the true one.
+
+    "elk" -- src/dielectric.f90's own finite-s response, with no delta
+    approximation at all,
+
+        4 pi s / (Delta (w^2 + s^2)) *
+          [ (2w - Delta)/((w - Delta)^2 + s^2)
+          + (2w + Delta)/((w + Delta)^2 + s^2) ],
+
+    obtained by putting Im eps = 4 pi Re[sigma/(w + i s)] together with
+    dielectric.f90's sigma (see Calculation.get_dielectric_function()) for
+    a real intensity, keeping BOTH the resonant and the anti-resonant term.
+
+    The two agree exactly at resonance, w = Delta, and their ratio away
+    from it is (2w - Delta)/Delta * w^2/(w^2 + s^2) -- a first-order
+    O((w - Delta)/Delta) difference, i.e. a few percent across a linewidth
+    for s/Delta ~ 0.02, not a small correction. The delta form also carries
+    a spurious 1/w^2 blow-up at small w, where a Lorentzian's fat tail is
+    multiplied by a diverging prefactor; the "elk" form's w^2 + s^2 has no
+    such pole and its two terms cancel exactly at w = 0.
+    """
+    omega = omega[:, None]
+    delta_e = delta_e[None, :]
+    if broadening == "elk":
+        common = swidth / (delta_e * (omega**2 + swidth**2))
+        return 4.0 * np.pi * common * (
+            (2.0 * omega - delta_e) / ((omega - delta_e) ** 2 + swidth**2)
+            + (2.0 * omega + delta_e) / ((omega + delta_e) ** 2 + swidth**2)
+        )
+    positive = omega > 0.0
+    inv_w2 = np.where(positive, 1.0 / np.where(positive, omega, 1.0) ** 2, 0.0)
+    return (
+        4.0
+        * np.pi**2
+        * inv_w2
+        * _broadened_delta(omega - delta_e, swidth, broadening)
+    )
+
+
+def circular_absorption(
+    kdata, omega, occupations, volume, occmax=2.0, swidth=0.001,
+    directions=(1, 2), weights=None, broadening="elk",
+):
+    """Polarization-resolved interband absorption spectrum: the imaginary
+    part of the dielectric function for left- and right-circularly
+    polarized light, summed over a k-mesh.
+
+        Im eps_pm(w) = (4 pi^2 / (Omega w^2)) sum_k W_k sum_{v,c}
+            f_v (1 - f_c/f_max) (1/2)|P_pm(k)|^2 d(w - (eps_c - eps_v)),
+
+    with P_pm = p^a_cv +- i p^b_cv, Omega the cell volume (Bohr^3), W_k the
+    k-point weights and d() a normalized broadened delta function replacing
+    the true delta at finite mesh/broadening. This is the
+    independent-particle (random-phase, no local-field, no excitonic)
+    spectrum: it is the imaginary part of the SAME Kubo-Greenwood response
+    src/dielectric.f90 (Elk task 121) evaluates for the LINEAR Cartesian
+    components, in the s -> 0 limit of its Lorentzian denominators -- see
+    the derivation in Calculation.get_dielectric_function()'s docstring.
+
+    `broadening="elk"` drops the delta approximation and evaluates
+    dielectric.f90's finite-s response itself (see _transition_weights),
+    which is what makes the comparison below exact rather than approximate:
+    at a finite s the delta form differs from it by a factor
+    (2w - Delta)/Delta * w^2/(w^2 + s^2), first order in (w - Delta)/Delta
+    and therefore a few percent across a linewidth -- and it diverges as
+    1/w^2 at small w, where the "elk" form correctly gives zero.
+
+    What is new relative to task 121: Elk builds sigma_xx, sigma_xy and so
+    on, never sigma_+ / sigma_-. The circular channels are not recoverable
+    from those two alone -- sigma_pm mixes the symmetric and antisymmetric
+    parts, and in a non-magnetic crystal the k-RESOLVED dichroism (the
+    valley physics) survives even though the zone-integrated one cancels.
+
+    The polarization-summed total is the cross-check, and it is an
+    algebraic identity rather than a symmetry assumption:
+
+        Im eps_+ + Im eps_- = Im eps_aa + Im eps_bb
+
+    because |P_+|^2 + |P_-|^2 = 2(|p^a|^2 + |p^b|^2). So a task-121 run
+    over the same mesh, the same `nempty` and the same `swidth`, asked for
+    the (a, a) and (b, b) components, reproduces this sum -- an entirely
+    independent Fortran implementation of the same physics
+    (tests/test_calculation_absorption.py).
+
+    Time reversal makes the ZONE-INTEGRATED circular channels equal for a
+    non-magnetic crystal: k -> -k exchanges sigma+ and sigma-, and a
+    Gamma-centred mesh maps onto itself under that. So eps_+ = eps_- for a
+    full-mesh sum is a check on the arithmetic, not a null result -- the
+    dichroism is exposed by restricting the sum, which is what `weights`
+    is for (pass a mask selecting one valley, and the two channels
+    separate; see docs/design.md #24).
+
+    Arguments:
+      * `kdata` -- one entry per k-point, each a Momentum namedtuple, a
+        dict with "energies"/"pmat" keys (what
+        Calculation.get_momentum_matrix(kpoints=...) returns), or a bare
+        (energies, pmat) pair. The k-points should be the FULL non-reduced
+        mesh: |P_pm|^2 is not invariant under the crystal symmetries that
+        fold it (that is exactly the dichroism), so a symmetry-reduced sum
+        with the usual weights is wrong here even though it is right for
+        the linear components.
+      * `omega` -- photon energies (Hartree).
+      * `occupations` -- either one (nstsv,) vector shared by every
+        k-point (a gapped system, see parsers.eigval.occupations_if_uniform)
+        or an (nk, nstsv) array.
+      * `volume` -- cell volume in Bohr^3. For a 2D slab this includes the
+        vacuum, so the absolute scale of eps - 1 falls like 1/L_z; only
+        ratios and comparisons at fixed geometry are meaningful.
+      * `occmax` -- Elk's `occmax`: 2 for a spin-degenerate calculation, 1
+        when nspinor = 2 (spinpol or spinorb).
+      * `swidth` -- broadening width (Hartree), Elk's own `swidth`, whose
+        reciprocal is the relaxation time entering the response.
+      * `broadening` -- "lorentzian" (default) or "gaussian" for the
+        delta-function form, or "elk" for dielectric.f90's own finite-s
+        response. Reproducing task 121 point by point needs "elk"; the
+        delta forms are the textbook spectrum and agree with it in the
+        s -> 0 limit and, at any s, on the integrated oscillator strength.
+      * `weights` -- k-point weights, default uniform 1/nk (Elk's
+        `wkptnr`). Also the hook for a valley- or region-restricted sum.
+
+    Returns {"omega", "eps2_plus", "eps2_minus", "eps2_total", "eta"},
+    with eps2_total = eps2_plus + eps2_minus (= Im eps_aa + Im eps_bb) and
+    eta = (eps2_plus - eps2_minus)/eps2_total the frequency-resolved degree
+    of circular polarization (NaN where the total vanishes). In the delta
+    forms any non-positive `omega` entry is returned as zero rather than as
+    the 1/w^2 divergence.
+    """
+    omega = np.asarray(omega, dtype=float)
+    occupations = np.asarray(occupations, dtype=float)
+    nk = len(kdata)
+    if nk == 0:
+        raise ValueError("kdata is empty")
+    if occupations.ndim == 1:
+        occupations = np.repeat(occupations[None, :], nk, axis=0)
+    if len(occupations) != nk:
+        raise ValueError(f"occupations has {len(occupations)} rows for {nk} k-points")
+    if weights is None:
+        weights = np.full(nk, 1.0 / nk)
+    weights = np.asarray(weights, dtype=float)
+    if weights.shape != (nk,):
+        raise ValueError(f"weights shape {weights.shape} does not match {nk} k-points")
+
+    delta_e, i_plus, i_minus, factor = [], [], [], []
+    for point, occ, weight in zip(kdata, occupations, weights):
+        d, ip, im, f = circular_transitions(point, occ, occmax, directions)
+        delta_e.append(d)
+        i_plus.append(ip)
+        i_minus.append(im)
+        factor.append(f * weight)
+    delta_e = np.concatenate(delta_e)
+    i_plus = np.concatenate(i_plus)
+    i_minus = np.concatenate(i_minus)
+    factor = np.concatenate(factor)
+
+    lineshape = _transition_weights(omega, delta_e, swidth, broadening) / float(volume)
+    eps2_plus = lineshape @ (factor * i_plus)
+    eps2_minus = lineshape @ (factor * i_minus)
+    total = eps2_plus + eps2_minus
+    with np.errstate(divide="ignore", invalid="ignore"):
+        eta = np.where(total > 0.0, (eps2_plus - eps2_minus) / np.where(total > 0.0, total, 1.0), np.nan)
+    return {
+        "omega": omega,
+        "eps2_plus": eps2_plus,
+        "eps2_minus": eps2_minus,
+        "eps2_total": total,
+        "eta": eta,
+    }
+
+
+def _kp_contributions(energies, pmat, ist, degeneracy_tol, nstates=None):
+    """Per-intermediate-state terms of the k.p sum rule for band `ist`
+    (1-based),
+
+        C^{ab}_m = 2 Re[p^a_nm p^b_mn] / (eps_n - eps_m),    m != n,
+
+    as an (nstates, 3, 3) real array indexed by m. Summing over m and
+    adding delta_ab gives the inverse effective mass tensor; see
+    effective_mass_tensor() for the physics, the truncation caveats and
+    the degeneracy guard this shares.
+    """
+    energies = np.asarray(energies, dtype=float)
+    pmat = np.asarray(pmat)
+    nstsv = len(energies)
+    if pmat.shape != (3, nstsv, nstsv):
+        raise ValueError(
+            f"pmat shape {pmat.shape} does not match (3, nstsv, nstsv) with "
+            f"nstsv={nstsv} from energies"
+        )
+    if not (1 <= ist <= nstsv):
+        raise ValueError(f"band index {ist} outside 1..{nstsv}")
+    if nstates is None:
+        nstates = nstsv
+    nstates = int(nstates)
+    if not (1 <= nstates <= nstsv):
+        raise ValueError(f"nstates={nstates} outside 1..{nstsv}")
+    if ist > nstates:
+        raise ValueError(
+            f"band ist={ist} is itself above the truncation nstates={nstates}; "
+            f"the state whose mass is asked for must be inside the retained set"
+        )
+    n = ist - 1
+    other = np.array([m for m in range(nstates) if m != n])
+    if other.size == 0:
+        raise ValueError(
+            "only one state available -- the k.p sum over intermediate states is "
+            "empty, so the interband contribution to the effective mass cannot be "
+            "formed at all (raise nempty)"
+        )
+    denom = energies[n] - energies[other]
+    closest = float(np.min(np.abs(denom)))
+    if closest < degeneracy_tol:
+        m_closest = int(other[np.argmin(np.abs(denom))]) + 1
+        raise ValueError(
+            f"band {ist} is degenerate (or near-degenerate) with band {m_closest}: "
+            f"|eps_n - eps_m| = {closest:.3e} Ha < degeneracy_tol={degeneracy_tol:.3e}. "
+            f"The k.p sum rule as implemented here is a NON-degenerate second-order "
+            f"perturbation theory result: with a degenerate partner the single-band "
+            f"curvature is not even well defined (the two partners' dispersions cross "
+            f"and the 1/(eps_n - eps_m) weight is dominated by an arbitrarily-split "
+            f"pair), and Elk's own finite-difference task 25 is equally meaningless "
+            f"there. Pick a non-degenerate band, or a k-point where this one is"
+        )
+    pa = pmat[:, n, other]           # (3, nother): p^a_nm
+    pb = pmat[:, other, n]           # (3, nother): p^b_mn
+    terms = 2.0 * np.real(pa[:, None, :] * pb[None, :, :]) / denom[None, None, :]
+    out = np.zeros((nstates, 3, 3))
+    out[other] = np.moveaxis(terms, 2, 0)
+    return out
+
+
+def effective_mass_tensor(
+    energies, pmat, ist, degeneracy_tol=1e-4, free_electron_term=True,
+    nstates=None, decompose=False,
+):
+    """The effective mass tensor of band `ist` (1-based) at the one
+    k-point `energies` and `pmat` were computed at, from the k.p sum rule
+    -- i.e. from momentum matrix elements alone, with no k-derivative and
+    no finite difference anywhere.
+
+    In the Bloch Hamiltonian H(k) = e^{-ik.r} H e^{ik.r} = (p + k)^2/2 +
+    V(r) (Hartree atomic units, hbar = m_e = 1) the k-dependence is
+    explicit and elementary:
+
+        dH/dk_a = p_a + k_a = v_a,      d^2H/dk_a dk_b = delta_ab,
+
+    so ordinary non-degenerate second-order perturbation theory in k gives
+    the band curvature exactly:
+
+        (1/m*)^{ab}_n = d^2 eps_n / dk_a dk_b
+                      = delta_ab + 2 sum_{m != n}
+                            Re[p^a_nm p^b_mn] / (eps_n - eps_m).
+
+    The delta_ab is the bare free-electron term (an electron with no
+    interband coupling at all has m* = m_e); every deviation from unit
+    mass is interband repulsion, with states BELOW band n (eps_m < eps_n,
+    positive denominator) pushing the curvature up and states above
+    pushing it down. That decomposition -- which coupling to which band
+    produces the mass -- is the physics a finite-difference mass cannot
+    give, and is what `decompose=True` returns.
+
+    This is the same tensor Calculation.get_effective_mass() (Elk task 25,
+    src/effmass.f90) obtains by fitting a polynomial to EIGENVALUES on a
+    small k-mesh around the point and differentiating it. The two share no
+    arithmetic and, on the Fortran side, no machinery beyond the
+    diagonalisation itself, so agreement is a real cross-check -- the same
+    idiom #22's Kubo curvature vs. #13's Wilson loop already uses. Note
+    which of task 25's two printed matrices to compare against: its
+    "matrix of eigenvalue derivatives" IS this inverse-mass tensor
+    (parsers.effmass's "derivative_tensor"), while its "effective mass
+    tensor" ("tensor") is that matrix INVERTED, i.e. this function's
+    "mass".
+
+    Convergence, and why it is slower here than for #22's Kubo geometry.
+    The energy denominator appears to the FIRST power, not squared as in
+    kubo_quantum_geometry()'s T_ab. High-lying intermediate states are
+    therefore suppressed only as 1/(delta eps), and the sum converges
+    correspondingly more slowly in the number of states retained:
+
+      * The m-sum runs only over states Elk computed, i.e. up to nstsv,
+        which `nempty` sets. Raise it well above Elk's default
+        (Calculation(extra_blocks={"nempty": ...})) and check stability;
+        `nstates` here truncates the same sum from Python, which is the
+        cheap way to trace out that convergence from a single run.
+      * Core states are not among nstsv's valence states at all and are
+        omitted entirely. Their denominators are large but their momentum
+        matrix elements are not small, and unlike the 1/(delta eps)^2
+        geometric sums they are not comfortably negligible here.
+      * Even with every computed state retained, the LAPW basis is finite
+        (`rgkmax`) and its radial functions are linearized about fixed
+        energies, so the high-lying states it does produce are themselves
+        a poor representation of the true continuum. The sum rule is exact
+        only for a complete set of eigenstates of the same Hamiltonian;
+        expect agreement with the finite-difference mass at the tens of
+        percent level, improving with nempty, not machine precision.
+
+    Signs help read an under-converged result: omitted states lie ABOVE
+    band n (they are the ones truncation removes), so their omitted terms
+    have eps_n - eps_m < 0 and each diagonal term -|p^a_nm|^2 x 2/|delta
+    eps| is negative. A truncated (1/m*)^{aa} is therefore an
+    OVERESTIMATE, and falls monotonically as nempty rises. That
+    monotonicity does not extend to the off-diagonal components, whose
+    terms carry either sign.
+
+    `free_electron_term=False` drops the delta_ab. Use it for a model
+    Hamiltonian written directly in a finite band basis -- a k.p or
+    tight-binding H(k), where d^2H/dk_a dk_b is not delta_ab (usually it
+    is zero) and the sum over the model's own bands is the whole answer.
+    For anything built from Elk's momentum matrix elements the default
+    True is the physical choice.
+
+    Raises ValueError if band `ist` is within `degeneracy_tol` (Hartree)
+    of any other retained state: the sum rule above is non-degenerate
+    perturbation theory, and within a degenerate multiplet a single band's
+    curvature is not well defined at all (the partners' dispersions cross,
+    and their arbitrary splitting dominates the 1/(eps_n - eps_m) weight).
+    Fails loud rather than clipping, matching _kubo_sum's own guard.
+
+    Returns {"inverse_mass": (3,3) real symmetric array (1/m*)^{ab}, in
+    units of 1/m_e, "mass": its matrix inverse (units of m_e), "energy":
+    eps_n (Hartree), "nstates": how many states the sum retained}, plus,
+    with decompose=True, "contributions": an (nstates, 3, 3) array whose
+    m-th entry is band m's own contribution, so that
+    contributions.sum(axis=0) + delta_ab reproduces "inverse_mass".
+
+    "mass" is None -- not a huge number, and not an exception -- when the
+    inverse-mass tensor is singular, i.e. when the band has a direction of
+    vanishing curvature and hence a genuinely infinite mass along it (the
+    out-of-plane direction of a strictly two-dimensional model
+    Hamiltonian, for instance). "inverse_mass" is the primitive here and
+    is always well defined; the mass tensor is the derived quantity that
+    may not exist.
+    """
+    energies = np.asarray(energies, dtype=float)
+    contributions = _kp_contributions(energies, pmat, ist, degeneracy_tol, nstates)
+    inverse_mass = contributions.sum(axis=0)
+    if free_electron_term:
+        inverse_mass = inverse_mass + np.eye(3)
+    singular_values = np.linalg.svd(inverse_mass, compute_uv=False)
+    invertible = singular_values[-1] > 1e-10 * max(singular_values[0], 1.0)
+    result = {
+        "inverse_mass": inverse_mass,
+        "mass": np.linalg.inv(inverse_mass) if invertible else None,
+        "energy": float(energies[ist - 1]),
+        "nstates": int(contributions.shape[0]),
+    }
+    if decompose:
+        result["contributions"] = contributions
+    return result
+
+
+def oscillator_strength_sum(energies, pmat, ist, degeneracy_tol=1e-4, nstates=None):
+    """The Thomas-Reiche-Kuhn oscillator-strength sum of band `ist`
+    (1-based) at one k-point,
+
+        f^{ab}_n = sum_{m != n} 2 Re[p^a_nm p^b_mn] / (eps_m - eps_n),
+
+    a (3,3) real symmetric array (dimensionless). Each term is the usual
+    velocity-form oscillator strength of the n -> m transition, positive
+    for an absorption to a higher state.
+
+    What this is and is not a check on. It is the SAME arithmetic as
+    effective_mass_tensor(), with the energy denominator reversed in sign:
+    identically, at every k-point,
+
+        f^{ab}_n = delta_ab - (1/m*)^{ab}_n.
+
+    So "f = 1 per electron" is NOT a pointwise statement in a crystal, and
+    reading it as one would just be asserting that every band is flat.
+    What is true is the Brillouin-zone-averaged version: for a filled band
+    the average of d^2 eps_n/dk_a dk_b over the zone vanishes (it is the
+    second derivative of a periodic function integrated over a period), so
+
+        <f^{ab}_n>_BZ = delta_ab,
+
+    one unit of oscillator strength per electron per Cartesian direction
+    -- the f-sum rule behind the optical conductivity's spectral weight,
+    sum_int sigma_1(w) dw = pi n / 2 in these units.
+
+    Its practical value here is as a truncation diagnostic with a known
+    exact target rather than as an independent physics check: the trace of
+    f, averaged over a filled band's k-points, must approach 3, and how
+    far short it falls measures directly how much oscillator strength the
+    missing core states and the truncated/linearized high-lying LAPW
+    states carry. All of effective_mass_tensor()'s caveats apply verbatim.
+    """
+    contributions = _kp_contributions(energies, pmat, ist, degeneracy_tol, nstates)
+    return -contributions.sum(axis=0)

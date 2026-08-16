@@ -45,8 +45,8 @@ CLOSER to the first along [111]) -- the sign used below.
 Getting the SAME (nu1,nu2,nu3)=(1,1,1) FKM report is not itself expected:
 (nu1,nu2,nu3) are basis-dependent (docs/design.md #21) and FKM's own
 Hamiltonian is written in a different primitive-lattice-vector convention
-than this module's Structure -- what IS asserted, and IS basis-independent,
-was reported as nu0=1 -- RETRACTED, see docs/design.md #23 and
+than this module's Structure. What this module ONCE asserted, and what IS
+basis-independent, was nu0=1 -- RETRACTED, see docs/design.md #23 and
 tests/test_calculation_parity.py: the exact parity indicator gives (0;000) and
 the WCC number on the disputed planes oscillates with mesh rather than
 converging. What still holds is the axis-split consistency (agreeing
@@ -102,7 +102,9 @@ open, explicitly documented question rather than chased further; see
 docs/design.md #21. No assertion about Bi2Se3 is made in this test file.
 
 nkx=12, nt=7 (a 12x12 loop mesh per plane) is used below, matching the
-parameters this module's result was verified with. Skipped by default (six
+parameters this module originally ran with -- now known to be too coarse to
+resolve nu0's VALUE for this structure (see the retraction above), but still
+fine for the axis-split algebra this module asserts. Skipped by default (six
 full mesh runs); set ELKPY_RUN_SLOW_TESTS=1 to run. Also skipped if the elk
 binary hasn't been built, same as test_calculation_si.py.
 """
@@ -133,8 +135,9 @@ pytestmark = [
 A = 16.0
 DIAMOND_AVEC = [(0.0, A / 2, A / 2), (A / 2, 0.0, A / 2), (A / 2, A / 2, 0.0)]
 # delta > 0 shortens the [111] bond (atom 2 moved toward atom 1) -- FKM's
-# "dimerized" branch, the strong-topological-insulator sign (see module
-# docstring).
+# "dimerized" branch, which in FKM's own tight-binding MODEL is the
+# strong-topological-insulator sign. This Cs structure does not realize that
+# phase (see the retraction in the module docstring).
 DELTA = 0.03
 CS_DIMERIZED_SPECIES = {
     "Cs": [(0.0, 0.0, 0.0), (0.25 - DELTA, 0.25 - DELTA, 0.25 - DELTA)]

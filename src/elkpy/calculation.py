@@ -19,11 +19,15 @@ from .launcher import LocalLauncher
 from .parsers import (
     band,
     berry,
+    dielectric,
     dos,
     effmass,
+    eigval,
     forces,
     geometry,
     info,
+    moke,
+    optical,
     quantum_geometry,
     symmetry,
     totenergy,
@@ -494,6 +498,49 @@ class Calculation:
         )
         return effmass.parse_effective_mass(subdir / spec.OUTPUT_FILES["effmass"])
 
+    def get_effective_mass_sum_rule(
+        self, k, ist, degeneracy_tol=1e-4, nstates=None, decompose=False,
+        label="effmass_kp",
+    ):
+        """The same effective mass tensor get_effective_mass() computes,
+        by an entirely different route: the k.p sum rule
+
+            (1/m*)^{ab}_n = delta_ab
+                + 2 sum_{m != n} Re[p^a_nm p^b_mn] / (eps_n - eps_m),
+
+        i.e. from the momentum matrix elements of ONE diagonalisation at
+        `k` (task 9002's MOMENTUM query, docs/design.md #22) rather than
+        from a polynomial fit to eigenvalues on a small k-mesh around it
+        (Elk task 25). See parsers.optical.effective_mass_tensor for the
+        derivation, the units, the degeneracy guard and -- importantly --
+        the truncation caveats: the sum's 1/(eps_n - eps_m) weight decays
+        only as the FIRST power of the energy denominator, so it converges
+        markedly more slowly in `nempty` than the 1/(delta eps)^2 Kubo
+        geometric sums, and omitted core states are not negligible.
+
+        `k` is a single k-point in fractional (lattice) coordinates and
+        `ist` a 1-based band index -- unlike get_effective_mass(), which
+        returns every state at once, since one diagonalisation's whole
+        pmat is windowed here in Python. `nstates` truncates the m-sum to
+        the lowest N states, which is how to trace the nempty convergence
+        out of a single run; `decompose=True` additionally returns each
+        intermediate band's own contribution, the interband decomposition
+        of the mass that a finite-difference curvature cannot provide.
+
+        Returns parsers.optical.effective_mass_tensor's dict, plus "k".
+        Compare "inverse_mass" against get_effective_mass()'s
+        "derivative_tensor" (its raw matrix of eigenvalue derivatives) and
+        "mass" against its "tensor" (that matrix inverted), both Cartesian
+        and in atomic units.
+        """
+        with self.eigenstate_session(label=label) as session:
+            m = session.momentum(tuple(k))
+        result = optical.effective_mass_tensor(
+            m.energies, m.pmat, ist, degeneracy_tol=degeneracy_tol,
+            nstates=nstates, decompose=decompose,
+        )
+        return {"k": tuple(k), **result}
+
     def get_density(self, box=None, grid=(20, 20, 20)):
         """3D charge density on a grid (task 33, src/rhoplot.f90).
 
@@ -501,16 +548,352 @@ class Calculation:
         coordinates (default: the unit cell). Returns (points, density):
         points shape (N,3) in Cartesian Bohr, density shape (N,).
 
-        Potential (task 43, writes both VCL3D.OUT and VXC3D.OUT) and ELF
-        (task 53) plots share this exact plot3d block/output format but
-        aren't wrapped as named methods yet -- reachable via
-        `run_tasks([43], blocks={"plot3d": [...]})` (or `[53]`) plus
-        `parsers.volumetric.parse_plot3d` directly on the resulting file.
+        The Kohn-Sham potential (task 43) and the ELF (task 53) are written
+        by the same plot3d writer (src/plot3d.f90) in the same format -- see
+        get_potential() and get_elf().
         """
-        box = box or [(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)]
-        blocks = {"plot3d": [tuple(box[0]), tuple(box[1]), tuple(box[2]), tuple(box[3]), tuple(grid)]}
+        blocks = {"plot3d": self._plot3d_lines(box, grid)}
         subdir = self._run_resumed("density", [spec.TASKS["density_3d"]], blocks)
         return volumetric.parse_plot3d(subdir / spec.OUTPUT_FILES["density_3d"])
+
+    @staticmethod
+    def _plot3d_lines(box, grid):
+        """The `plot3d` block's five lines: the parallelepiped's origin and
+        three corner vectors in lattice coordinates (default: the unit
+        cell), then the grid size (src/readinput.f90 case('plot3d'))."""
+        box = box or [(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)]
+        return [tuple(box[0]), tuple(box[1]), tuple(box[2]), tuple(box[3]), tuple(grid)]
+
+    def get_potential(self, box=None, grid=(20, 20, 20), component="coulomb"):
+        """3D Kohn-Sham potential on a grid (task 43, src/potplot.f90).
+
+        Same `box`/`grid` convention and same (points, values) return as
+        get_density(): points shape (N,3) in Cartesian Bohr, values shape
+        (N,) in Hartree.
+
+        The Kohn-Sham effective potential is the sum of two pieces, and
+        task 43 writes each to its own file in a single run -- `component`
+        only selects which one is parsed:
+
+        - "coulomb" (VCL3D.OUT): the electrostatic potential v_C, i.e. the
+          nuclear (-Z/r) plus Hartree terms. Strongly negative and
+          divergent at each nucleus, so a grid point landing on an atom
+          dominates the value range.
+        - "xc" (VXC3D.OUT): the exchange-correlation potential v_xc, the
+          functional derivative delta E_xc / delta n of the chosen `xc`.
+
+        Asking for the other component re-runs the task (cheap for a small
+        grid: no SCF beyond the resumed ground state, just readstate +
+        plot3d).
+        """
+        try:
+            filename = {
+                "coulomb": spec.OUTPUT_FILES["potential_coulomb_3d"],
+                "xc": spec.OUTPUT_FILES["potential_xc_3d"],
+            }[component]
+        except KeyError:
+            raise ValueError(
+                f"unknown potential component '{component}'; use 'coulomb' (VCL3D.OUT) "
+                f"or 'xc' (VXC3D.OUT)"
+            ) from None
+        blocks = {"plot3d": self._plot3d_lines(box, grid)}
+        subdir = self._run_resumed("potential", [spec.TASKS["potential_3d"]], blocks)
+        return volumetric.parse_plot3d(subdir / filename)
+
+    def get_elf(self, box=None, grid=(20, 20, 20)):
+        """Electron localization function on a 3D grid (task 53,
+        src/elfplot.f90).
+
+        Same `box`/`grid` convention and same (points, values) return as
+        get_density(). The (spin-averaged) ELF is
+
+            f_ELF(r) = 1 / (1 + [D(r)/D0(r)]^2),
+
+        with D(r) = (tau(r) - |grad n|^2/(4n))/2 the excess local kinetic
+        energy density over its von Weizsaecker (single-orbital) value and
+        D0(r) = (3/5)(6 pi^2)^(2/3) (n/2)^(5/3) the same quantity for the
+        homogeneous electron gas at the local density (Becke and Edgecombe,
+        J. Chem. Phys. 92, 5397 (1990); Burnus, Marques and Gross, PRA 71,
+        010501 (2005), the reference elfplot.f90 itself cites). Values are
+        dimensionless and bounded to [0, 1] by construction: 1 means
+        perfect localization (a covalent bond or lone pair), 1/2 the
+        homogeneous-electron-gas reference.
+
+        Note (Elk's own ELF example, examples/ELF/BN): the ELF depends on
+        density gradients and is not continuous at the muffin-tin
+        boundaries unless the cut-offs are raised (rgkmax, gmaxvr, lmaxo,
+        lmaxapw -- via extra_blocks -- or highq=.true.), so a plot at
+        default settings can show a visible sphere-boundary seam that is a
+        basis-set artefact, not physics.
+        """
+        blocks = {"plot3d": self._plot3d_lines(box, grid)}
+        subdir = self._run_resumed("elf", [spec.TASKS["elf_3d"]], blocks)
+        return volumetric.parse_plot3d(subdir / spec.OUTPUT_FILES["elf_3d"])
+
+    def get_moke(self, wplot=(0.0, 0.5), nwplot=500, swidth=None, ngridk=None):
+        """Complex magneto-optic Kerr angle (tasks 120 then 122,
+        src/writepmat.f90 / src/moke.f90, KERR.OUT).
+
+        Returns (energies, kerr): the photon energy grid (nw,) in Hartree
+        and the complex Kerr angle (nw,) in DEGREES -- real part the Kerr
+        rotation theta_K, imaginary part the ellipticity. From the optical
+        conductivity tensor sigma, moke.f90 forms
+
+            theta_K + i eta_K = -sigma_xy / (sigma_xx sqrt(1 + 4 pi i
+                                             sigma_xx / omega)),
+
+        the standard polar-Kerr expression; sigma_xx and sigma_xy come from
+        src/dielectric.f90's Kubo formula (Physica Scripta T109, 170
+        (2004)), which moke.f90 calls internally with optcomp fixed to the
+        11 and 12 components. The effect is odd under time reversal: the
+        off-diagonal sigma_xy vanishes without BOTH a net magnetization and
+        spin-orbit coupling, so a nonmagnetic or SOC-free run returns
+        identically zero rather than failing.
+
+        Task 122 needs the momentum matrix elements (PMAT.OUT) on disk, so
+        task 120 is run first in the same directory -- that pairing is the
+        reason this is a named method rather than a bare run_tasks() call.
+
+        - `wplot`/`nwplot`: the photon-energy window (Hartree) and number of
+          grid points. dielectric.f90 clips a negative lower bound to zero,
+          and moke.f90 returns exactly zero at omega = 0.
+        - `swidth`: the smearing width (Hartree), whose reciprocal is the
+          relaxation time entering the response function. Elk's own MOKE
+          example (examples/TDDFT-optics/Ni-MOKE) raises it AFTER the
+          ground-state run to smooth the spectrum -- which is exactly what
+          passing it here does, since this runs resumed from an already
+          converged STATE.OUT and never feeds `swidth` back into the ground
+          state (a large smearing during the SCF cycle would suppress the
+          moment).
+        - `ngridk`: optionally overrides the k-mesh for this call only. The
+          Kerr angle is a Brillouin-zone integral of interband transitions
+          and converges slowly -- Elk's Ni example uses 32x32x32.
+        """
+        if not self.spinorb:
+            raise ValueError(
+                "get_moke() requires spinorb=True: the Kerr angle is driven by the "
+                "off-diagonal conductivity sigma_xy, which vanishes identically without "
+                "spin-orbit coupling to tie the magnetization to the orbital motion"
+            )
+        if not self.spinpol:
+            raise ValueError(
+                "get_moke() requires a magnetic ground state (spinpol=True, plus a "
+                "symmetry-breaking field such as bfieldc or per-atom bfcmt): sigma_xy is "
+                "odd under time reversal, so an unmagnetized cell gives zero Kerr angle"
+            )
+        blocks = {"wplot": [(nwplot, 100, 1), (wplot[0], wplot[1])]}
+        if swidth is not None:
+            blocks["swidth"] = [swidth]
+        subdir = self._run_resumed(
+            "moke",
+            [spec.TASKS["momentum_matrix"], spec.TASKS["moke"]],
+            blocks,
+            ngridk=tuple(ngridk) if ngridk else None,
+        )
+        return moke.parse_kerr(subdir / spec.OUTPUT_FILES["kerr"])
+
+    def get_dielectric_function(
+        self, components=((1, 1),), wplot=(0.0, 0.5), nwplot=500, swidth=0.001,
+        intraband=False, ngridk=None, label="dielectric",
+    ):
+        """Dielectric tensor and optical conductivity in the
+        independent-particle (random-phase, no local fields, no excitons)
+        approximation -- tasks 120 then 121, src/writepmat.f90 /
+        src/dielectric.f90, EPSILON_ij.OUT / SIGMA_ij.OUT.
+
+        dielectric.f90 evaluates the Kubo-Greenwood formula (Physica
+        Scripta T109, 170 (2004)) over the NON-reduced k-mesh,
+
+            sigma_ij(w) = (i / (N_k Omega)) sum_k sum_{n,m}
+                f_n (1 - f_m/f_max) / (e_m - e_n)
+                [ p^i_nm conj(p^j_nm) / (w - (e_m - e_n) + i s)
+                + conj(p^i_nm conj(p^j_nm)) / (w + (e_m - e_n) + i s) ],
+
+            eps_ij(w) = delta_ij + 4 pi i sigma_ij(w) / (w + i s),
+
+        with s = `swidth`, Omega the cell volume, N_k the number of
+        non-reduced k-points, f_n the occupations and p the momentum
+        matrix elements task 120 writes to PMAT.OUT (getpmat rotates them
+        from the reduced mesh to each non-reduced point). Im eps_ii is the
+        interband absorption spectrum: taking s -> 0 turns the resonant
+        denominator into -i pi delta(w - (e_m - e_n)) and leaves
+
+            Im eps_ii(w) = (4 pi^2 / (N_k Omega w^2)) sum_k sum_{v,c}
+                f_v (1 - f_c/f_max) |p^i_cv|^2 delta(w - (e_c - e_v)),
+
+        which is exactly what get_circular_absorption() re-derives from
+        elkpy's own arbitrary-k momentum matrix elements, resolved by
+        circular polarization -- see docs/design.md #24.
+
+        - `components`: which tensor components (i, j), 1-based Cartesian
+          (1, 2, 3 = x, y, z), to compute; Elk's `optcomp` block, one run
+          per call covering all of them. Default the xx component alone.
+        - `wplot`/`nwplot`: photon-energy window (Hartree) and number of
+          grid points. dielectric.f90 clips a negative lower bound to zero
+          and its grid is w1 + (w2 - w1)*(iw - 1)/nwplot, i.e. it EXCLUDES
+          the upper endpoint.
+        - `swidth`: the Lorentzian broadening (Hartree) -- i/swidth is the
+          complex relaxation time entering the denominators above. Elk's
+          own default (0.001, readinput.f90) is stated explicitly here
+          rather than left implicit, because any comparison against an
+          independently computed spectrum has to use the same one. Note
+          that `swidth` is also Elk's occupation smearing, so it applies to
+          the task-1 continuation this run starts with -- immaterial for a
+          gapped system, but for a metal set it on the Calculation
+          (`extra_blocks`) so every route is smeared alike.
+        - `intraband`: add the Drude term and write PLASMA_ij.OUT.
+          Irrelevant (and zero) for a gapped system.
+        - `ngridk`: optionally overrides the k-mesh for this call only. The
+          spectrum is a Brillouin-zone integral and converges slowly in it.
+
+        The number of empty states summed over is Elk's `nempty`, which
+        belongs to the Calculation (`extra_blocks={"nempty": [...]}`) so
+        that this and eigenstate_session()-driven sums see the same
+        `nstsv` -- Elk's default leaves very few empty states and truncates
+        the spectrum at a low energy.
+
+        Returns {"energies": (nw,) Hartree, "epsilon": {(i, j): (nw,)
+        complex}, "sigma": {(i, j): (nw,) complex}, "swidth": float,
+        "plasma": {(i, j): float}} -- the last only when intraband=True.
+        """
+        components = [tuple(int(x) for x in c) for c in components]
+        for i, j in components:
+            if not (1 <= i <= 3 and 1 <= j <= 3):
+                raise ValueError(f"optcomp entries must be Cartesian axes in 1..3, got {(i, j)}")
+        blocks = {
+            "wplot": [(nwplot, 100, 1), (wplot[0], wplot[1])],
+            "swidth": [swidth],
+            "optcomp": [(i, j) for i, j in components],
+            "intraband": [intraband],
+        }
+        subdir = self._run_resumed(
+            label,
+            [spec.TASKS["momentum_matrix"], spec.TASKS["dielectric"]],
+            blocks,
+            ngridk=tuple(ngridk) if ngridk else None,
+        )
+        result = {"epsilon": {}, "sigma": {}, "swidth": float(swidth)}
+        energies = None
+        for i, j in components:
+            names = {
+                key: spec.OUTPUT_FILE_TEMPLATES[key].format(i=i, j=j)
+                for key in ("epsilon", "sigma")
+            }
+            energies, eps = dielectric.parse_epsilon(subdir / names["epsilon"])
+            result["epsilon"][(i, j)] = eps
+            _, sig = dielectric.parse_sigma(subdir / names["sigma"])
+            result["sigma"][(i, j)] = sig
+        result["energies"] = energies
+        if intraband:
+            result["plasma"] = {}
+            for i, j in components:
+                if i != j:
+                    continue
+                path = subdir / spec.OUTPUT_FILE_TEMPLATES["plasma"].format(i=i, j=j)
+                result["plasma"][(i, j)] = float(path.read_text().split()[0])
+        return result
+
+    def _kmesh(self, ngridk=None):
+        """The FULL non-reduced k-mesh Elk itself generates, in fractional
+        coordinates: vkl = (i + vkloff)/ngridk for i = 0..n-1 in each
+        direction (src/init1.f90's boxl offset plus src/genppts.f90's
+        [0, 1) mapping)."""
+        ngridk = tuple(ngridk) if ngridk else self.ngridk
+        offset = self.vkloff
+        return [
+            (
+                (i1 + offset[0]) / ngridk[0],
+                (i2 + offset[1]) / ngridk[1],
+                (i3 + offset[2]) / ngridk[2],
+            )
+            for i1 in range(ngridk[0])
+            for i2 in range(ngridk[1])
+            for i3 in range(ngridk[2])
+        ]
+
+    def get_circular_absorption(
+        self, wplot=(0.0, 0.5), nwplot=500, swidth=0.001, directions=(1, 2),
+        ngridk=None, kpoints=None, weights=None, broadening="elk",
+        label="absorption",
+    ):
+        """Polarization-resolved interband absorption, Im eps_+(w) and
+        Im eps_-(w) for left- and right-circularly polarized light --
+        elkpy's own beyond-stock-Elk optical spectrum, built from the
+        arbitrary-k momentum matrix elements of the task-9002 MOMENTUM
+        query (docs/design.md #22) rather than from a mesh-bound Fortran
+        task.
+
+        See parsers.optical.circular_absorption() for the formula, the
+        conventions and the k -> -k argument for why the ZONE-INTEGRATED
+        channels coincide in a non-magnetic crystal while the k-resolved
+        dichroism does not. Stock Elk (task 121, get_dielectric_function())
+        gives sigma_xx and sigma_xy but never sigma_+/sigma_-; the
+        polarization-SUMMED total here equals Im eps_aa + Im eps_bb, which
+        is exactly what that task computes, so the two are directly
+        comparable (docs/design.md #24).
+
+        One elk process for the whole sweep: this opens a single
+        eigenstate_session() and queries every mesh point through it.
+
+        - `kpoints`: explicit list of k-points to sum over (fractional
+          coordinates); default is the full NON-reduced `ngridk` mesh Elk
+          itself would generate. Symmetry reduction is not applicable here
+          -- |P_pm|^2 is not invariant under the operations that fold the
+          mesh, which is the physical content of the dichroism.
+        - `weights`: per-k-point weights, default uniform. Passing a mask
+          restricts the sum to a region of the zone (e.g. one valley),
+          which is what separates the two circular channels.
+        - `wplot`/`nwplot`: photon-energy window (Hartree) and number of
+          grid points, on the same grid convention as
+          get_dielectric_function() (upper endpoint excluded), so the two
+          spectra can be compared point by point.
+        - `swidth`: broadening (Hartree), Elk's own `swidth`; matching
+          task 121 means matching it on both sides.
+        - `broadening`: "elk" (default) evaluates src/dielectric.f90's own
+          finite-`swidth` response, which is what makes the two spectra
+          comparable point by point. "lorentzian"/"gaussian" instead use
+          the textbook delta-function form, which is the same physics only
+          as swidth -> 0: at a finite width the two differ by a factor
+          (2w - Delta)/Delta, a few percent across a linewidth, and the
+          delta form additionally blows up as 1/w^2 below the absorption
+          edge, where a Lorentzian's tail is multiplied by a diverging
+          prefactor.
+
+        Occupations come from the ground state's own EIGVAL.OUT (Elk's
+        occsv, the same array src/dielectric.f90 reads), and must be
+        k-independent -- this independent-particle interband spectrum is
+        defined for a gapped system, and a metal raises rather than being
+        silently mis-counted.
+
+        Returns parsers.optical.circular_absorption()'s dict plus
+        "kpoints" and everything needed to redo the sum without re-running
+        Elk -- "kdata" (the per-k-point momentum matrices and energies),
+        "occupations", "volume" and "occmax". Feeding those back into
+        parsers.optical.circular_absorption() with different `weights` (a
+        valley mask) or a different `broadening` costs no Elk time at all.
+        """
+        self.ensure_ground_state()
+        occupations = eigval.occupations_if_uniform(
+            self.workdir / spec.OUTPUT_FILES["eigval"]
+        )
+        if kpoints is None:
+            kpoints = self._kmesh(ngridk)
+        kdata = self.get_momentum_matrix(kpoints=kpoints, label=label)
+        w1 = max(wplot[0], 0.0)
+        w2 = max(wplot[1], w1)
+        omega = w1 + (w2 - w1) * np.arange(nwplot) / nwplot
+        volume = abs(np.linalg.det(np.array(self.structure.avec))) * self.structure.scale**3
+        occmax = 1.0 if (self.spinpol or self.spinorb) else 2.0
+        result = optical.circular_absorption(
+            kdata, omega, occupations, volume, occmax=occmax, swidth=swidth,
+            directions=directions, weights=weights, broadening=broadening,
+        )
+        result["kdata"] = kdata
+        result["kpoints"] = [tuple(kp) for kp in kpoints]
+        result["occupations"] = occupations
+        result["volume"] = volume
+        result["occmax"] = occmax
+        return result
 
     def get_phonon_dos(self, ngridq, nrmtscf=4, lmaxi=2):
         """Phonon density of states via DFPT (tasks 205 then 210,

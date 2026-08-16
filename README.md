@@ -119,11 +119,14 @@ Fu & Kane's own minimal lattice model for introducing $(\nu_0;\nu_1\nu_2\nu_3)$ 
 structure with the second basis atom displaced along [111], shortening one bond per atom:
 ```python
 result = cs.get_z2_invariant_3d(1, ist1, nkx=12, nt=7)
-result["nu0"]         # strong index (this structure: 0 -- see docs/design.md #23,
-                      # which retracts an earlier unconverged nu0=1 for it)
-result["nu0_by_axis"] # (1, 1, 1): the strong index agrees identically across all three axes
+result["nu0"]         # strong index -- 1 at THIS mesh, but not converged: it oscillates
+                      # 1,0,1,0 as the mesh is refined. The exact parity indicator below
+                      # gives 0 for this structure (docs/design.md #23 retracts the
+                      # nu0=1 that was once read off this call)
+result["nu0_by_axis"] # (1, 1, 1): the strong index agrees identically across all three
+                      # axes -- an algebraic consistency check that does hold
 ```
-![Alt text](images/cs_dimerized_z2_invariant_3d.png?raw=true "Wannier charge centers on the k1=0 and k1=pi planes of a dimerized diamond lattice, showing an odd vs. even number of crossings")
+![Alt text](images/cs_dimerized_z2_invariant_3d.png?raw=true "Wannier charge centers on the k1=0 and k1=pi planes of a dimerized diamond lattice; the crossing count on the k1=0 plane is mesh-dependent, see docs/design.md section 23")
 
 ## Quantum metric alongside Berry curvature, along Gamma-K-M-K'-Gamma of monolayer h-BN ##
 Time-reversal symmetry requires $g_{ab}(K)=g_{ab}(K')$ even though $\Omega(K')=-\Omega(K)$ --

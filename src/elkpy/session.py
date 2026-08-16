@@ -484,6 +484,13 @@ class EigenstateSession:
                     self._proc.wait()
         self._proc.stdin.close()
         self._proc.stdout.close()
+        # give back the launcher's machine-wide concurrency slot (see
+        # launcher._acquire_slot) -- a live session occupies a core for as
+        # long as it is answering queries, so it holds one for its lifetime
+        from .launcher import _release_slot
+
+        _release_slot(getattr(self._proc, "_elkpy_slot", None))
+        self._proc._elkpy_slot = None
 
     def __enter__(self):
         return self

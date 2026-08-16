@@ -52,6 +52,19 @@ HBN_A = 4.743210000
 HBN_AVEC = [(HBN_A, 0.0, 0.0), (-HBN_A / 2, HBN_A * 3**0.5 / 2, 0.0), (0.0, 0.0, 20.0)]
 HBN_SPECIES = {"B": [(1 / 3, 2 / 3, 0.5)], "N": [(2 / 3, 1 / 3, 0.5)]}
 
+# freestanding buckled-honeycomb monolayer Bi ("bismuthene"), same fixture as
+# tests/test_calculation_z2.py -- a QSH insulator (Murakami, PRL 97, 236805
+# (2006)) where get_z2_invariant() measures Z2 = 1, used here as a SECOND
+# independent 2D cross-check of the parity route (graphene is the first), on a
+# real material with its own atomic spin-orbit coupling rather than an
+# artificially scaled one
+BI_A = 4.34 * _BOHR_PER_ANGSTROM
+BI_BUCKLING = 1.73 * _BOHR_PER_ANGSTROM
+BI_VACUUM = 28.0
+BI_AVEC = [(BI_A, 0.0, 0.0), (-BI_A / 2, BI_A * 3**0.5 / 2, 0.0), (0.0, 0.0, BI_VACUUM)]
+_bi_half_delta = (BI_BUCKLING / 2) / BI_VACUUM
+BI_SPECIES = {"Bi": [(0.0, 0.0, 0.5 + _bi_half_delta), (1 / 3, 2 / 3, 0.5 - _bi_half_delta)]}
+
 # [111]-dimerized diamond, same fixture as tests/test_calculation_z2_3d.py
 CS_A = 16.0
 DIAMOND_AVEC = [
@@ -79,6 +92,16 @@ def graphene_soc(tmp_path_factory):
     calc = Structure(GRAPHENE_AVEC, GRAPHENE_SPECIES).get_calculation(
         workdir / "graphene_soc", xc="PW", ngridk=(6, 6, 1), rgkmax=7.0,
         spinorb=True, soc_scale={"C": 3000.0},
+    )
+    calc.get_energy()
+    return calc, _occupied_count(calc)
+
+
+@pytest.fixture(scope="module")
+def bismuthene(tmp_path_factory):
+    workdir = tmp_path_factory.mktemp("parity_bi")
+    calc = Structure(BI_AVEC, BI_SPECIES).get_calculation(
+        workdir / "bi", xc="PW", ngridk=(6, 6, 1), rgkmax=7.0, spinorb=True,
     )
     calc.get_energy()
     return calc, _occupied_count(calc)
@@ -163,6 +186,50 @@ def test_graphene_fu_kane_matches_wcc_z2(graphene_soc):
     # exactly one TRIM must carry the odd parity product, which is what
     # makes the total product -1
     assert list(result["deltas"].values()).count(-1) % 2 == 1
+
+
+def test_bismuthene_fu_kane_matches_wcc_z2(bismuthene):
+    """Murakami's QSH prediction for freestanding buckled-honeycomb monolayer
+    Bi (PRL 97, 236805 (2006)), from 4 k-points -- and it must agree with
+    get_z2_invariant()'s answer for the same system, which
+    tests/test_calculation_z2.py measures as Z2 = 1.
+
+    The SECOND independent 2D cross-check of the parity route (graphene is the
+    first), and the more informative one: bismuthene needs no soc_scale
+    enhancement at all, and its band inversion is an s-p inversion at Gamma
+    (HgTe/CdTe-style) rather than graphene's Dirac-point-at-K mechanism.
+
+    Note what is NOT asserted: that the three M-point deltas are equal. They
+    are not, and need not be. The honeycomb's inversion centres come in two
+    classes -- the hexagon centre, which lies on the 3-fold axis, and the three
+    bond midpoints, which do not -- and Elk's findsymcrys picks a bond midpoint
+    here (GEOMETRY.OUT puts the atoms at +-(1/3, 1/6, z); SYMCRYS.OUT reports
+    both C3 elements carrying non-lattice translations, a symmorphic group in a
+    non-standard origin). Shifting the inversion origin by a half-lattice
+    vector t multiplies delta(k) by (exp(2 pi i k.2t))^N with N the occupied
+    Kramers-pair count, so with N = 15 here the deltas at two of the three M
+    points are flipped relative to the on-axis convention. Transported to the
+    on-axis origin they read delta(Gamma) = -1, delta(M) = +1 for all three M
+    -- C3-symmetric, and the odd delta sitting at Gamma alone is exactly the
+    Gamma-centred band inversion test_bi_gap_minimum_is_at_gamma_not_k
+    measures. The four-TRIM product, and hence nu, is origin-independent.
+    """
+    calc, ist1 = bismuthene
+    result = calc.get_fu_kane_invariant(1, ist1, dimension=2)
+    assert result["nu"] == 1
+    assert set(result["deltas"].values()) <= {-1, 1}
+    assert list(result["deltas"].values()).count(-1) % 2 == 1
+
+
+def test_bismuthene_parity_is_window_independent(bismuthene):
+    """Z2 is additive mod 2 over independently-gapped band groups, so dropping
+    a gapped semicore block must not change the invariant. ist0 = 21 and 25 sit
+    above ~8.6 eV and ~6.8 eV gaps at Gamma respectively."""
+    calc, ist1 = bismuthene
+    for ist0 in (21, 25):
+        assert calc.get_fu_kane_invariant(
+            ist0, ist1, dimension=2, label=f"fk_bi_{ist0}"
+        )["nu"] == 1
 
 
 def test_cs_dimerized_is_trivial_and_corrects_the_wcc_result(cs_dimerized):

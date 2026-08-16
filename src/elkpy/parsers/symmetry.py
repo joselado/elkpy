@@ -26,6 +26,18 @@ inversion symmetry to actually be present.
 
 See docs/design.md #23 and docs/physics.tex Part XII.
 
+Origin dependence
+-----------------
+The individual delta_i are NOT canonical: they depend on where the inversion
+centre sits, which Elk chooses itself (findsymcrys.f90 shifts the basis to put
+it at the origin). A centre displaced by t multiplies delta(k) by
+(exp(2i*pi*k.2t))^N with N the number of occupied Kramers pairs, so for odd N
+the deltas at symmetry-related TRIM can differ -- seen on bismuthene, where the
+three C3-related M points came out -1, +1, -1. That is not a bug. The
+invariants are unaffected, because the phases enter an even number of TRIM
+products. Read `deltas` as one valid set for Elk's chosen origin, not as a
+per-TRIM fingerprint; only the combination is physical. See docs/design.md #23.
+
 Sign immunity
 -------------
 A global sign error in P would flip every xi at once. Every invariant here

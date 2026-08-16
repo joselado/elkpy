@@ -174,6 +174,64 @@ def test_get_density(si_calculation):
     assert (density >= 0).all()
 
 
+def test_get_potential(si_calculation):
+    """Both components of the Kohn-Sham potential (task 43, VCL3D.OUT and
+    VXC3D.OUT) on the same plot3d grid as get_density()."""
+    import numpy as np
+
+    points, v_coulomb = si_calculation.get_potential(grid=(4, 4, 4))
+    assert points.shape == (64, 3)
+    assert v_coulomb.shape == (64,)
+
+    points_xc, v_xc = si_calculation.get_potential(grid=(4, 4, 4), component="xc")
+    assert np.allclose(points, points_xc)
+
+    # the two components are genuinely different files, not the same one
+    # parsed twice (a plausible spec.py/filename mix-up)
+    assert not np.allclose(v_coulomb, v_xc)
+
+
+def test_get_potential_xc_matches_the_lda_functional_of_the_density(si_calculation):
+    """Sharp cross-check tying VXC3D.OUT to RHO3D.OUT: xc='PW' is a LOCAL
+    density functional, so v_xc(r) is a pointwise function of n(r) alone,
+    dominated by Dirac exchange v_x = -(3n/pi)^(1/3) with the Perdew-Wang
+    correlation potential adding a smaller negative correction on top.
+
+    Catches what a shape/sign check cannot: a wrong file, a shifted column,
+    or a unit error would break this pointwise relation immediately, and it
+    compares two separate Elk runs' output (task 33 vs task 43) against an
+    analytic formula rather than against each other."""
+    import numpy as np
+
+    points_rho, density = si_calculation.get_density(grid=(4, 4, 4))
+    points_v, v_xc = si_calculation.get_potential(grid=(4, 4, 4), component="xc")
+    assert np.allclose(points_rho, points_v)
+
+    v_dirac = -((3 * density / np.pi) ** (1 / 3))
+    ratio = v_xc / v_dirac
+    # correlation makes v_xc 10-25% deeper than bare exchange across this
+    # cell's density range (0.006 to 0.085 e/Bohr^3)
+    assert (ratio > 1.0).all() and (ratio < 1.4).all()
+
+
+def test_get_potential_rejects_unknown_component(si_calculation):
+    with pytest.raises(ValueError):
+        si_calculation.get_potential(grid=(2, 2, 2), component="hartree")
+
+
+def test_get_elf(si_calculation):
+    """ELF (task 53, ELF3D.OUT), same plot3d grid convention as
+    get_density(). f_ELF = 1/(1 + (D/D0)^2) is bounded to [0, 1] by
+    construction, and bulk Si's covalent bonds push it close to the upper
+    bound somewhere in the cell -- a uniform-electron-gas-like result
+    (everything near 1/2) would mean the bonding information was lost."""
+    points, elf = si_calculation.get_elf(grid=(4, 4, 4))
+    assert points.shape == (64, 3)
+    assert elf.shape == (64,)
+    assert (elf >= 0).all() and (elf <= 1).all()
+    assert elf.max() > 0.8
+
+
 def test_species_file_override(tmp_path):
     import shutil
 

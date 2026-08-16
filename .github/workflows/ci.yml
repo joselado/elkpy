@@ -1,0 +1,240 @@
+name: CI
+
+# Staged cheapest-first, so a failure surfaces in seconds rather than after a
+# multi-minute Fortran build:
+#
+#   unit-tests   (~10 s)  -- everything that needs no elk binary
+#   patch-series (~10 s)  -- patches/ still applies to vendor/elk/ (design.md #8)
+#   build-elk    (~5-15 min, needs both above) -- scripts/build_elk.sh
+#   integration  (manual/scheduled only)       -- the real-DFT test suites
+#
+# The patch-series job is the one that protects against the failure mode
+# design.md #8 calls out: bumping vendor/elk/ to a new upstream release and
+# silently breaking one of the eight patches.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Monday 05:00 UTC -- picks up the integration job, which never runs on push.
+    - cron: "0 5 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------- stage 1a
+  unit-tests:
+    name: Unit tests (no elk binary) / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is the pyproject requires-python floor; 3.13 is the current
+        # release. Both are worth having: numpy resolves to a different major
+        # on 3.9 (numpy >= 2.1 requires 3.10+).
+        #
+        # ase is only exercised on the newer interpreter: current ase requires
+        # Python >= 3.10, so on 3.9 pip would have to fall back to an old
+        # release (and its old scipy/matplotlib) for the sake of exactly one
+        # test (test_structure.py's from_ase/to_ase round trip, the only
+        # binary-free `importorskip("ase")`). Not worth the resolution risk on
+        # the floor interpreter.
+        include:
+          - python-version: "3.9"
+            extras: "test"
+          - python-version: "3.13"
+            extras: "ase,test"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Editable, deliberately: src/elkpy/config.py locates vendor/elk/species
+      # and build/elk/src/elk relative to its own file (parents[2]), so a plain
+      # `pip install .` puts repo_root() inside site-packages and species/binary
+      # discovery silently breaks. See docs/_fragments/ci.md.
+      - name: Install elkpy (editable)
+        run: python -m pip install -e ".[${{ matrix.extras }}]"
+
+      # No elk binary exists on this runner, so every tests/test_calculation_*.py
+      # module self-skips via its `config.default_elk_binary().is_file()` guard.
+      # Running the whole suite (rather than a hand-maintained -k selection) is
+      # deliberate: it picks up binary-free tests that live inside integration
+      # modules -- e.g. test_calculation_soc.py's three constructor-validation
+      # tests, which a name-based -k filter misses. ELKPY_ELK_BIN is pinned to a
+      # path that cannot exist so the skip decision never depends on stray state.
+      - name: Run tests
+        env:
+          ELKPY_ELK_BIN: /nonexistent/elk
+        run: python -m pytest tests/ -q -rs --junitxml=junit.xml
+
+      # `pytest` exits 0 if everything skips, so a regression that made the unit
+      # tests self-skip (a broken import guard, a stray module-level skipif)
+      # would otherwise look green. Floor, not an exact count -- raise it only if
+      # the number ever legitimately drops.
+      - name: Guard against a silently all-skipped run
+        if: always()
+        run: |
+          python - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          root = ET.parse("junit.xml").getroot()
+          suite = root[0] if root.tag == "testsuites" else root
+          a = suite.attrib
+          n = int(a["tests"])
+          skipped, failures, errors = (int(a.get(k, 0)) for k in ("skipped", "failures", "errors"))
+          passed = n - skipped - failures - errors
+          print(f"{passed} passed, {skipped} skipped, {failures} failed, {errors} errored")
+          FLOOR = 100
+          if passed < FLOOR:
+              sys.exit(f"only {passed} tests ran (expected >= {FLOOR}); "
+                       "did the binary-free tests start self-skipping?")
+          PY
+
+  # ---------------------------------------------------------------- stage 1b
+  patch-series:
+    name: Patch series applies to vendor/elk
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # The series is CUMULATIVE, not independent: 0002 re-touches elk.f90 /
+      # modmain.f90 / readinput.f90 after 0001, and 0004-0008 all edit
+      # src/elkpy_eigenstates.f90, a file that only exists once 0003 has been
+      # applied. So each patch must be applied for real before the next one is
+      # checked -- a per-patch `--dry-run` against a pristine vendor/elk/ fails
+      # for 7 of the 8. This mirrors scripts/build_elk.sh exactly, minus the
+      # compile.
+      #
+      # `--batch` keeps patch non-interactive (it otherwise prompts on stdin for
+      # a filename when context is not found, and would hang the runner).
+      # Applying with fuzz is treated as a failure, not a warning: fuzz means the
+      # surrounding context moved, which is precisely the silent-divergence case
+      # this check exists to catch on an upstream bump.
+      - name: Apply patches/*.patch to a scratch copy of vendor/elk
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          cp -r vendor/elk "$work/elk"
+          shopt -s nullglob
+          patches=(patches/*.patch)
+          if [ ${#patches[@]} -eq 0 ]; then
+            echo "::error::no patches found under patches/"
+            exit 1
+          fi
+          for p in "${patches[@]}"; do
+            echo "::group::$p"
+            if ! out="$(patch -d "$work/elk" -p1 --batch -i "$PWD/$p" 2>&1)"; then
+              echo "$out"
+              echo "::endgroup::"
+              echo "::error file=$p::patch does not apply to vendor/elk -- see patches/README.md for the per-patch upstream-file checklist"
+              exit 1
+            fi
+            echo "$out"
+            echo "::endgroup::"
+            if grep -qi 'fuzz' <<<"$out"; then
+              echo "::error file=$p::applied with fuzz (context has drifted); re-generate this patch against the current vendor/elk"
+              exit 1
+            fi
+          done
+          echo "All ${#patches[@]} patches applied cleanly, with no fuzz."
+
+      # patches/README.md is the documented checklist for an upstream bump; a new
+      # patch that never got a row is exactly what goes stale first.
+      - name: Every patch has a row in patches/README.md
+        run: |
+          set -euo pipefail
+          rc=0
+          for p in patches/*.patch; do
+            grep -q "$(basename "$p")" patches/README.md || {
+              echo "::error file=patches/README.md::no row for $(basename "$p")"; rc=1; }
+          done
+          exit $rc
+
+  # ------------------------------------------------------------------ stage 2
+  build-elk:
+    name: Build vendored Elk (serial)
+    runs-on: ubuntu-latest
+    needs: [unit-tests, patch-series]
+    # Measured ~3 min for 410 objects on a fast workstation; a 2-4 core hosted
+    # runner should land around 5-15 min. The cap is a runaway guard, not an
+    # expectation.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # Exactly what build-config/make.inc links against: gfortran (+ -fopenmp,
+      # bundled), -lopenblas, -llapack, -lfftw3 and -lfftw3f (both come from
+      # libfftw3-dev).
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gfortran libopenblas-dev liblapack-dev libfftw3-dev
+
+      # scripts/build_elk.sh runs `make` SERIALLY on purpose -- Elk's own
+      # src/Makefile has implicit ordering dependencies (mpi_stub.f90 before
+      # modmpi.f90, libxcifc_stub.f90 before modxcifc.f90/moddftu.f90) that are
+      # not expressed as prerequisites, so `make -j` races nondeterministically.
+      # Do not "parallelize" this.
+      - name: Build
+        run: ./scripts/build_elk.sh
+
+      # Elk exits 0 even when it cannot open elk.in (it prints an error and
+      # stops), so the exit status proves nothing -- the banner does.
+      - name: Smoke-test the binary
+        run: |
+          set -euo pipefail
+          test -x build/elk/src/elk
+          work="$(mktemp -d)"
+          (cd "$work" && timeout 60 "$GITHUB_WORKSPACE/build/elk/src/elk" </dev/null >out.txt 2>&1 || true)
+          cat "$work/out.txt"
+          grep -q "Elk code version" "$work/out.txt"
+
+      # Deliberately NOT uploaded as an artifact: build-config/make.inc compiles
+      # with -march=native, and GitHub's hosted runner fleet is heterogeneous, so
+      # a binary built here can SIGILL on the next job's runner. Anything that
+      # needs the binary must build it in its own job -- as `integration` does.
+
+  # ------------------------------------------------------------------ stage 3
+  integration:
+    name: Integration tests (real DFT, manual/scheduled)
+    # Never on push/PR: these run actual Elk ground states and cost minutes each.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    needs: [unit-tests, patch-series]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gfortran libopenblas-dev liblapack-dev libfftw3-dev
+
+      # Build in THIS job, for the -march=native reason above.
+      - name: Build Elk
+        run: ./scripts/build_elk.sh
+
+      - name: Install elkpy (editable, with optional extras)
+        run: python -m pip install -e ".[ase,test]"
+
+      # A deliberately narrow slice: the bulk-Si ground-state suite only. The
+      # heavier physics suites (berry / z2 / z2_3d / quantum_geometry / momentum /
+      # parity / spin, and the h-BN + WSe2 + bismuthene fixtures they build) run
+      # for many minutes each, and the DFPT phonon tests are 11-13 min per test
+      # even on a workstation -- so ELKPY_RUN_SLOW_TESTS stays unset here.
+      # Widen this list only after observing real runner timings.
+      - name: Run the bulk-Si integration suite
+        run: python -m pytest tests/test_calculation_si.py -q -rs

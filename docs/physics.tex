@@ -2059,10 +2059,10 @@ loop/pump pair -- and combines the six 0/1 results via
 No new Fortran, and no new mesh machinery beyond \texttt{vkloff} threading: this is
 architecturally identical to six independent Part~\ref{part:z2} computations.
 
-\section{The verified example: cesium on a dimerized diamond lattice}
+\section{The test example: cesium on a dimerized diamond lattice}
 
 Rather than picking an arbitrary real material and hoping its published classification
-carries over, this feature is verified directly against the minimal lattice model Fu \&
+carries over, this feature was exercised against the minimal lattice model Fu \&
 Kane use to \emph{introduce} $(\nu_0;\nu_1\nu_2\nu_3)$ in the first place
 \cite{fukane2007} (their eq.\ 4 and \S IV.3, confirmed directly against the arXiv HTML
 source, not just summarized): diamond structure ($Fd\bar3m$ -- the same structure as
@@ -2089,7 +2089,7 @@ non-overlapping). Real single-band spin-orbit coupling is expected to be extreme
 enhances it to a numerically convenient scale -- the same reasoning as
 Part~\ref{part:z2}'s graphene test, not a claim about real cesium.
 
-\subsection{Verified}
+\subsection{What was measured, and what was retracted}
 
 Against a real compiled binary: a comfortably large gap everywhere sampled on a
 $\Gamma$-L-X-$\Gamma$ path (minimum 0.136~eV, at L -- nowhere near
@@ -2533,8 +2533,11 @@ Eq.~\eqref{eq:hellmann} against finite-differenced eigenvalues (an entirely sepa
 path); $\eta(K)=-\eta(K')$ with $|\eta|>0.98$ --- measured $\eta(K)=-1.000000$,
 $\eta(K')=+1.000000$ to six figures, the $C_3$-enforced perfect selectivity of
 Eq.~\eqref{eq:valleycd}; the Kubo curvature against Part~\ref{part:berry}'s Wilson loop at
-$K/K'$ (measured $\mp8.194$ against $\pm8.101$ Bohr$^2$: 1.2\% in magnitude, opposite in
-sign per the previous section); stability of the Kubo sum between \texttt{nempty}$=12$ and
+$K/K'$, agreeing to 1.2\% in both magnitude and sign (this is the comparison that
+exposed the missing negation: it originally read $\mp8.194$ against $\pm8.101$
+Bohr$^2$, and now that Part~\ref{part:berry} carries the
+King-Smith--Vanderbilt/Resta negation both routes give $\mp8.194$ against $\mp8.101$);
+stability of the Kubo sum between \texttt{nempty}$=12$ and
 $20$, so the truncation is checked rather than assumed; and the Kubo metric against
 Part~\ref{part:quantumgeometry}'s finite-difference stencil.
 

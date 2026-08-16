@@ -279,6 +279,163 @@ def test_window_covering_every_state_raises():
         optical.kubo_berry_curvature(energies, pmat, ist0=1, ist1=2)
 
 
+# --- the k.p effective-mass sum rule, against the model's exact curvature ---
+
+
+def _dirac_energy_hessian(kx, ky, delta, band, v=1.0):
+    """d^2 eps / dk_a dk_b of the massive Dirac model in closed form.
+
+    eps_+- = +- E with E = sqrt(v^2 (kx^2 + ky^2) + delta^2), so
+
+        d^2 E/dk_a dk_b = v^2 delta_ab / E - v^4 k_a k_b / E^3
+
+    (a, b in {x, y}; every z component vanishes, the model having no
+    dispersion out of plane). Independent of parsers.optical: this is
+    differentiation of the eigenVALUES, exactly what Elk's own task 25
+    does numerically, whereas the sum rule uses matrix elements only.
+    """
+    e = np.sqrt(v**2 * (kx**2 + ky**2) + delta**2)
+    k = np.array([kx, ky, 0.0])
+    hess = np.zeros((3, 3))
+    hess[:2, :2] = v**2 * np.eye(2) / e
+    hess -= v**4 * np.outer(k, k) / e**3
+    return hess if band == 1 else -hess
+
+
+@pytest.mark.parametrize("tau", [1, -1])
+@pytest.mark.parametrize("kx,ky", [(0.0, 0.0), (0.3, -0.2), (0.7, 0.5)])
+@pytest.mark.parametrize("band", [0, 1])
+def test_kp_sum_rule_reproduces_the_exact_band_curvature(tau, kx, ky, band):
+    """The decisive pin: the k.p sum rule (momentum matrix elements, no
+    derivative anywhere) against the analytic second derivative of the
+    model's eigenvalues (no matrix elements anywhere). This is exactly the
+    cross-check tests/test_calculation_effective_mass.py runs against Elk
+    task 25's finite differences, here at machine precision because the
+    two-band model's own basis is complete -- no truncation, no missing
+    core states, no linearized LAPW continuum.
+
+    free_electron_term=False because a k.p Hamiltonian written directly in
+    a two-band basis has d^2H/dk_a dk_b = 0, not delta_ab; the delta_ab of
+    the crystal sum rule comes from (p + k)^2/2, which no model band basis
+    contains.
+    """
+    delta = 0.5
+    energies, pmat = _dirac_states(kx, ky, delta=delta, tau=tau)
+    result = optical.effective_mass_tensor(
+        energies, pmat, ist=band + 1, free_electron_term=False
+    )
+    expected = _dirac_energy_hessian(kx, ky, delta, band)
+    assert np.allclose(result["inverse_mass"], expected, atol=1e-12)
+    # a strictly 2D model has no out-of-plane curvature at all, so the
+    # mass tensor genuinely does not exist
+    assert result["mass"] is None
+
+
+def test_kp_inverse_mass_is_symmetric_and_the_two_bands_cancel():
+    """(1/m*)^{ab} is symmetric (it is a Hessian), and in a two-band model
+    the two bands' curvatures are exactly opposite -- eps_+ = -eps_-, so
+    the pair of them is dispersionless. The same structure as the
+    two-band Berry-curvature sum rule sum_n Omega_n = 0 above."""
+    energies, pmat = _dirac_states(0.3, -0.2, delta=0.5)
+    lower = optical.effective_mass_tensor(energies, pmat, 1, free_electron_term=False)
+    upper = optical.effective_mass_tensor(energies, pmat, 2, free_electron_term=False)
+    assert np.allclose(lower["inverse_mass"], lower["inverse_mass"].T, atol=1e-14)
+    assert np.allclose(lower["inverse_mass"], -upper["inverse_mass"], atol=1e-14)
+
+
+def test_kp_free_electron_term_is_the_identity_and_gives_an_invertible_mass():
+    """With the delta_ab kept, the tensor is the bare free-electron 1
+    plus interband repulsion -- and the model's undispersive z direction
+    then carries exactly the free-electron mass, m*_zz = 1."""
+    energies, pmat = _dirac_states(0.3, -0.2, delta=0.5)
+    with_term = optical.effective_mass_tensor(energies, pmat, 1)
+    without = optical.effective_mass_tensor(energies, pmat, 1, free_electron_term=False)
+    assert np.allclose(with_term["inverse_mass"] - without["inverse_mass"], np.eye(3))
+    assert with_term["mass"][2, 2] == pytest.approx(1.0, abs=1e-12)
+
+
+def test_kp_mass_is_the_inverse_of_the_inverse_mass():
+    energies, pmat = _dirac_states(0.3, -0.2, delta=0.5)
+    result = optical.effective_mass_tensor(energies, pmat, 1)
+    assert np.allclose(result["mass"] @ result["inverse_mass"], np.eye(3), atol=1e-12)
+
+
+def test_kp_decomposition_sums_to_the_total():
+    """The per-intermediate-state decomposition -- which interband
+    coupling produces the mass, the thing a finite-difference mass cannot
+    tell you -- must reproduce the total exactly."""
+    energies, pmat = _dirac_states(0.3, -0.2, delta=0.5)
+    result = optical.effective_mass_tensor(energies, pmat, 1, decompose=True)
+    c = result["contributions"]
+    assert c.shape == (2, 3, 3)
+    assert np.allclose(c[0], 0.0)  # a state never couples to itself
+    assert np.allclose(c.sum(axis=0) + np.eye(3), result["inverse_mass"], atol=1e-14)
+
+
+def test_kp_truncating_the_sum_from_python_matches_a_shorter_input():
+    """nstates truncates the m-sum exactly as a lower nempty would, which
+    is what makes a convergence sweep affordable from one Elk run. Checked
+    by comparing against literally handing in only the retained states."""
+    # four bands: the two-valley model as two decoupled 2x2 blocks
+    e_a, p_a = _dirac_states(0.3, -0.2, delta=0.5, tau=1)
+    e_b, p_b = _dirac_states(0.3, -0.2, delta=0.9, tau=-1)
+    energies = np.concatenate([e_a, e_b])
+    order = np.argsort(energies)
+    big = np.zeros((3, 4, 4), dtype=complex)
+    for a in range(3):
+        big[a][np.ix_([0, 1], [0, 1])] = p_a[a]
+        big[a][np.ix_([2, 3], [2, 3])] = p_b[a]
+    energies, big = energies[order], big[:, order][:, :, order]
+    ist = int(np.argmin(energies)) + 1
+    truncated = optical.effective_mass_tensor(energies, big, ist, nstates=3)
+    direct = optical.effective_mass_tensor(energies[:3], big[:, :3, :3], ist)
+    assert np.allclose(truncated["inverse_mass"], direct["inverse_mass"], atol=1e-14)
+
+
+def test_kp_degenerate_band_raises():
+    """The sum rule is non-degenerate perturbation theory: a degenerate
+    partner makes a single band's curvature meaningless, so fail loud
+    rather than dividing by an arbitrary splitting."""
+    energies = np.array([0.0, 1e-9, 1.0])
+    pmat = np.ones((3, 3, 3), dtype=complex)
+    with pytest.raises(ValueError, match="degenerate"):
+        optical.effective_mass_tensor(energies, pmat, ist=1)
+
+
+def test_kp_single_state_raises():
+    energies = np.array([0.0])
+    pmat = np.ones((3, 1, 1), dtype=complex)
+    with pytest.raises(ValueError, match="empty"):
+        optical.effective_mass_tensor(energies, pmat, ist=1)
+
+
+# --- the Thomas-Reiche-Kuhn oscillator-strength sum ---
+
+
+def test_f_sum_is_delta_minus_the_inverse_mass():
+    """f^{ab} = delta_ab - (1/m*)^{ab} identically at every k-point -- the
+    same arithmetic with the denominator reversed, which is exactly why
+    'f = 1 per electron' is a Brillouin-zone-AVERAGED statement in a
+    crystal and not a pointwise one."""
+    energies, pmat = _dirac_states(0.3, -0.2, delta=0.5)
+    f = optical.oscillator_strength_sum(energies, pmat, 1)
+    inverse_mass = optical.effective_mass_tensor(energies, pmat, 1)["inverse_mass"]
+    assert np.allclose(f, np.eye(3) - inverse_mass, atol=1e-14)
+
+
+def test_f_sum_matches_the_closed_form_at_the_dirac_point():
+    """Absolute pin, hand-computable: at k = 0 the only allowed transition
+    is |1> -> |2> with |p^x| = |p^y| = v across a gap of 2*delta, so
+    f_xx = f_yy = 2 v^2 / (2 delta) = v^2 / delta, and f_zz = 0."""
+    delta, v = 0.5, 1.3
+    energies, pmat = _dirac_states(0.0, 0.0, delta=delta, v=v)
+    f = optical.oscillator_strength_sum(energies, pmat, 1)
+    assert f[0, 0] == pytest.approx(v**2 / delta, rel=1e-12)
+    assert f[1, 1] == pytest.approx(v**2 / delta, rel=1e-12)
+    assert f[2, 2] == pytest.approx(0.0, abs=1e-14)
+    assert np.allclose(f, np.diag(np.diag(f)), atol=1e-14)
+
+
 def test_band_velocity_is_the_diagonal():
     energies, pmat = _dirac_states(0.3, 0.2, delta=0.5)
     v = optical.band_velocity(pmat, ist=1)

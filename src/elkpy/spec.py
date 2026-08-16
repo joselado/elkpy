@@ -30,6 +30,15 @@ TASKS = {
     "density_3d": 33,      # src/rhoplot.f90
     "potential_3d": 43,    # src/potplot.f90 (writes both VCL3D.OUT, VXC3D.OUT)
     "elf_3d": 53,          # src/elfplot.f90
+    "momentum_matrix": 120,  # src/writepmat.f90 -- writes PMAT.OUT, a
+                             # prerequisite of the optics tasks below
+                             # (src/dielectric.f90 reads it via getpmat)
+    "dielectric": 121,     # src/dielectric.f90 -- dielectric tensor, optical
+                           # conductivity and plasma frequency; reads task
+                           # 120's PMAT.OUT via getpmat
+    "moke": 122,           # src/moke.f90 -- magneto-optic Kerr effect;
+                           # calls dielectric internally (which is why it
+                           # needs task 120's PMAT.OUT first)
     "phonon_dfpt": 205,    # src/dyntask.f90 -- single-shot, unlike the
                            # classical supercell method (task 200), which
                            # historically needs multiple coordinated runs;
@@ -58,9 +67,26 @@ OUTPUT_FILES = {
     "totenergy_opt": "TOTENERGY_OPT.OUT",  # src/geomopt.f90
     "effmass": "EFFMASS.OUT",              # src/effmass.f90
     "density_3d": "RHO3D.OUT",             # src/rhoplot.f90
+    "potential_coulomb_3d": "VCL3D.OUT",   # src/potplot.f90 (task 43 writes
+    "potential_xc_3d": "VXC3D.OUT",        # both of these in one run)
+    "elf_3d": "ELF3D.OUT",                 # src/elfplot.f90
+    "kerr": "KERR.OUT",                    # src/moke.f90
+    "eigval": "EIGVAL.OUT",                # src/writeeval.f90
+    "efermi": "EFERMI.OUT",                # src/writefermi.f90
     "phdos": "PHDOS.OUT",                  # src/phdos.f90
     "phdisp": "PHDISP.OUT",                # src/phdisp.f90
     "phdlines": "PHDLINES.OUT",            # src/phdisp.f90
     "berry": "ELKPY_BERRY.OUT",            # elkpy extension, src/elkpy_berry.f90
     "berry_path": "ELKPY_BERRY_PATH.OUT",  # elkpy extension, src/elkpy_berry.f90
+}
+
+# output filenames that carry indices in the name, as format templates --
+# same "pure data" role as OUTPUT_FILES, but one file per requested tensor
+# component rather than a single fixed name. Formatted with i=, j= (1, 2, 3
+# for x, y, z), matching the `write(fname,'("EPSILON_",2I1,".OUT")') i,j`
+# statements in the cited source.
+OUTPUT_FILE_TEMPLATES = {
+    "epsilon": "EPSILON_{i}{j}.OUT",  # src/dielectric.f90, dielectric tensor
+    "sigma": "SIGMA_{i}{j}.OUT",      # src/dielectric.f90, optical conductivity
+    "plasma": "PLASMA_{i}{j}.OUT",    # src/dielectric.f90, only when intraband=.true.
 }

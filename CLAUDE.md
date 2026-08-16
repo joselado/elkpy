@@ -13,8 +13,9 @@ compiled Elk binary on bulk Si/Fe (`tests/test_calculation_si.py`, `tests/test_c
 tracked in git), `docs/elk_manual.pdf`/`.txt` (official manual, plain-text version for grepping), and
 `docs/design.md` + `docs/roadmap.md` (architecture strategy and forward plan — read before adding code).
 Not implemented: symbolic k-path's disconnected-segment support (`,` breaks), the classical supercell
-phonon method (task 200, DFPT/task 205 only), scheduler-backed launchers, MPI, named `get_*` methods for
-potential/ELF volumetric plots (reachable via `run_tasks()` + `parsers.volumetric`). Check `src/elkpy/`
+phonon method (task 200, DFPT/task 205 only), scheduler-backed launchers, MPI. (Potential and
+ELF volumetric plots now DO have named methods — `get_potential()`/`get_elf()`, tasks 43/53 — as do
+the dielectric function and MOKE, tasks 121/122.) Check `src/elkpy/`
 directly rather than assuming the docs describe current code; update both as they diverge.
 
 Also implemented, as the first real entry in the Fortran patch series described below:
@@ -595,10 +596,17 @@ diamond lattice with SOC scaled 3000x does not realize FKM's single-orbital tigh
 phase; the earlier agreement was coincidental. The WCC *implementation* is not impugned (its
 axis-split algebra held, it agrees with parity on graphene, and 2D is separately validated on
 bismuthene) — the 3D six-plane sweep at a practical mesh is. This also makes
-under-convergence the leading explanation for §21's other open item, Bi$_2$Se$_3$'s
-$\nu_0=0$ against a literature $(1;000)$; that is settleable in minutes by parity (it is
-centrosymmetric) once its structure is re-sourced from COD 9011965 as a checked-in fixture —
-not done here. Physics writeup (the FKM formulas, the Kramers-pairing derivation, the
+**and that explanation is now confirmed**: bulk Bi$_2$Se$_3$, §21's other open item, gives
+$(1;000)$ by parity — $\delta(\Gamma)=-1$ and $+1$ at all seven other TRIM — the accepted
+literature answer, on the SAME ground state §21's failed WCC sweep used (gap 0.2575 vs
+0.258 eV at $\Gamma$), window-independent across seven windows including §21's own narrow
+bands-61-78 one that had reproduced the wrong answer. The delta pattern matches the known
+single-$\Gamma$ band-inversion mechanism (Zhang et al., Nature Physics 5, 438 (2009)), not
+merely the known parity. A real material, no `soc_scale`, robust 0.26 eV gap: a sharper
+confirmation of the under-convergence thesis than the cesium retraction itself. Structure
+from COD 9011965 via `spglib.standardize_cell(to_primitive=True)` (a library
+transformation, not a hand derivation); `tests/test_calculation_bi2se3_parity.py`, gated
+behind `ELKPY_RUN_SLOW_TESTS=1`. Physics writeup (the FKM formulas, the Kramers-pairing derivation, the
 even-TRIM sign immunity, why $P^2=\mathbb 1$ survives truncation, the retraction):
 `docs/design.md` §23 and `docs/physics.tex` (Part XII).
 

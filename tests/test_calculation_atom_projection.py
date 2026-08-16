@@ -164,8 +164,10 @@ def test_hbn_valence_is_nitrogen_conduction_is_boron_at_k(hbn_calculation):
     the more electronegative N's 2pz orbital, the unoccupied pi* (conduction-
     bottom) band by B's -- a sharp, sign-of-the-effect prediction (not a
     plausibility band), same spirit as the K/K' Berry-curvature-antisymmetry
-    check in test_calculation_berry.py and the quantum-metric K/K' parity
-    check in test_calculation_quantum_geometry.py. K = (1/3, 1/3, 0)."""
+    and quantum-metric K/K' parity checks in
+    test_calculation_quantum_geometry.py (test_calculation_berry.py runs on
+    bulk Si only -- it has no h-BN K/K' curvature check).
+    K = (1/3, 1/3, 0)."""
     calc, ist0, ist1 = hbn_calculation
     n_index = calc.structure.atom_index("N")
     b_index = calc.structure.atom_index("B")

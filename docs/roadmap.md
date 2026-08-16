@@ -2,7 +2,12 @@
 
 Status: Tiers 1-3 implemented and verified against a real compiled Elk binary
 (see git log; `tests/test_calculation_si.py`, `tests/test_calculation_fe.py`).
-Tiers 4-6 remain planning only. Builds on the v0 slice (`Structure`,
+Tier 4 was never "scheduled" but has largely happened anyway, one landed
+direction at a time — see the "landed for real" notes in that section, which
+now cover Berry curvature, atom projection and momentum matrix elements.
+Tier 5 (MPI, schedulers, sweep helpers) remains planning only. Tier 6: CI has
+landed (`.github/workflows/ci.yml`, including the patch-series check §8 asks
+for); the README quickstart exists; packaging polish does not. Builds on the v0 slice (`Structure`,
 `Calculation.get_energy/get_bands/get_dos`, `run_tasks` escape hatch — see
 `docs/design.md` §10) and on `docs/design.md`'s object model. "Additional
 implementations" here means broader coverage of Elk's own standard
@@ -69,10 +74,16 @@ round of additions.
    implemented with a genuinely reusable parser
    (`parsers/volumetric.py::parse_plot3d`, since all of density/potential/ELF
    3D plots share the exact same `plot3d`-family writer,
-   `src/plot3d.f90`) — potential (task 43) and ELF (task 53) are one `_run_resumed`
-   call away using the same parser but don't have named `get_*` methods yet;
-   deliberately scoped down given the size of this round, reachable via
-   `run_tasks()` today.
+   `src/plot3d.f90`). **Now complete**: `get_potential()` (task 43) and
+   `get_elf()` (task 53) landed later, sharing a `_plot3d_lines()` helper with
+   `get_density()`. Task 43 needed one shape change — it writes BOTH
+   `VCL3D.OUT` and `VXC3D.OUT` from a single run, so `get_potential()` takes a
+   `component=` selector to keep `get_density()`'s `(points, values)` contract.
+   Verified with a check sharper than a shape assertion: since `xc="PW"` is a
+   LOCAL functional, `v_xc` must be a pointwise function of `n`, and measuring
+   `v_xc / [-(3n/pi)^(1/3)]` across the cell gives 1.14-1.23 — the PW
+   correlation part on top of Dirac exchange — tying `RHO3D.OUT` and
+   `VXC3D.OUT` together through an analytic formula.
 5. **Phonons** — DONE, and simpler than expected: wrapping the DFPT method
    (task 205) rather than the classical supercell method (task 200) makes
    phonon dispersion/DOS single-shot within one `elk` invocation (confirmed

@@ -1366,9 +1366,9 @@ combines the six 0/1 results via a new pure-Python function,
 (`tests/test_wilson_gauge_invariance.py`), including that a $\nu_0$-axis disagreement
 raises rather than silently picking an answer.
 
-**The verified example: cesium on a dimerized diamond lattice — Fu & Kane's own toy
+**The test example: cesium on a dimerized diamond lattice — Fu & Kane's own toy
 model, not a proxy for it.** Rather than picking an arbitrary real material and hoping
-its published Z2 classification carries over, this feature is verified directly against
+its published Z2 classification carries over, this feature was exercised against
 the minimal lattice model Fu & Kane use to *introduce* $(\nu_0;\nu_1\nu_2\nu_3)$ in the
 first place (PRB 76, 045302 (2007), arXiv:cond-mat/0611341, their eq. 4 and §IV.3,
 confirmed directly against the arXiv HTML source, not just summarized): the diamond
@@ -1477,15 +1477,37 @@ and is left here as an open, explicitly documented question rather than silently
 dropped or chased further without the compute budget to do so properly. No test asserts
 a result for this structure.
 
-**Update (§23).** Mesh convergence is now the leading explanation. The same six-plane
-sweep was shown to be under-converged on the cesium structure above — refining one plane
-gives $z=1,0,1,0$ rather than settling — so an under-resolved crossing count at
-`nkx=8`/`nt=5` is exactly the failure mode to expect here. Bi$_2$Se$_3$ is
-inversion-symmetric, so §23's parity indicator can settle it exactly in minutes rather
-than the hours a denser WCC sweep would cost; that is the natural next step, needing only
-the structure to be re-sourced from COD 9011965 as a checked-in fixture.
+**Resolved (§23): Bi$_2$Se$_3$ is $(1;000)$ after all, and the $\nu_0=0$ above was an
+under-converged crossing count.** The parity indicator settles it exactly — 8
+diagonalisations, no mesh — and gives $\delta(\Gamma)=-1$ with $+1$ at all seven other
+TRIM, i.e. $\nu_0=1$, $\nu=(0,0,0)$, the accepted literature answer
+(`tests/test_calculation_bi2se3_parity.py`). Four things make this decisive rather than
+merely a second opinion:
+
+- **It is the same ground state.** Direct gap at $\Gamma$ of 0.2575 eV against the 0.258 eV
+  recorded above, so the difference is purely the method, not the structure, the SCF or the
+  setup.
+- **The delta pattern reproduces the known mechanism, not just the known parity.** Exactly
+  one odd TRIM, and it is the zone centre — the single $\Gamma$ band inversion of Zhang,
+  Liu, Qi, Dai, Fang & Zhang, Nature Physics 5, 438 (2009). An odd $\delta$ at a
+  $k_i=\pi$ TRIM would have given nonzero weak indices and pointed at cell orientation
+  instead.
+- **It rules out the band window**, which was this section's own leading suspicion. The
+  narrow bands-61-78 window tried above — the one that still gave the wrong WCC answer — is
+  among seven windows tested, all of which give $(1;000)$. Three of the seven return all
+  eight $\delta_i$ negated with $\nu_0$ unchanged, §23's even-TRIM sign immunity showing up
+  on a real material.
+- **It needs no `soc_scale`.** Unlike the cesium structure, this is a real material with its
+  own atomic spin-orbit coupling and a robust 0.26 eV gap.
+
+Cost: 1-3 minutes per window, against the ~45 minutes the WCC sweep took to return the
+wrong integer. The structure is now a checked-in fixture (COD 9011965 via
+`spglib.standardize_cell(to_primitive=True)` — a library transformation, not a hand
+derivation, per this project's standing rule), gated behind `ELKPY_RUN_SLOW_TESTS=1`.
 
 ## 22. Momentum/velocity matrix elements, optical selection rules, and Kubo-form quantum geometry
+
+*Physics writeup: `docs/physics.tex` Part XI.*
 
 `Calculation.get_momentum_matrix(k)` / `EigenstateSession.momentum(k)` (task 9002's
 `MOMENTUM` query, `patches/0007-momentum-matrix-elements.patch`, `elkpy_momentum` in
@@ -1733,6 +1755,8 @@ guard conditions (a window not separated from the outside, a window covering eve
 
 ## 23. Parity eigenvalues at the TRIM, and the Fu-Kane symmetry-indicator $Z_2$
 
+*Physics writeup: `docs/physics.tex` Part XII.*
+
 `Calculation.get_parity(k, ist0, ist1)` / `EigenstateSession.parity()` (task 9002's
 `PARITY` query, `patches/0008-inversion-parity-operator.patch`, `elkpy_parity` in
 `src/elkpy_eigenstates.f90`) return the inversion operator
@@ -1836,10 +1860,32 @@ exercising $Z_2$'s additivity mod 2 over gapped groups).
 
 The physical reading: a hypothetical Cs diamond lattice with SOC scaled $3000\times$ does
 not realize the phase of FKM's *single-orbital tight-binding* model, and §21's apparent
-agreement was an unconverged number landing on the hoped-for answer. What is **not**
-impugned is the WCC implementation: its algebraic axis-split consistency held, it agrees
-with the parity route on graphene, and it is separately validated in 2D on bismuthene.
-What is impugned is the six-plane 3D sweep at a practical mesh.
+agreement was an unconverged number landing on the hoped-for answer.
+
+**Which WCC calculations to distrust — a narrower statement than "3D sweeps".** A mesh
+ladder on two real 2D systems shows the method is not generally fragile:
+
+| system | occupied bands | min gap | WCC at $(n_{kx},n_t)=(8,5),(12,7),(18,9),(24,13)$ |
+|---|---|---|---|
+| graphene, `soc_scale=3000` | 6 | several eV | 1, 1, 1, 1 |
+| bismuthene | 30 | ~0.5 eV | 1, 1, 1, 1 |
+| cesium, one plane | 38 | 0.19 eV | 1, 0, 1, 0 |
+| Bi$_2$Se$_3$, six-plane sweep | 78 | 0.26 eV | wrong ($\nu_0=0$ vs the true 1) |
+
+Zero wobble across a 9$\times$ k-point range on both 2D systems, so no general convergence
+warning on WCC pumping is warranted. Note the failures are *not* separated from the
+successes by dimensionality — cesium's failure is on a single plane, which is a 2D
+computation. What the two failures share is a **large occupied manifold and a sub-0.3 eV
+gap**; the two successes have either few bands or a comfortable gap. The honest reading is
+that the largest-gap crossing count becomes under-resolved when many Wannier bands are
+packed together, not that 3D is broken.
+
+The practical recommendation, therefore, is narrow: **report each plane at two meshes and
+treat disagreement as "not converged"**, rather than trusting a single sweep — and where
+the crystal is centrosymmetric, prefer the parity indicator, which is exact.
+
+The WCC implementation itself is not impugned: its algebraic axis-split consistency held,
+and it agrees with the parity route on both graphene and bismuthene.
 
 This also bears on §21's other open item. Bulk Bi$_2$Se$_3$ gave $\nu_0=0$ against a
 literature $(1;000)$, with mesh convergence explicitly untested because it was too
@@ -1848,6 +1894,25 @@ under-converged at that scale, which is now the leading explanation there too. B
 is inversion-symmetric, so the parity indicator can settle it in minutes — not done here
 only because its structure is not a checked-in fixture (§21 records that no test asserts
 it) and would need re-sourcing from COD 9011965 first.
+
+**The individual $\delta_i$ depend on where the inversion centre sits; $\nu$ does not.**
+This looks exactly like a bug the first time it is seen, and is not one. On bismuthene the
+three $C_3$-related M points came out $-1,+1,-1$ — not equal, despite being related by a
+symmetry of the crystal. The cause is that Elk chooses the inversion centre itself
+(`findsymcrys.f90` shifts the basis to put it at the origin) and here picked the Bi-Bi
+**bond midpoint**, which is displaced from the $C_3$ axis by $t=(0,\tfrac12,0)$. A centre
+offset by $t$ multiplies $\delta(\mathbf k)$ by $\big(e^{2\pi i\,\mathbf k\cdot2t}\big)^{N}$
+with $N$ the number of occupied Kramers pairs — so the asymmetry appears only for **odd**
+$N$ (here $N=15$). Transporting the centre onto the axis restores
+$\delta(\Gamma)=-1$ with all three $\delta(M)=+1$: $C_3$-symmetric, one odd TRIM at
+$\Gamma$, matching the $\Gamma$-centred s-p band inversion bismuthene is documented to
+have. `SYMCRYS.OUT` confirms both $C_3$ elements carry non-lattice translations.
+
+Crucially the invariant is unaffected — both assignments give $\nu=1$, since the phases
+enter an even number of TRIM products. So `deltas` should be read as *a* valid set for
+Elk's chosen origin, not as a canonical per-TRIM fingerprint, and only the combination
+is physical. `tests/test_calculation_parity.py` deliberately does not assert $C_3$
+uniformity of the deltas for this reason.
 
 **A third guard, found the hard way.** A window boundary sitting *inside* a band group
 passes every check above — Hermitian, $\pm1$ eigenvalues, even Kramers counts — while
