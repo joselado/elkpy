@@ -218,3 +218,44 @@ def parse_angular_momentum_response(tokens):
     return values.reshape(nst, nst, ncomp, nl, natmtot, order="F").transpose(
         4, 3, 2, 0, 1
     )
+
+
+def parse_symlist_response(tokens):
+    """Parse a SYMLIST response: nsymcrys, nspinor, then per operation its
+    index, a zero-translation flag, three rows of the integer lattice
+    rotation matrix, and the fractional translation.
+
+    Returns (nspinor, ops) with ops a list of dicts
+    {"isym": 1-based index, "rotation": (3,3) int array in LATTICE
+    coordinates, "translation": (3,) float, "symmorphic": bool}.
+
+    The rotation is Elk's own `symlat(:,:,lsplsymc(isym))` -- the spatial
+    part of the space-group element, in lattice coordinates, so it is an
+    integer matrix. Working in lattice coordinates is what lets the Python
+    side test R.k == k exactly, with no tolerance on a Cartesian rotation.
+    """
+    pos = 0
+    (nsymcrys, nspinor), pos = _take(tokens, pos, 2, int)
+    ops = []
+    for _ in range(nsymcrys):
+        (isym, tv0), pos = _take(tokens, pos, 2, int)
+        rows, pos = _take(tokens, pos, 9, int)
+        trans, pos = _take(tokens, pos, 3, float)
+        ops.append({
+            "isym": isym,
+            "rotation": np.array(rows, dtype=int).reshape(3, 3),
+            "translation": np.array(trans),
+            "symmorphic": bool(tv0),
+        })
+    return nspinor, ops
+
+
+def parse_symmetry_response(tokens):
+    """Parse a SYMMETRY response: identical in shape to a PARITY response
+    (nst, nstsv, nstsv eigenvalues, then the nst x nst operator matrix as
+    real/imag pairs, column-major).
+
+    Returns (energies, smat) with smat[a, b] = <psi_a|O|psi_b> for the
+    requested crystal symmetry -- see EigenstateSession.symmetry_operator().
+    """
+    return parse_parity_response(tokens)

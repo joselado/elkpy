@@ -2951,3 +2951,129 @@ published Ni Kerr spectrum would pin it empirically.
 Not verified: the absolute spectrum against experiment or published DFT --
 that needs a k-mesh well beyond what these tests can afford, and the coarse
 mesh inflates peak magnitudes as described above.
+
+## 28. Rotation-eigenvalue symmetry indicators
+
+*Physics writeup: `docs/physics.tex` Part XVI.*
+
+The general symmetry operator at a fixed $k$-point, and the
+Benalcazar-Li-Hughes corner-charge indices built on it — the same
+"skip the intermediate model" idea as §13/§20/§23, applied to the pipeline
+DFT → `irvsp`/`vasp2trace` → Bilbao tables.
+
+**The primitive** (`patches/0010`, `elkpy_symop`, session queries `SYMLIST`
+and `SYMMETRY`): $S_{mn}=\langle\psi_m|\hat O_{\rm isym}|\psi_n\rangle$ for
+any space-group element that fixes $\mathbf k$, generalizing §23's inversion.
+`SYMLIST` exposes Elk's own space group (integer lattice rotations, so
+$R\mathbf k\equiv\mathbf k$ is an exact integer test, not a Cartesian
+tolerance). Two restrictions are enforced in Fortran, not merely documented,
+because violating either returns a plausible matrix that unitarity and
+$\hat O^n=\mathbb 1$ would both pass:
+
+- **`nspinor=1` only.** A spatial rotation on a spinor also needs the SU(2)
+  spin rotation, which upstream's first-variational transformation never
+  applies. Inversion escaped this by acting trivially on spin; a rotation
+  does not. BLH's indices are spinless anyway.
+- **zero translation only.** For a glide or screw, $\hat O^n$ is a
+  $k$-dependent phase times unity, so a caller binning eigenvalues into
+  $n$-th roots of unity would silently misread it.
+
+**The indices** (Benalcazar, Li & Hughes, PRB 99, 245151 (2019),
+arXiv:1809.02142, Eqs. 3, 4, 14; general framework: Po, Vishwanath &
+Watanabe, Nat. Commun. 8, 50 (2017), arXiv:1703.00911). With
+$\Pi_p^{(n)}=e^{2\pi i(p-1)/n}$ and $\#\Pi_p^{(n)}$ the number of occupied
+bands carrying that eigenvalue,
+
+$$[\Pi_p^{(n)}]=\#\Pi_p^{(n)}-\#\Gamma_p^{(n)},\qquad Q^{(3)}_{\rm corner}=\tfrac e3[K_2^{(3)}]\ \mathrm{mod}\ e$$
+
+with the C₂/C₄/C₆ index sets and charge formulas in
+`parsers/indicators.py`. A nonzero $Q$ signals an obstructed atomic limit:
+occupied Wannier centers sitting at a Wyckoff position other than the
+rotation centre.
+
+### Two practical findings, both load-bearing
+
+**`tshift=False` is mandatory.** Elk relocates the origin by default, and
+when a crystal has inversion it puts the *inversion centre* there. For a
+honeycomb that is the bond midpoint — a different point from the C₃ axis —
+so every rotation acquires a fractional translation and becomes
+non-symmorphic in Elk's setting, at which point `elkpy_symop` refuses them
+all. Measured directly on graphene: with the default shift, 8 of 24
+operations are symmorphic and no C₃ survives; with
+`extra_blocks={"tshift": [False]}` all 24 are symmorphic and C₃ is
+available. Since $Q$ is defined *relative to a chosen rotation centre*, this
+is not merely a technicality — it is how the centre gets chosen.
+
+**Graphene cannot be used for the K-point indices.** Without spin-orbit
+coupling its valence and conduction bands touch at K (gap measured
+$4.3\times10^{-7}$ Ha — the Dirac point), so the occupied manifold is not a
+gapped group there and the indices are undefined.
+`parsers.symmetry.check_window_gap` refuses it, correctly. h-BN, gapped at K
+by the B/N sublattice asymmetry, is the usable C₃ test case.
+
+### Status: the operator is verified, the corner charge is not
+
+Verified against a real compiled binary on h-BN (`tshift=False`, hexagon
+centre at the origin, 4 occupied bands): all 12 crystal symmetries
+symmorphic; the C₃ operator unitary and $\hat O^3=\mathbb 1$ to
+$\sim10^{-3}$ (the `genolpq` truncation floor of §14); eigenvalue counts
+summing to the band count at every point; and $[\Gamma_p]=0$ by
+construction. Measured counts: $\Gamma\,[2,1,1]$, $K\,[1,1,2]$,
+$K'\,[1,2,1]$.
+
+**What is not settled is the convention, and therefore the charge.** K and
+K′ are time-reversal partners, so their rotation eigenvalues are complex
+conjugates — which exchanges the $p=2$ and $p=3$ bins. Since
+$Q^{(3)}=\frac e3[K_2^{(3)}]$ reads only one bin, the answer depends on how
+the generator ($R$ versus $R^{-1}$) is paired with the corner ($K$ versus
+$K'$): the same data gives $Q=0$ at K and $Q=e/3$ at K′.
+
+This is the direction-convention ambiguity §23 was able to defer, because
+inversion is its own inverse. Two natural discriminators were tried and
+**both fail**:
+
+- $D(9)^2=D(3)$ holds under *either* convention, since $C_3$ is abelian and
+  inversion-of-argument is then still a homomorphism.
+- The $C_{2z}=\hat I\cdot\sigma_h$ identity against §23's parity cannot help,
+  because order-2 operations are their own inverse — precisely why the
+  ambiguity did not arise before.
+
+So no corner charge is asserted here, and no test asserts one. The physics
+expectation for h-BN is an obstructed atomic limit (the occupied $\pi$ band
+is N-centred, at a Wyckoff position away from the hexagon centre), which
+favours $e/3$ over $0$ — but "the expected answer is nonzero, and one of our
+two candidate conventions gives a nonzero number" is not evidence, and this
+project has been bitten by exactly that reasoning before (§21's cesium).
+
+**The concrete way to settle it**, not done here: use §19's $L_z$ operator.
+A state's $C_n$ eigenvalue is $e^{-2\pi i m/n}$ with $m$ its angular momentum
+about the axis, so an independently measured $\langle L_z\rangle$ fixes the
+sense of rotation and hence the generator. That is cleanest for an atom
+sitting *on* the rotation axis, so it needs a test structure with one —
+h-BN has none. Alternatively, a system with an independently known nonzero
+corner charge would pin the pairing directly.
+
+### How to use in code
+
+```python
+calc = Structure(AVEC, SPECIES).get_calculation(
+    "run", xc="PW", ngridk=(6, 6, 1), rgkmax=7.0,
+    extra_blocks={"tshift": [False]},   # keep YOUR origin: it is the rotation centre
+)
+calc.get_energy()
+
+from elkpy.parsers import indicators, symmetry
+
+with calc.eigenstate_session() as session:
+    ops = session.symmetries()                    # no diagonalisation
+    c3 = indicators.find_rotation(ops, 3)
+    counts = {}
+    for name, k in [("Gamma", (0, 0, 0)), ("K", (1/3, 1/3, 0))]:
+        assert indicators.fixes_kpoint(c3, k)
+        r = session.symmetry_operator(k, c3["isym"], ist0, ist1)
+        symmetry.check_window_gap(r.energies, ist0, ist1)
+        counts[name] = indicators.eigenvalue_counts(r.smat, 3)
+
+chi = indicators.relative_indices(counts["K"], counts["Gamma"])
+indicators.corner_charge({"K": chi}, 3)   # read the convention caveat above
+```

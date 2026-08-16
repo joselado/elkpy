@@ -1,0 +1,312 @@
+--- a/src/elkpy_eigenstates.f90
++++ b/src/elkpy_eigenstates.f90
+@@ -874,6 +874,222 @@
+ !EOC
+ 
+ !BOP
++! !ROUTINE: elkpy_symop
++! !INTERFACE:
++subroutine elkpy_symop(vpl,isym,nst,idx,evalsv_out,smat,ierr)
++! !USES:
++use modmain
++! !DESCRIPTION:
++!   The matrix $S_{mn}=\langle\psi_m|\hat O_{\rm isym}|\psi_n\rangle$ of an
++!   arbitrary crystal symmetry operation at a $k$-point that the operation
++!   leaves invariant, plus that diagonalisation's eigenvalues -- the
++!   generalisation of {\tt elkpy\_parity} (patch 0008) from inversion to
++!   any element of the space group.
++!
++!   Restricted to a $k$-point with $R\mathbf k\equiv\mathbf k$ modulo a
++!   reciprocal lattice vector; elsewhere the operation maps the state to a
++!   different point and no such matrix exists. Detected, as in
++!   {\tt elkpy\_parity}, as a rotated $G+k$ vector with no partner in the
++!   same basis.
++!
++!   Two deliberate restrictions, both enforced here rather than trusted to
++!   the caller, because violating either yields a plausible but wrong
++!   matrix that unitarity and $\hat O^n=\mathbb 1$ would not catch:
++!
++!   \begin{itemize}
++!   \item {\tt nspinor}=1 only ({\tt ierr}=3). A spatial rotation acting on
++!    a two-component spinor must be accompanied by the SU(2) spin rotation
++!    ({\tt lspnsymc}), which upstream {\tt getevecfv}'s transformation --
++!    lifted here -- never applies, being purely first-variational and
++!    therefore spin-blind. Inversion escaped this because it acts trivially
++!    on spin; a rotation does not. The symmetry-indicator invariants this
++!    feeds (docs/design.md \S28) are formulated for spinless bands anyway,
++!    so this is a scope choice rather than a compromise.
++!   \item zero translation only ({\tt ierr}=4). For a glide or screw with
++!    fractional translation $\mathbf t$, the returned matrix satisfies
++!    $\hat O^n=e^{-i\mathbf k\cdot n\mathbf t}\mathbb 1$ rather than
++!    $\mathbb 1$, so its eigenvalues are roots of unity times a
++!    $k$-dependent phase. That is a perfectly good object, but a caller
++!    binning eigenvalues into $n$-th roots of unity would silently misread
++!    it, so it is refused until there is a use for it.
++!   \end{itemize}
++!
++!   Everything else follows {\tt elkpy\_parity} exactly: a fresh
++!   on-the-fly diagonalisation, upstream {\tt getevecfv.f90}'s
++!   transformation of the first-variational coefficients (APW G-vector
++!   remap plus {\tt rotzflm} on the local orbitals), then
++!   {\tt genwfsv}+{\tt genolpq} at $q=0$ for the overlap, which is legal
++!   because $R\mathbf k\equiv\mathbf k$ keeps the rotated coefficients in
++!   the SAME LAPW basis.
++!
++!   {\bf Direction convention.} Upstream's transformation is a passive one
++!   built from {\tt isymlat(lsplsymc(isym))}, the INVERSE spatial rotation.
++!   Inversion is its own inverse so patch 0008 could ignore this; a
++!   3-fold rotation cannot, and getting it backwards conjugates every
++!   eigenvalue -- exchanging the counts of $e^{2\pi i/3}$ and
++!   $e^{4\pi i/3}$, which flips the resulting invariants while leaving
++!   unitarity and $\hat O^3=\mathbb 1$ untouched. The convention is
++!   therefore pinned empirically, not by reading this comment: see
++!   docs/design.md \S28 and the $C_{2z}=\hat I\cdot\sigma_h$ test on
++!   graphene in {\tt tests/test\_calculation\_indicators.py}.
++!
++!   {\tt ierr}: 0 success; 1 {\tt isym} out of range; 2 {\tt vpl} not
++!   invariant under the operation; 3 {\tt nspinor}$\neq$1; 4 non-zero
++!   translation.
++!
++! !REVISION HISTORY:
++!   Created 2026 (elkpy)
++!EOP
++!BOC
++implicit none
++! arguments
++real(8), intent(in) :: vpl(3)
++integer, intent(in) :: isym,nst,idx(*)
++real(8), intent(out) :: evalsv_out(nstsv)
++complex(8), intent(out) :: smat(nst,nst)
++integer, intent(out) :: ierr
++! local variables
++integer ispn,nmatp,lspl,ilspl,is,ia,ias,ja,jas,ilo,l,lm,i,j,a,b
++integer igk,igp,nmatpp
++real(8) vl(3),vc(3),si(3,3),v(3),t1
++complex(8) z1
++! automatic arrays
++integer ngp(nspnfv),igpig(ngkmax,nspnfv)
++real(8) vgpl(3,ngkmax,nspnfv),vgpc(3,ngkmax),gpc(ngkmax)
++real(8) evalfv(nstfv,nspnfv)
++logical done(ngkmax)
++! allocatable arrays
++complex(8), allocatable :: sfacgp(:,:),apwalm(:,:,:,:,:)
++complex(8), allocatable :: evecfv(:,:,:),evecfvr(:,:,:),evecsv(:,:),evecfv_(:,:)
++complex(8), allocatable :: wfmt1(:,:,:,:),wfir1(:,:,:)
++complex(8), allocatable :: wfmt2(:,:,:,:),wfgp2(:,:,:)
++complex(8), allocatable :: expqmt(:,:),oq(:,:)
++ierr=0
++if (spinsprl) then
++  write(*,*)
++  write(*,'("Error(elkpy_symop): spin-spirals not supported by the elkpy &
++   &symmetry task")')
++  write(*,*)
++  stop
++end if
++if ((isym < 1).or.(isym > nsymcrys)) then
++  ierr=1
++  return
++end if
++! a spatial rotation on a spinor needs the SU(2) factor this does not apply
++if (nspinor /= 1) then
++  ierr=3
++  return
++end if
++! glide/screw operations return roots of unity times a k-dependent phase
++if (.not.tv0symc(isym)) then
++  ierr=4
++  return
++end if
++lspl=lsplsymc(isym)
++ilspl=isymlat(lspl)
++si(1:3,1:3)=dble(symlat(1:3,1:3,ilspl))
++allocate(sfacgp(ngkmax,natmtot))
++allocate(apwalm(ngkmax,apwordmax,lmmaxapw,natmtot,nspnfv))
++allocate(evecfv(nmatmax,nstfv,nspnfv),evecfvr(nmatmax,nstfv,nspnfv))
++allocate(evecsv(nstsv,nstsv))
++do ispn=1,nspnfv
++  vl(1:3)=vpl(1:3)
++  vc(1:3)=bvec(1:3,1)*vpl(1)+bvec(1:3,2)*vpl(2)+bvec(1:3,3)*vpl(3)
++  call gengkvec(ngvc,ivg,vgc,vl,vc,gkmax,ngkmax,ngp(ispn),igpig(:,ispn), &
++   vgpl(:,:,ispn),vgpc,gpc)
++  call gensfacgp(ngp(ispn),vgpc,ngkmax,sfacgp)
++  call match(ngp(ispn),vgpc,gpc,sfacgp,apwalm(:,:,:,:,ispn))
++  nmatp=ngp(ispn)+nlotot
++  call eveqnfv(nmatp,ngp(ispn),igpig(:,ispn),vc,vgpc,apwalm(:,:,:,:,ispn), &
++   evalfv(:,ispn),evecfv(:,:,ispn))
++end do
++deallocate(sfacgp)
++call eveqnsv(ngp(1),igpig(:,1),vgpc,apwalm,evalfv,evecfv,evalsv_out,evecsv)
++! apply the spatial operation to the first-variational coefficients, exactly
++! as upstream getevecfv.f90 does (translation branch omitted: tv0symc above)
++allocate(evecfv_(nmatmax,nstfv))
++evecfvr(:,:,:)=zzero
++do ispn=1,nspnfv
++  evecfv_(1:ngp(ispn),1:nstfv)=evecfv(1:ngp(ispn),1:nstfv,ispn)
++  done(1:ngp(ispn))=.false.
++  i=1
++  do igk=1,ngp(ispn)
++    call r3mtv(si,vgpl(:,igk,ispn),v)
++    j=0
++    do igp=i,ngp(ispn)
++      if (done(igp)) cycle
++      if (j == 0) j=igp
++      t1=abs(v(1)-vgpl(1,igp,ispn)) &
++        +abs(v(2)-vgpl(2,igp,ispn)) &
++        +abs(v(3)-vgpl(3,igp,ispn))
++      if (t1 < epslat) then
++        evecfvr(igp,1:nstfv,ispn)=evecfv_(igk,1:nstfv)
++        done(igp)=.true.
++        if (igp == j) j=j+1
++        exit
++      end if
++    end do
++    if (j > 0) i=j
++  end do
++! every rotated G+k must land on another of the SAME basis -- true only if
++! R k = k modulo a reciprocal lattice vector
++  if (.not.all(done(1:ngp(ispn)))) then
++    ierr=2
++    deallocate(apwalm,evecfv,evecfvr,evecsv,evecfv_)
++    return
++  end if
++end do
++if (nlotot > 0) then
++  call r3mtv(si,vpl,v)
++  do ispn=1,nspnfv
++    nmatpp=ngp(ispn)+nlotot
++    do i=ngp(ispn)+1,nmatpp
++      evecfv_(i,1:nstfv)=evecfv(i,1:nstfv,ispn)
++    end do
++    do is=1,nspecies
++      do ia=1,natoms(is)
++        ias=idxas(ia,is)
++        ja=ieqatom(ia,is,isym)
++        jas=idxas(ja,is)
++        t1=-twopi*dot_product(vpl(1:3),atposl(1:3,ja,is))
++        z1=cmplx(cos(t1),sin(t1),8)
++        t1=twopi*dot_product(v(1:3),atposl(1:3,ia,is))
++        z1=z1*cmplx(cos(t1),sin(t1),8)
++        do ilo=1,nlorb(is)
++          l=lorbl(ilo,is)
++          lm=l**2+1
++          i=ngp(ispn)+idxlo(lm,ilo,ias)
++          j=ngp(ispn)+idxlo(lm,ilo,jas)
++          call rotzflm(symlatc(:,:,lspl),l,l,lolmmax,nstfv,nmatmax, &
++           evecfv_(j,1),evecfvr(i,1,ispn))
++          evecfvr(i:i+2*l,1:nstfv,ispn)=z1*evecfvr(i:i+2*l,1:nstfv,ispn)
++        end do
++      end do
++    end do
++  end do
++end if
++deallocate(evecfv_)
++allocate(wfmt1(npcmtmax,natmtot,nspinor,nst),wfir1(ngtc,nspinor,nst))
++allocate(wfmt2(npcmtmax,natmtot,nspinor,nst),wfgp2(ngkmax,nspinor,nst))
++call genwfsv(.false.,.false.,nst,idx,ngdgc,igfc,ngp,igpig,apwalm,evecfv, &
++ evecsv,wfmt1,ngtc,wfir1)
++call genwfsv(.false.,.true.,nst,idx,ngdgc,igfc,ngp,igpig,apwalm,evecfvr, &
++ evecsv,wfmt2,ngkmax,wfgp2)
++deallocate(apwalm,evecfv,evecfvr,evecsv)
++allocate(expqmt(npcmtmax,natmtot),oq(nst,nst))
++expqmt(:,:)=zone
++call genolpq(nst,expqmt,ngp,igpig,wfmt1,wfir1,wfmt2,wfgp2,oq)
++do b=1,nst
++  do a=1,nst
++    smat(a,b)=conjg(oq(b,a))
++  end do
++end do
++deallocate(wfmt1,wfir1,wfmt2,wfgp2,expqmt,oq)
++end subroutine
++!EOC
++
++!BOP
+ ! !ROUTINE: elkpy_eigenstate_session
+ ! !INTERFACE:
+ subroutine elkpy_eigenstate_session
+@@ -996,7 +1212,7 @@
+ complex(8), allocatable :: expqmt(:,:),oq(:,:),moverlap(:,:)
+ complex(8), allocatable :: pmat(:,:,:),opmat(:,:,:,:),lmat(:,:,:,:,:)
+ complex(8), allocatable :: vmat(:,:,:),qmat(:,:)
+-integer lsel,comp,ierrp
++integer lsel,comp,ierrp,isymq,lspq,irow
+ if (spinsprl) then
+   write(*,*)
+   write(*,'("Error(elkpy_eigenstate_session): spin-spirals not supported by &
+@@ -1264,6 +1480,77 @@
+       call flush(6)
+       deallocate(idx,qmat)
+       cycle
++    end if
++    write(*,*) nst,nstsv
++    do a=1,nstsv
++      write(*,*) evalsv_q(a)
++    end do
++    do b=1,nst
++      do a=1,nst
++        write(*,*) dble(qmat(a,b)),aimag(qmat(a,b))
++      end do
++    end do
++    write(*,'("ELKPY_SESSION_END")')
++    call flush(6)
++    deallocate(idx,qmat)
++
++  case('SYMLIST')
++! every crystal symmetry: its 3x3 integer lattice rotation (the spatial part,
++! via lsplsymc), its fractional translation, and whether that translation is
++! zero -- enough for the Python side to identify a C_n rotation and its axis
++! without duplicating Elk's space-group analysis
++    write(*,*) nsymcrys,nspinor
++    do a=1,nsymcrys
++      lspq=lsplsymc(a)
++      write(*,*) a,merge(1,0,tv0symc(a))
++      do irow=1,3
++        write(*,*) symlat(irow,1,lspq),symlat(irow,2,lspq),symlat(irow,3,lspq)
++      end do
++      write(*,*) vtlsymc(1,a),vtlsymc(2,a),vtlsymc(3,a)
++    end do
++    write(*,'("ELKPY_SESSION_END")')
++    call flush(6)
++
++  case('SYMMETRY')
++    read(line,*,iostat=ios) cmd,isymq,vpl(1),vpl(2),vpl(3),ist0,ist1
++    if (ios /= 0) then
++      write(*,'("ELKPY_SESSION_ERROR malformed SYMMETRY command")')
++      call flush(6)
++      cycle
++    end if
++    if ((ist0 < 1).or.(ist1 > nstsv).or.(ist1 < ist0)) then
++      write(*,'("ELKPY_SESSION_ERROR invalid band window (ist0,ist1,nstsv) : ", &
++       &3I8)') ist0,ist1,nstsv
++      call flush(6)
++      cycle
++    end if
++    nst=ist1-ist0+1
++    allocate(idx(nst))
++    do a=1,nst
++      idx(a)=ist0+a-1
++    end do
++    allocate(qmat(nst,nst))
++    call elkpy_symop(vpl,isymq,nst,idx,evalsv_q,qmat,ierrp)
++    if (ierrp /= 0) then
++      select case(ierrp)
++      case(1)
++        write(*,'("ELKPY_SESSION_ERROR symmetry index out of range 1..",I0)') &
++         nsymcrys
++      case(2)
++        write(*,'("ELKPY_SESSION_ERROR k-point is not invariant under this &
++         &symmetry: R.k must equal k modulo a reciprocal lattice vector")')
++      case(3)
++        write(*,'("ELKPY_SESSION_ERROR symmetry operators require nspinor=1: &
++         &a spatial rotation on a spinor also needs the SU(2) spin rotation, &
++         &which is not implemented (see docs/design.md 28)")')
++      case(4)
++        write(*,'("ELKPY_SESSION_ERROR this symmetry has a non-zero &
++         &translation (glide/screw); its n-th power is a phase times unity, &
++         &not unity, so it is refused rather than silently misread")')
++      end select
++      call flush(6)
++      deallocate(idx,qmat)
++      cycle
+     end if
+     write(*,*) nst,nstsv
+     do a=1,nstsv

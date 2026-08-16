@@ -664,6 +664,48 @@ and wants its own investigation. Relatedly, the `sum(occ > 0.5)` idiom used by s
 fixtures reads the count at the FIRST k-point and is only valid when the filling is
 k-independent.
 
+Also implemented, as patch 0010: **rotation-eigenvalue symmetry indicators** (§28) —
+`SYMLIST` and `SYMMETRY` queries giving Elk's crystal symmetries and the operator
+$\langle\psi_m|\hat O_{\rm isym}|\psi_n\rangle$ at any k-point the operation fixes,
+generalizing §23's inversion (`elkpy_symop`), plus `parsers/indicators.py` with the
+Benalcazar-Li-Hughes corner-charge indices (PRB 99, 245151 (2019), arXiv:1809.02142
+Eqs. 3/4/14; general framework Po-Vishwanath-Watanabe, arXiv:1703.00911). Same
+"skip the intermediate model" idea as §13/§20/§23, aimed at the
+DFT→irvsp/vasp2trace→Bilbao pipeline. Two restrictions enforced in FORTRAN, not just
+documented, since violating either returns a plausible matrix that unitarity and
+$\hat O^n=\mathbb 1$ both pass: `nspinor=1` (a rotation on a spinor needs the SU(2)
+factor upstream's first-variational transformation never applies — inversion escaped this
+by acting trivially on spin) and zero translation (a glide/screw gives $\hat O^n$ = phase
+× unity).
+
+**Two practical findings.** `tshift=False` is MANDATORY: Elk relocates the origin by
+default and, when the crystal has inversion, puts the *inversion centre* there — for a
+honeycomb that is the bond midpoint, not the $C_3$ axis, so every rotation becomes
+non-symmorphic and is refused. Measured on graphene: 8/24 symmorphic with the default
+shift and no $C_3$ available; 24/24 with `tshift=False`. Since $Q$ is defined relative to
+a chosen rotation centre, this is how the centre gets chosen, not a technicality. And
+graphene is unusable for the K-point indices at all without SOC — its bands touch at K
+(gap $4.3\times10^{-7}$ Ha, the Dirac point), so `check_window_gap` correctly refuses;
+h-BN is the usable $C_3$ case.
+
+**Status: the operator is verified, the corner charge is NOT, and no test asserts one.**
+On h-BN: all 12 symmetries symmorphic, $C_3$ unitary with $\hat O^3=\mathbb 1$ to
+~1e-3 (§14's genolpq floor), counts summing correctly, $[\Gamma_p]=0$ by construction,
+measured $\Gamma[2,1,1]$, $K[1,1,2]$, $K'[1,2,1]$. But K and K′ are time-reversal
+partners, so their eigenvalues are complex conjugates — exchanging the $p=2$ and $p=3$
+bins that $Q^{(3)}=\frac e3[K_2^{(3)}]$ distinguishes. The same data therefore gives
+$Q=0$ at K and $Q=e/3$ at K′, depending on how the generator ($R$ vs $R^{-1}$) pairs with
+the corner. This is the direction ambiguity §23 could defer because inversion is its own
+inverse. TWO discriminators were tried and both FAIL: $D(9)^2=D(3)$ holds under either
+convention ($C_3$ is abelian, so inversion-of-argument is still a homomorphism), and the
+$C_{2z}=\hat I\sigma_h$ identity against §23's parity cannot help because order-2
+operations are self-inverse. The h-BN physics expectation (obstructed atomic limit, the
+occupied $\pi$ band being N-centred) favours $e/3$ — but "the expected answer is nonzero
+and one of our conventions is nonzero" is not evidence, and §21's cesium is exactly what
+that reasoning costs. **The concrete fix, not done**: §19's $L_z$ pins the sense of
+rotation, since a $C_n$ eigenvalue is $e^{-2\pi im/n}$ — cleanest with an atom ON the
+axis, which h-BN lacks.
+
 ## Architecture
 
 - `src/elkpy/structure.py` — `Structure`: lattice vectors (`avec`, Bohr) + species, each atom either a

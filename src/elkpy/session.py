@@ -20,6 +20,8 @@ from .parsers.eigenstates import (
     parse_momentum_response,
     parse_orbital_projection_response,
     parse_parity_response,
+    parse_symlist_response,
+    parse_symmetry_response,
     parse_overlap_response,
     parse_projection_response,
 )
@@ -42,6 +44,7 @@ OrbitalProjection = namedtuple("OrbitalProjection", ["k", "matrices"])
 SpinOperator = namedtuple("SpinOperator", ["k", "sx", "sy", "sz"])
 Momentum = namedtuple("Momentum", ["k", "energies", "pmat", "evecsv"])
 Parity = namedtuple("Parity", ["k", "energies", "pmat"])
+SymmetryOperator = namedtuple("SymmetryOperator", ["k", "isym", "energies", "smat"])
 AngularMomentum = namedtuple(
     "AngularMomentum", ["k", "lx", "ly", "lz", "lx_orbital", "ly_orbital", "lz_orbital"]
 )
@@ -484,6 +487,59 @@ class EigenstateSession:
         tokens = self._read_until_sentinel()
         energies, pmat = parse_parity_response(tokens)
         return Parity(k=k, energies=energies, pmat=pmat)
+
+    def symmetries(self):
+        """Every crystal symmetry Elk found, as a list of dicts
+        {"isym", "rotation" (3x3 integer, LATTICE coordinates),
+        "translation", "symmorphic"} -- see
+        parsers.eigenstates.parse_symlist_response.
+
+        Cheap: no diagonalisation, just Elk's already-computed space group.
+        Use it to find the operation you want (e.g. the C_3 rotation) and
+        which k-points it leaves invariant, then pass its `isym` to
+        symmetry_operator(). Working in lattice coordinates means R.k == k
+        is an exact integer test rather than a tolerance on a Cartesian
+        rotation.
+        """
+        self._send("SYMLIST")
+        tokens = self._read_until_sentinel()
+        nspinor, ops = parse_symlist_response(tokens)
+        self._symlist_nspinor = nspinor
+        return ops
+
+    def symmetry_operator(self, k, isym, ist0, ist1):
+        """The matrix <psi_m|O_isym|psi_n> of crystal symmetry `isym` over
+        the band window [ist0, ist1], plus that diagonalisation's
+        eigenvalues -- the generalisation of parity() from inversion to any
+        space-group element. See docs/design.md #28.
+
+        `k` must be invariant under the operation (R.k == k modulo a
+        reciprocal lattice vector); use symmetries() to find which
+        operations fix a given k.
+
+        Two restrictions, both enforced in Fortran rather than trusted here,
+        because violating either returns a plausible but wrong matrix that
+        unitarity and O^n = 1 would not catch:
+
+          * nspinor must be 1. A spatial rotation on a spinor also needs the
+            SU(2) spin rotation, which upstream's first-variational
+            transformation never applies. Inversion escaped this (it acts
+            trivially on spin); a rotation does not.
+          * the operation must have zero translation. For a glide or screw,
+            O^n is a k-dependent phase times unity rather than unity, so a
+            caller binning eigenvalues into n-th roots of unity would
+            misread it.
+
+        Returns a SymmetryOperator(k, isym, energies, smat) namedtuple.
+        """
+        k = tuple(float(x) for x in k)
+        self._send(
+            f"SYMMETRY {int(isym)} {_fmt(k[0])} {_fmt(k[1])} {_fmt(k[2])} "
+            f"{int(ist0)} {int(ist1)}"
+        )
+        tokens = self._read_until_sentinel()
+        energies, smat = parse_symmetry_response(tokens)
+        return SymmetryOperator(k=k, isym=int(isym), energies=energies, smat=smat)
 
     def spin_operator(self, k, ist0, ist1):
         """The spin operators S_x, S_y, S_z (hbar=1, so eigenvalues +-1/2

@@ -149,6 +149,57 @@ $k$-point, so a small additive Fortran extension
 (`patches/0004-atom-projection.patch`) was needed, reusing `wfmtsv` itself
 unchanged.
 
+## Tier 4b — Quantities usually reached through an intermediate model
+
+The through-line of §13-§28 is doing directly from DFT what is normally done
+by fitting a Wannier tight-binding model first and post-processing that. Two
+further candidates in that spirit, neither started:
+
+1. **Boltzmann transport coefficients from exact velocities.**
+   `sigma_ab/tau = e^2 int v_a v_b (-df/de)`, with the Seebeck and electronic
+   thermal conductivity following from the same integrand weighted by
+   `(eps - mu)`. The intermediate this replaces is BoltzTraP/BoltzTraP2,
+   which Fourier-interpolates `eps(k)` and differentiates the *interpolant*
+   to get velocities — an approximation with its own parameters, and one
+   that misbehaves near band crossings. elkpy already exports exact
+   velocities: the diagonal of the momentum matrix (§22), verified against
+   the Hellmann-Feynman identity. So this needs **no new Fortran**, only the
+   diagonal of an existing query.
+
+   It has an unusually good validation anchor already in the tree: Elk's own
+   plasma frequency (task 121 with `intraband=.true.`, `PLASMA_ij.OUT`) is
+   `sum_k sum_n w_k |p^i_nn|^2 delta(eps_n - E_F)` — the same Fermi-surface
+   velocity integral, computed independently in Fortran. Beyond that,
+   Wiedemann-Franz (`L -> pi^2 k_B^2 / 3 e^2` in the degenerate limit), the
+   Mott relation, and Onsager symmetry are all free internal checks.
+
+   **The honest catch**: transport integrals converge slowly with k-mesh —
+   which is *precisely why* people interpolate. This will be slower than
+   BoltzTraP, and the deliverable must include a mesh-convergence study
+   rather than a single number. Its value is the absence of interpolation
+   error, and the ability to check an interpolated result. Mitigation: the
+   integrand is confined to a thin shell around `E_F`, so adaptive
+   refinement there pays for itself; start on a 2-atom cell or a 2D
+   material.
+
+2. **Metallic anomalous Hall conductivity.** For an insulator this is the
+   Chern number, which §13 already does. For a *metal* it is a Fermi-sea
+   integral of Berry curvature, is not quantized, and is the canonical
+   Wannier-interpolation task precisely because the curvature is spiky near
+   avoided crossings. elkpy has the curvature at arbitrary k by two
+   independent routes (§13's Wilson loop, §22's Kubo sum), so the physics is
+   in place and only the integration is missing.
+
+   **Cost is the real risk here**, more than for transport: resolving those
+   spikes is what forces the 10^6-10^8 interpolated k-points, and every
+   elkpy k-point is a fresh diagonalisation rather than a model evaluation.
+   Worth attempting only with adaptive refinement driven by the curvature
+   itself, and probably only in 2D, where the mesh is n^2 rather than n^3.
+
+Also on this list, and partly built: §28's symmetry indicators are the same
+idea applied to topological classification, replacing
+DFT -> irvsp/vasp2trace -> Bilbao tables.
+
 ## Tier 5 — Scale & execution
 
 1. **MPI-enabled build variant.** `LocalLauncher` now correctly refuses
