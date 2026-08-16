@@ -27,6 +27,12 @@ Four families live here:
     path for a quantity Calculation.get_effective_mass() (Elk task 25)
     already computes by finite-differencing EIGENVALUES.
 
+`kubo_sum()`, the shared sum-over-states core, is public rather than
+private because parsers/spin_hall.py reuses it with the spin current
+operator J^s_a = (1/2){S_s, v_a} in place of one velocity factor -- the
+spin Berry curvature is this same expression, so it should share this
+same arithmetic and hence this same sign convention (docs/design.md #24).
+
 See docs/design.md #22 and docs/physics.tex Part XI for the physics.
 
 Units and conventions
@@ -142,23 +148,35 @@ def circular_polarization(pmat, valence, conduction, directions=(1, 2)):
     return {"eta": (i_plus - i_minus) / total, "i_plus": i_plus, "i_minus": i_minus}
 
 
-def _kubo_sum(energies, pmat, ist0, ist1, a, b, degeneracy_tol):
+def kubo_sum(energies, op_a, op_b, ist0, ist1, degeneracy_tol=1e-4):
     """Shared core of the Kubo-form geometric quantities: the complex
     sum-over-states tensor
 
         T_ab = sum_{n in W} sum_{m not in W}
-                   <n|v_a|m><m|v_b|n> / (eps_n - eps_m)^2
+                   <n|A|m><m|B|n> / (eps_n - eps_m)^2
 
-    over the band window W = [ist0, ist1] (inclusive, 1-based). Its real
-    part is the quantum metric and -2 times its imaginary part is the
-    Berry curvature (see kubo_quantum_geometry).
+    over the band window W = [ist0, ist1] (inclusive, 1-based), for any
+    two Hermitian operators A, B given as (nstsv, nstsv) matrices in the
+    same eigenbasis the energies belong to. With A = v_a and B = v_b this
+    is the quantum geometric tensor (kubo_quantum_geometry); with
+    A = J^z_a = (1/2){S_z, v_a} and B = v_b it is the spin Berry
+    curvature (parsers.spin_hall), which is why this takes operator
+    matrices rather than a `pmat` plus two axis indices.
 
-    Pairs with BOTH states inside the window do not appear: the window's
-    geometric tensor is a property of the projector onto W, which is
-    blind to how W is internally resolved -- the same multi-band
-    (non-Abelian trace) quantity parsers/berry.py's Wilson loop and
-    parsers/quantum_geometry.py's overlap stencil compute, not a sum of
-    single-band results.
+    Pairs with BOTH states inside the window do not appear -- and, for a
+    window-summed quantity, dropping them is EXACT rather than a
+    convention, for ANY Hermitian A and B: writing X = <n|A|m> and
+    Y = <m|B|n> for one such pair, Hermiticity makes the reversed pair's
+    numerator <m|A|n><n|B|m> = X* Y* = (XY)*, over the identical
+    denominator (eps_n - eps_m)^2, so the two imaginary parts cancel and
+    the two real parts are equal-but-already-counted. (For the metric
+    that pairing is why the window's tensor is a property of the
+    projector onto W alone, blind to how W is internally resolved -- the
+    same multi-band, non-Abelian-trace quantity parsers/berry.py's Wilson
+    loop and parsers/quantum_geometry.py's overlap stencil compute.) A
+    per-band Omega_n, by contrast, keeps its intra-window terms and can
+    diverge on a degenerate occupied pair; that is one reason only the
+    window-summed quantity is exposed.
 
     Raises ValueError if any window/outside pair is closer in energy than
     `degeneracy_tol` (Hartree). That is a genuine failure, not noise: the
@@ -168,6 +186,7 @@ def _kubo_sum(energies, pmat, ist0, ist1, a, b, degeneracy_tol):
     rather than clipping, matching parsers.quantum_geometry's
     _hermitian_inv_sqrt.
     """
+    energies = np.asarray(energies, dtype=float)
     nstsv = len(energies)
     if not (1 <= ist0 <= ist1 <= nstsv):
         raise ValueError(f"invalid band window (ist0={ist0}, ist1={ist1}, nstsv={nstsv})")
@@ -191,8 +210,8 @@ def _kubo_sum(energies, pmat, ist0, ist1, a, b, degeneracy_tol):
             f"Widen the window to enclose the whole degenerate group (the same rule "
             f"docs/design.md #13 documents for Berry-curvature band windows)"
         )
-    va = pmat[a - 1][np.ix_(inside, outside)]
-    vb = pmat[b - 1][np.ix_(outside, inside)]
+    va = np.asarray(op_a)[np.ix_(inside, outside)]
+    vb = np.asarray(op_b)[np.ix_(outside, inside)]
     # sum_n sum_m va[n,m] * vb[m,n] / denom[n,m]^2
     return complex(np.sum(va * vb.T / denom**2))
 
@@ -263,9 +282,9 @@ def kubo_quantum_geometry(
     if not (1 <= a <= 3 and 1 <= b <= 3) or a == b:
         raise ValueError(f"directions must be two distinct Cartesian axes in 1..3, got {directions}")
     energies = np.asarray(energies, dtype=float)
-    t_aa = _kubo_sum(energies, pmat, ist0, ist1, a, a, degeneracy_tol)
-    t_bb = _kubo_sum(energies, pmat, ist0, ist1, b, b, degeneracy_tol)
-    t_ab = _kubo_sum(energies, pmat, ist0, ist1, a, b, degeneracy_tol)
+    t_aa = kubo_sum(energies, pmat[a - 1], pmat[a - 1], ist0, ist1, degeneracy_tol)
+    t_bb = kubo_sum(energies, pmat[b - 1], pmat[b - 1], ist0, ist1, degeneracy_tol)
+    t_ab = kubo_sum(energies, pmat[a - 1], pmat[b - 1], ist0, ist1, degeneracy_tol)
     g_aa, g_bb, g_ab = t_aa.real, t_bb.real, t_ab.real
     curvature = -2.0 * t_ab.imag
     g = np.array([[g_aa, g_ab], [g_ab, g_bb]])

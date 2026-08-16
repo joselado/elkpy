@@ -108,11 +108,25 @@ def parse_orbital_projection_response(tokens):
 
 def parse_momentum_response(tokens):
     """Parse the token stream of a MOMENTUM response: nstsv, then nstsv
-    eigenvalues (Hartree), then the three nstsv x nstsv Cartesian momentum
-    matrices p^x, p^y, p^z as real/imag pairs (same column-major convention
-    as the other parsers here, Cartesian component slowest-varying).
+    eigenvalues (Hartree), then the nstsv x nstsv evecsv matrix, then the
+    three nstsv x nstsv Cartesian momentum matrices p^x, p^y, p^z, all as
+    real/imag pairs (same column-major convention as the other parsers
+    here, Cartesian component slowest-varying).
 
-    Returns (energies, pmat): energies shape (nstsv,) Hartree, pmat shape
+    The leading nstsv/eigenvalues/evecsv block is deliberately byte-for-byte
+    the shape parse_eigenstates_response() reads, with the momentum
+    components appended -- a MOMENTUM response IS an EIGENSTATES response
+    plus p^a. evecsv was added by patches/0009 for the reason docs/design.md
+    #24 explains: S_a is built from evecsv alone (parsers.spin), so the spin
+    current operator J^z_a = (1/2){S_z, v_a} is only well defined if that
+    evecsv and this pmat come from the SAME diagonalisation. Taking evecsv
+    from a separate EIGENSTATES query would silently mix two arbitrary
+    resolutions of any degenerate multiplet (docs/design.md #14) while
+    leaving every Hermiticity and unitarity check intact.
+
+    Returns (energies, evecsv, pmat): energies shape (nstsv,) Hartree,
+    evecsv shape (nstsv, nstsv) complex (evecsv[:, i] the i-th
+    eigenvector, row index i = p + (ispn-1)*nstfv), pmat shape
     (3, nstsv, nstsv) complex, pmat[a] the a-th Cartesian component
     (a = 0, 1, 2 for x, y, z) in atomic units, indexed
     pmat[a][n, m] = <psi_n|p_a|psi_m> -- i.e. the CONJUGATED (bra) state
@@ -137,13 +151,17 @@ def parse_momentum_response(tokens):
     (nstsv,), pos = _take(tokens, pos, 1, int)
     energies, pos = _take(tokens, pos, nstsv, float)
     energies = np.array(energies)
+    flat, pos = _take(tokens, pos, 2 * nstsv * nstsv, float)
+    reim = np.array(flat).reshape(nstsv * nstsv, 2)
+    # same "do b; do a" column-major block parse_eigenstates_response reads
+    evecsv = (reim[:, 0] + 1j * reim[:, 1]).reshape(nstsv, nstsv, order="F")
     flat, pos = _take(tokens, pos, 2 * 3 * nstsv * nstsv, float)
     reim = np.array(flat).reshape(3 * nstsv * nstsv, 2)
     values = reim[:, 0] + 1j * reim[:, 1]
     # Fortran wrote "do comp; do b; do a" with a innermost -- column-major
     # within each Cartesian component's block, the three blocks consecutive.
     pmat = values.reshape(nstsv, nstsv, 3, order="F").transpose(2, 0, 1)
-    return energies, pmat
+    return energies, evecsv, pmat
 
 
 def parse_parity_response(tokens):

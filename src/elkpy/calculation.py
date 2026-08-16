@@ -1597,8 +1597,9 @@ class Calculation:
     ):
         """The momentum (equivalently, in atomic units for a local
         Kohn-Sham potential, velocity) matrix elements p^a_nm for all
-        second-variational states, plus the eigenvalues of the same
-        diagonalisation. A one-off convenience wrapper around
+        second-variational states, plus the eigenvalues AND eigenvectors
+        (`evecsv`) of the same diagonalisation. A one-off convenience
+        wrapper around
         eigenstate_session() -- see get_eigenstates()'s docstring about
         preferring eigenstate_session() directly for repeated queries, and
         EigenstateSession.momentum() for what this computes, its
@@ -1618,6 +1619,18 @@ class Calculation:
         `elkpy.parsers.optical.circular_polarization` turns the same pmat
         into the valley-selective circular dichroism of an interband
         transition. See docs/design.md #22.
+
+        The returned `evecsv` (always the full (nstsv, nstsv) matrix, never
+        windowed -- its ROW index is the first-variational spinor basis)
+        is what makes the SPIN-resolved quantities of
+        `elkpy.parsers.spin_hall` possible: S_a is built from evecsv alone
+        (parsers.spin), so the spin current operator J^s_a = (1/2){S_a, v}
+        is only meaningful when that evecsv and this pmat come from ONE
+        diagonalisation. Taking evecsv from a separate get_eigenstates()
+        call instead would silently mix two arbitrary resolutions of any
+        degenerate multiplet (docs/design.md #14) while leaving every
+        Hermiticity and unitarity check intact. See docs/design.md #24 and
+        patches/0009-momentum-evecsv.patch.
 
         The number of empty states in the sum is set by Elk's `nempty`
         (Calculation(extra_blocks={"nempty": ...})); the default is low,

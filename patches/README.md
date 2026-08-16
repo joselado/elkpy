@@ -19,6 +19,7 @@ to make it a quick diff-checklist instead of a re-read of the raw patches.
 | [0006](0006-angular-momentum.patch) | — | `src/elkpy_eigenstates.f90` (elkpy's own file, added by 0003) | New `elkpy_angmomproj` subroutine (reuses upstream `lopzflm.f90` unmodified) + a call from `elkpy_eigenstate_session`'s query loop | `ANGMOM` query on the task-9002 session — per-atom, l-resolved orbital angular momentum operators $L_x,L_y,L_z$ |
 | [0007](0007-momentum-matrix-elements.patch) | — | `src/elkpy_eigenstates.f90` (elkpy's own file, added by 0003) | New `elkpy_momentum` subroutine (reuses upstream `genpmatk.f90` unmodified — the same one `putpmat.f90`/task 120 calls) + a call from `elkpy_eigenstate_session`'s query loop | `MOMENTUM` query on the task-9002 session — momentum (velocity) matrix elements $p^a_{nm}$ for all `nstsv` states, plus that diagonalisation's eigenvalues |
 | [0008](0008-inversion-parity-operator.patch) | — | `src/elkpy_eigenstates.f90` (elkpy's own file, added by 0003) | New `elkpy_parity` subroutine (lifts getevecfv.f90's symmetry transformation of the first-variational coefficients; reuses upstream `rotzflm`, `genwfsv`, `genolpq` unmodified) + a call from `elkpy_eigenstate_session`'s query loop | `PARITY` query on the task-9002 session — the inversion operator $\langle\psi_m\|\hat I\|\psi_n\rangle$ at a time-reversal-invariant momentum, for the Fu-Kane $Z_2$ symmetry indicators |
+| [0009](0009-momentum-evecsv.patch) | — | `src/elkpy_eigenstates.f90` (elkpy's own file, added by 0003) | One new `intent(out)` argument on 0007's `elkpy_momentum` (`evecsv_out`, written where the discarded local `evecsv` was) + one extra write block in the `MOMENTUM` case of `elkpy_eigenstate_session`'s query loop | `MOMENTUM` also returns that diagonalisation's `evecsv`, so the $\S17$ spin operators and the $\S22$ velocity matrix elements share one eigenbasis — the prerequisite for the spin current operator $J^z_a=\tfrac12\{S_z,v_a\}$, spin Berry curvature and spin Hall conductivity ($\S24$) |
 
 ## Notes
 
@@ -30,12 +31,16 @@ to make it a quick diff-checklist instead of a re-read of the raw patches.
 - 0002 and 0003 both edit `src/Makefile`'s `SRC_ELKPY` variable to register
   their new file — a likely conflict point if upstream ever adds its own
   `SRC_ELKPY`-shaped variable or restructures the source list.
-- 0004-0008 only touch elkpy's own `elkpy_eigenstates.f90` (added by 0003),
-  not any upstream file — lowest risk of the eight on an upstream bump. They
+- 0004-0009 only touch elkpy's own `elkpy_eigenstates.f90` (added by 0003),
+  not any upstream file — lowest risk of the nine on an upstream bump. They
   do each *call* an upstream subroutine unmodified (`wfmtsv`, `lopzflm`,
   `genpmatk`, `rotzflm`/`genwfsv`/`genolpq`), so an upstream signature change
   to one of those is the realistic breakage mode, not a patch-application
-  conflict. 0008 additionally *copies* a block of `getevecfv.f90` (the
+  conflict. 0009 is the one patch in the series that touches no upstream
+  subroutine at all — it only widens an elkpy-added routine's own argument
+  list and prints an array that was already being computed — so it is the
+  cheapest to re-evaluate, but it *does* depend on 0007's `elkpy_momentum`
+  textually and must be re-applied after it. 0008 additionally *copies* a block of `getevecfv.f90` (the
   symmetry transformation of first-variational coefficients) rather than
   calling it, since upstream exposes it only inline — so an upstream change
   to that transformation would need the copy re-synced, and it is the one
