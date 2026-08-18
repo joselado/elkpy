@@ -2954,7 +2954,9 @@ mesh inflates peak magnitudes as described above.
 
 ## 28. Rotation-eigenvalue symmetry indicators
 
-*Physics writeup: `docs/physics.tex` Part XVI.*
+*Physics writeup: not yet written — pre-existing gap. (This section originally
+promised `docs/physics.tex` Part XVI, but no such part was ever added; Part XVI
+is now §29's exchange writeup.)*
 
 The general symmetry operator at a fixed $k$-point, and the
 Benalcazar-Li-Hughes corner-charge indices built on it — the same
@@ -3076,4 +3078,264 @@ with calc.eigenstate_session() as session:
 
 chi = indicators.relative_indices(counts["K"], counts["Gamma"])
 indicators.corner_charge({"K": chi}, 3)   # read the convention caveat above
+```
+
+## 29. Anisotropic exchange constants by four-state energy mapping
+
+*Physics writeup: `docs/physics.tex` Part XVI.*
+
+The full 3×3 exchange tensor $J_{ij}^{\alpha\beta}$ of a magnetic pair —
+isotropic Heisenberg exchange, symmetric anisotropy (the Kitaev $K$ and
+$\Gamma$ terms), and the antisymmetric Dzyaloshinskii-Moriya vector — from
+the total energies of constrained non-collinear DFT states. Elk itself has
+no exchange-parameter capability at all (nothing in `docs/elk_manual.txt`,
+no task), so this is new physics on top of the interface rather than
+wrapping.
+
+**Method**: Šabani, Bacaksiz & Milošević, PRB 102, 014457 (2020),
+arXiv:2002.10861 — the generic four-state method, which generalizes Xiang,
+Kan, Wei, Whangbo & Gong, PRB 84, 224429 (2011), arXiv:1106.5549 from an
+isotropic/DM Hamiltonian to a general tensor. Convention here is theirs:
+
+$$H=\sum_{i<j}\mathbf S_i\cdot\mathbf J_{ij}\cdot\mathbf S_j+\sum_i\mathbf S_i\cdot\mathbf A_{ii}\cdot\mathbf S_i$$
+
+with classical spin vectors of magnitude $|\mathbf S_i|=S$, each pair counted
+once, and a plus sign — so $J<0$ is ferromagnetic. Every one of the nine
+components comes from the same formula,
+
+$$J_{ij}^{\alpha\beta}=\frac{E_1+E_4-E_2-E_3}{4S^2m_{ij}}$$
+
+where the four states put $\mathbf S_i$ along $\pm\hat\alpha$ and
+$\mathbf S_j$ along $\pm\hat\beta$ in the sign combinations
+$(+{+},+{-},-{+},-{-})$, and **every other magnetic atom points along the
+third axis, identically in all four states**.
+
+### Why the other terms cancel
+
+Only the target term carries the sign pattern $(+,-,-,+)$ that
+$E_1+E_4-E_2-E_3$ selects. Cross terms between one member of the pair and a
+spectator are linear in a single flipped spin, so they carry $(+,+,-,-)$ or
+$(+,-,+,-)$ and are annihilated. Spectator-spectator terms never move at all
+and appear identically in all four energies. And single-ion anisotropy is
+*quadratic* in spin, hence invariant under $\mathbf S\to-\mathbf S$, so it
+too appears identically — which is why the exchange formula needs no
+knowledge of the SIA, and equally why the SIA needs its own configurations
+and its own formulas (`single_ion_offdiagonal`, `single_ion_difference`;
+note the different sign pattern *and* the different denominator $2S^2$).
+Only *differences* of the diagonal SIA are extractable: with a classical spin
+of fixed length, $(S^x)^2+(S^y)^2+(S^z)^2=S^2$ makes any common part of the
+diagonal an additive constant, invisible to every energy difference.
+
+`tests/test_parsers_exchange.py` tests this numerically rather than trusting
+it — a model with a known tensor on the target pair *plus* single-ion
+anisotropy on every site, couplings from the pair to the spectators, and
+couplings among the spectators returns the target tensor exactly.
+
+### Two published traps
+
+**Xiang's DM formula carries an extra sign** that is correct only for a
+Hamiltonian already assumed antisymmetric, not for a general tensor. Šabani
+et al. document this and show it manufactures a spurious DM vector on
+monolayer CrI₃, where an inversion centre at the bond midpoint forbids one.
+Here nothing is special-cased: all nine components use the identical formula
+and $\mathbf D$ is extracted afterwards from the antisymmetric part,
+$D_x=\tfrac12(J^{yz}-J^{zy})$ and cyclic (the same convention KKR uses,
+Mankovsky & Ebert arXiv:2206.09969 Eq. 55). This makes **$\mathbf D=0$ on an
+inversion-symmetric bond a genuine null test** of the whole pipeline rather
+than something built in.
+
+**The multiplicity $m_{ij}$** — how many bonds the pair actually contributes
+in the supercell, *including periodic images* — is implicitly 1 in
+Xiang/Šabani and is only 1 if the supercell is large enough. Flipping site
+$j$ flips all of its images, so the energy difference measures
+$\sum_{\mathbf T}J(i,j+\mathbf T)$. `parsers.exchange.bond_multiplicity`
+computes it, and `check_supercell` raises when an image sits inside the
+retained interaction range at a *different* distance — at which point the
+measured difference mixes distinct neighbour shells and no choice of
+multiplicity can unmix them (criterion from arXiv:2512.08471).
+
+### Why this needs no new Fortran
+
+Elk already constrains per-atom moment directions natively. `fsmtype=-2`
+plus a per-atom `mommtfix` block adds a Lagrange-style field updated each SCF
+cycle (`vendor/elk/src/bfieldfsm.f90`), and for the *negative* variant that
+field is projected perpendicular to the target direction (`r3vo`) — so the
+magnitude relaxes freely and, once the moment is on target, the field does no
+work on it. Measured directly: the constraining field's component along each
+target comes back as ~10⁻¹⁸.
+
+More importantly, **the reported total energy is the constrained-DFT energy
+functional with no constraining-field contribution**. `energy.f90:226` forms
+the kinetic energy as `engykn = evalsum - engyvcl - engyvxc - sm`, where
+`sm = ∫ m·B_s` is built from the *total* effective field `bsmt` — into which
+`addbfsm.f90` has already folded the constraining field (and `bfcmt`). Its
+work is therefore removed exactly, for any `fsmtype`. This is what makes
+energy mapping legitimate here, and it is a property of the source rather
+than an assumption; it also means `fsmtype=+2` (fixing the full moment
+vector, magnitude included) is an energetically clean fallback if direction-
+only constraint proves unstable.
+
+### Three settings that are load-bearing, not cosmetic
+
+- **`nosym` / `reducek=0`.** The four configurations deliberately break the
+  crystal symmetry, and `checkfsm.f90` hard-`stop`s if `mommtfix` is not
+  invariant under the symmetry group `findsym.f90` found — which inspects
+  `bfcmt0` but *not* `mommtfix`. Beyond dodging that stop, an identical k-set
+  across all four states is what lets their systematic errors cancel in the
+  difference; symmetry-reduced meshes would differ between configurations and
+  leave a residue in exactly the quantity being extracted.
+- **`epsengy`.** Elk's default is 1e-4 Ha ≈ 2.7 meV, larger than the entire
+  signal. The formula sums four total energies, so the noise floor is about
+  four times the per-run convergence. The literature standard is 1e-5 eV
+  (Šabani et al.; Hou et al. drive their constraint penalty below the same);
+  elkpy defaults to 1e-8 Ha.
+- **`bfcmt` seeding.** The constraining field is perpendicular to the target,
+  so it can rotate an existing moment but cannot create one — a configuration
+  started from zero magnetisation has nothing to constrain. Seeding `bfcmt`
+  along each target direction both starts the SCF near the intended state and
+  keeps Elk's own symmetry analysis consistent with it (`findsym.f90` reads
+  `bfcmt0`). Elk's sign convention was pinned empirically rather than assumed:
+  a single bcc Fe atom with `bfcmt = (0,0,+4)` converges to a moment of
+  **−2.75 μB**, i.e. the moment is *antiparallel* to `bfcmt`, so
+  `seeded_structure()` applies the seed with a minus sign.
+
+### The check that the method actually rests on
+
+`fsmtype=-2` constrains direction only, so the magnitude is free to collapse
+— and a collapsed moment is held by nothing. A configuration that silently
+drifted off its target still produces a perfectly plausible total energy, so
+no downstream consistency check can catch it. `exchange.check_constraint()`
+therefore re-reads each finished run's muffin-tin moments out of `INFO.OUT`
+and raises if any constrained atom is off target by more than a tolerance.
+This is not defensive programming: it was added because the first
+perpendicular two-site probe attempted here (bcc Fe, moments 90° apart) ran
+60 SCF cycles without ever reaching its targets, the moments collapsing to
+~0.16 μB instead.
+
+Relatedly, a configuration that fails to converge invalidates the whole
+component and raises, rather than being dropped — unlike a least-squares fit
+over many configurations, four-state depends on complete convergence of all
+four states (a failure mode arXiv:2512.08471 calls out explicitly).
+
+### Cost
+
+Nine components × four states = **36 constrained SCF runs per pair**.
+`components="symmetric"` costs 24 and is valid only where an inversion
+centre forces $\mathbf D=0$; computing all nine on at least one bond is what
+turns that into a test. The work is embarrassingly parallel over
+configurations and each Elk process is serial, so `workers=` threads the
+sweep rather than a single run (`ELKPY_MAX_CONCURRENT` still bounds actual
+concurrency). Each configuration is a separate `Calculation` in its own
+subdirectory, so the ground-state manifest cache applies per configuration
+and a re-run after a crash reuses whatever already converged.
+
+### Known limitation: pseudospin systems
+
+Elk's `mommtfix` constrains the **spin** moment only. For a $j_{\rm eff}=1/2$
+spin-orbit Mott insulator such as α-RuCl₃ this is not sufficient: the moment
+is 2/3 orbital and 1/3 spin, and Hou, Xiang & Gong (PRB 96, 054410 (2017),
+arXiv:1612.00761) measure that spin and orbital directions "seriously deviate
+from each other" unless the orbital moment is constrained too, adding a
+penalty functional
+$E_{\rm constr}=\lambda\sum_t[\mathbf L^t-\hat{\mathbf L}^{t,0}(\hat{\mathbf L}^{t,0}\cdot\mathbf L^t)]^2$
+with $\lambda=0.2$ eV μ$_B^{-2}$.
+
+Elk is unusually well shaped for adding this, should it be needed:
+`eveqnsv.f90:96-105,160-168` already implements $\hat H_{Bo}=\tfrac{1}{2c}\mathbf B\cdot\hat{\mathbf L}$
+(`bforb`) inside a loop that is already per-atom, applying $\hat L_{x,y,z}$
+via `lopzflmn` — the same `lopz*` family patch 0006 reuses for §19. Only the
+field source is hard-wired to the *global* `bfieldc`. A patch would mirror
+`bfieldfsm.f90`'s feedback loop against
+$\langle\mathbf L\rangle_{ias}=\mathrm{Tr}[\mathbf{dmatmt}_{ias}\hat L_a]$
+(available every SCF cycle whenever DFT+U is on, `gndstate.f90:192`) — plus,
+critically, its own total-energy correction: unlike the spin constraint this
+term enters the second-variational Hamiltonian rather than `bsmt`, so
+`energy.f90`'s `sm` subtraction does **not** remove it. **Not implemented**;
+the diagnostic that would justify it is a spin-only-constrained run with
+$\langle\mathbf L\rangle$ measured per atom via §19's `get_angular_momentum()`.
+
+### Verification status
+
+**The Python arithmetic is verified; the end-to-end DFT extraction is NOT yet.**
+Stated explicitly because every other capability in this document was
+validated against a real compiled binary before being written up.
+
+Verified (`tests/test_parsers_exchange.py`, 16 synthetic pins, no Elk run):
+the round trip recovers a known tensor exactly for all nine components; the
+cancellation claim holds numerically against a model that adds single-ion
+anisotropy on every site, pair-to-spectator couplings and spectator-spectator
+couplings; multiplicity divides out; Xiang's uncorrected formula is shown to
+manufacture a spurious DM vector on a symmetric tensor where ours gives zero;
+the DM extraction matches its cross-product definition; the Kitaev
+parametrisation and frame rotation round-trip; the SIA formulas recover a
+known anisotropy; and `check_supercell` rejects a contaminated pair.
+
+Verified against a real binary, but only as isolated pieces rather than a
+completed tensor:
+
+- **The Phase-0 constraint probe is encouraging but PARTIAL.** A perpendicular
+  two-site configuration on NiO (atom 0 along $+x$, its J₂ partner along $+z$,
+  all six spectators along $+y$) had every Ni moment on target to ~1° with a
+  healthy 1.80 μB — the right size for Ni(II), $S=1$ — but the run was
+  interrupted after ~4 SCF cycles and never reached `epsengy`, so this shows
+  the constraint *locking on quickly*, not that it holds through convergence.
+  Encouraging because the comparison case failed outright: an earlier bcc Fe
+  probe at 90° ran 60 cycles with the moments collapsing to ~0.16 μB instead,
+  which is why `check_constraint()` exists. That production path — the check
+  applied at convergence — has itself never fired on a completed run.
+- **The `bfcmt` sign convention** was measured, not assumed: a single bcc Fe
+  atom with `bfcmt = (0,0,+4)` converges to a moment of −2.75 μB.
+- **The supercell bookkeeping** is checked through the real code path
+  (`test_supercell_is_large_enough_for_the_j2_pair`, no binary needed): NiO's
+  J₂ pair in a 16-atom cell has multiplicity 6 at 4.170 Å.
+
+**Still to run**: the full nine-component sweep, i.e.
+`ELKPY_RUN_SLOW_TESTS=1 python3 -m pytest tests/test_calculation_exchange_nio.py`.
+Its three assertions are the ones with real teeth, and none of them has been
+exercised yet:
+
+1. $J_2$ antiferromagnetic and of order 20 meV — the literature benchmark.
+2. **The tensor exactly isotropic with SOC off.** Convention-free: nothing
+   ties spin to the lattice, so the energy is invariant under a global spin
+   rotation. Whatever deviation appears *is* the method's numerical noise
+   floor, measured rather than assumed.
+3. $\mathbf D=0$ on the J₂ bond, whose midpoint is the bridging oxygen and
+   hence an inversion centre.
+
+Measured cost, which is why it has not been run: ~150 s per SCF loop for the
+16-atom cell at `ngridk=(2,2,2)` with `reducek=0` (8 k-points), roughly 40
+loops per configuration, 36 configurations — of order 60 CPU-hours. It
+parallelises cleanly over configurations, and the per-configuration manifest
+cache means an interrupted sweep resumes rather than restarting.
+
+## How to use in code
+
+```python
+from ase.build import bulk
+from elkpy.structure import Structure
+
+# a supercell large enough that the target pair is not aliased onto a
+# different neighbour shell by periodic images
+structure = Structure.from_ase(bulk("NiO", "rocksalt", a=4.17) * (2, 2, 2))
+calc = structure.get_calculation(
+    "nio", xc="PW", spinpol=True, ngridk=(2, 2, 2),
+    extra_blocks={"dft+u": [(1, 1), (1, 2, 0.2205, 0.0367)]},   # FLL, U/J on Ni d (Ha)
+)
+
+result = calc.get_exchange_tensor(
+    i=0, j=4,              # 0-based global atom indices, Elk's own ordering
+    magnetic="Ni",         # every magnetic atom: spectators must be held too
+    spin=1.0,              # Ni(II) is S = 1 -- sets the convention, not just a scale
+    components="all",      # 36 runs; "symmetric" costs 24 where D = 0 by symmetry
+    workers=8,
+)
+result["tensor"]        # 3x3, meV
+result["isotropic"]     # Heisenberg J
+result["dm"]            # Dzyaloshinskii-Moriya vector (0 on an inversion-symmetric bond)
+result["symmetric"]     # traceless symmetric anisotropy
+
+# for a honeycomb Kitaev magnet, rotate into the cubic octahedral frame
+from elkpy.parsers import exchange
+cubic = exchange.rotate_tensor(result["tensor"], exchange.honeycomb_cubic_frame())
+exchange.kitaev_parameters(cubic)     # J, K, Gamma, Gamma', and a residual
 ```

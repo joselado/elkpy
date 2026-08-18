@@ -3053,4 +3053,242 @@ Eq.~\eqref{eq:spincurrent}'s symmetrisation is covered only by synthetic tests
 with random non-commuting operators; a system with genuine spin mixing (a
 monolayer transition-metal dichalcogenide) would close that.
 
+
+\part{Anisotropic exchange constants by four-state energy mapping}
+\label{part:exchange}
+
+\section{The spin Hamiltonian and what "anisotropic exchange" means}
+
+A magnetic insulator's low-energy physics is usually written as a classical (or
+pseudospin) lattice model
+\begin{equation}
+  H=\sum_{i<j}\mathbf S_i\cdot\mathbf J_{ij}\cdot\mathbf S_j
+   +\sum_i\mathbf S_i\cdot\mathbf A_{ii}\cdot\mathbf S_i ,
+  \label{eq:exchange-hamiltonian}
+\end{equation}
+where $\mathbf S_i$ is a spin vector of fixed length $S$ on site $i$,
+$\mathbf J_{ij}$ is a general $3\times3$ matrix, and $\mathbf A_{ii}$ is the
+single-ion anisotropy. Each pair is counted \emph{once} and the sign is
+\emph{positive}, so $J<0$ is ferromagnetic. This is the convention of
+\v{S}abani, Bacaks\i z and Milo\v{s}evi\'c, PRB \textbf{102}, 014457 (2020)
+(arXiv:2002.10861), and elkpy quotes every number in it. Other conventions in
+this literature differ in sign, in whether the pair sum double-counts, and in
+whether $\mathbf S$ is normalised to unity --- TB2J (arXiv:2009.01910) differs
+on all three at once --- so a number moved between them can change sign
+\emph{and} rescale by $2S^2$.
+
+The nine entries of $\mathbf J_{ij}$ split into three physically distinct
+pieces,
+\begin{equation}
+  J_{ij}^{\alpha\beta}=J^{\rm iso}_{ij}\,\delta_{\alpha\beta}
+    +\Gamma_{ij}^{\alpha\beta}
+    +\varepsilon_{\alpha\beta\gamma}D_{ij}^{\gamma},
+  \label{eq:exchange-decomposition}
+\end{equation}
+with $J^{\rm iso}=\tfrac13\operatorname{Tr}\mathbf J$ the isotropic Heisenberg
+exchange, $\boldsymbol\Gamma$ the traceless symmetric part --- the anisotropic
+exchange proper, which on a honeycomb lattice carries the Kitaev $K$ and the
+off-diagonal $\Gamma$, $\Gamma'$ --- and $\mathbf D$ the Dzyaloshinskii--Moriya
+vector, defined by
+\begin{equation}
+  \mathbf S_i\cdot\mathbf A\cdot\mathbf S_j=\mathbf D\cdot(\mathbf S_i\times\mathbf S_j),
+  \qquad
+  D^x=\tfrac12\left(J^{yz}-J^{zy}\right)\ \text{and cyclic},
+  \label{eq:dm-vector}
+\end{equation}
+$\mathbf A$ being the antisymmetric part. Physically: $J^{\rm iso}$ comes from
+spin-independent superexchange, while both $\boldsymbol\Gamma$ and $\mathbf D$
+require spin--orbit coupling, since only SOC ties spin direction to the lattice.
+Moriya's rule makes $\mathbf D$ vanish identically when the bond midpoint is an
+inversion centre; $\boldsymbol\Gamma$ survives there.
+
+\section{The four-state method}
+
+The idea (Xiang, Kan, Wei, Whangbo and Gong, PRB \textbf{84}, 224429 (2011),
+arXiv:1106.5549; generalised to the full tensor by \v{S}abani \emph{et al.}) is
+to compute total energies of four constrained magnetic states that differ only
+in the orientations of two chosen spins, in a combination that cancels
+everything except one tensor element. For component $J_{ij}^{\alpha\beta}$ take
+\begin{equation}
+  \mathbf S_i=\pm S\,\hat{\boldsymbol\alpha},\qquad
+  \mathbf S_j=\pm S\,\hat{\boldsymbol\beta},\qquad
+  \mathbf S_{k\neq i,j}=S\,\hat{\boldsymbol\gamma},
+  \label{eq:four-states}
+\end{equation}
+with the four sign combinations $(+{+}),(+{-}),(-{+}),(-{-})$ giving
+$E_1,\dots,E_4$, and $\hat{\boldsymbol\gamma}$ the remaining Cartesian axis,
+held \emph{identical in all four states}. Then
+\begin{equation}
+  \boxed{\;J_{ij}^{\alpha\beta}=\frac{E_1+E_4-E_2-E_3}{4S^2m_{ij}}\;}
+  \label{eq:four-state-formula}
+\end{equation}
+for all nine components alike, with no extra sign in any case.
+
+\subsection{Why everything else cancels}
+
+Write out Eq.~\eqref{eq:exchange-hamiltonian} for the four states. The target
+term $S^2J^{\alpha\beta}_{ij}$ is bilinear in the two flipped spins, so it
+carries the sign pattern $(+,-,-,+)$ and is exactly what the combination
+$E_1+E_4-E_2-E_3$ projects out, with weight $4S^2$. Every other term dies:
+\begin{itemize}
+  \item \textbf{Pair--spectator couplings} $\sum_{k\neq j}S^2J^{\alpha\gamma}_{ik}$
+    are linear in $\mathbf S_i$ alone, hence carry $(+,+,-,-)$; those involving
+    $\mathbf S_j$ carry $(+,-,+,-)$. Both are annihilated by $(+,-,-,+)$.
+  \item \textbf{Spectator--spectator couplings} never move at all and appear
+    identically in all four energies.
+  \item \textbf{Single-ion anisotropy} is \emph{quadratic} in each spin, hence
+    invariant under $\mathbf S\to-\mathbf S$, so it too is identical in all four.
+\end{itemize}
+The last point is worth stating as physics rather than bookkeeping: the four-state
+exchange formula is blind to single-ion anisotropy by construction, which is why
+it works without knowing $\mathbf A_{ii}$ --- and equally why $\mathbf A_{ii}$
+needs its own configurations, with different formulas:
+\begin{equation}
+  A_{ii}^{\alpha\beta}=\frac{E_1+E_4-E_2-E_3}{4S^2}\ (\alpha\neq\beta),
+  \qquad
+  A_{ii}^{\beta\beta}-A_{ii}^{\alpha\alpha}=\frac{E_1+E_2-E_3-E_4}{2S^2}.
+  \label{eq:sia}
+\end{equation}
+Note both the different sign pattern and the different denominator. The
+off-diagonal case places $\mathbf S_i$ at $45^\circ$ in the $\alpha\beta$ plane,
+where the cross term changes sign between states. Only \emph{differences} of the
+diagonal are obtainable at all: for a classical spin of fixed length
+$(S^x)^2+(S^y)^2+(S^z)^2=S^2$, so any common part of the diagonal is an additive
+constant and cannot appear in an energy difference.
+
+\subsection{The multiplicity $m_{ij}$}
+
+In a periodic supercell, reversing $\mathbf S_j$ reverses \emph{all} of its
+periodic images, so Eq.~\eqref{eq:four-state-formula} actually measures
+$\sum_{\mathbf T}J(i,j+\mathbf T)$ over supercell translations $\mathbf T$. If
+every image contributing sits at the same distance, this is $m_{ij}$ copies of
+one bond and dividing by $m_{ij}$ is exact --- and a large $m_{ij}$ actually
+\emph{helps}, by amplifying the signal against the SCF noise floor. If images at
+\emph{different} distances contribute, the result mixes distinct neighbour
+shells and no choice of $m_{ij}$ can unmix it: the supercell is simply too
+small. The criterion (arXiv:2512.08471) is that for every pair within the
+retained $n$-th neighbour range, no periodic image of either atom may sit closer
+than that distance. \texttt{parsers.exchange.check\_supercell} enforces it
+rather than leaving it to the user's judgement.
+
+\subsection{A published sign error this construction avoids}
+
+Xiang \emph{et al.}'s original DM formulas were derived from a Hamiltonian in
+which $J^{\alpha\beta}=-J^{\beta\alpha}$ had \emph{already} been assumed, and so
+carry an extra minus sign that is wrong for a general tensor. \v{S}abani
+\emph{et al.} show the consequence on monolayer CrI$_3$: with the corrected
+formulas the extracted tensor is symmetric and $\mathbf D=0$, as the inversion
+centre at the bond midpoint requires, whereas the original formulas turn the
+perfectly physical symmetric off-diagonal entries $J^{xy},J^{xz},J^{yz}$ into a
+fictitious DM vector of the same magnitude. elkpy therefore special-cases
+nothing: all nine components go through Eq.~\eqref{eq:four-state-formula}, and
+$\mathbf D$ is read off afterwards from the antisymmetric part via
+Eq.~\eqref{eq:dm-vector}. This makes $\mathbf D=0$ on an inversion-symmetric
+bond a genuine null test of the whole chain rather than an identity built in.
+
+\section{The constrained DFT states}
+
+Eq.~\eqref{eq:four-states} asks for total energies of magnetic states that are
+in general \emph{not} the ground state --- three of the four are excited, and
+the off-diagonal components require two moments at $90^\circ$. This is
+constrained density-functional theory: minimise $E[n,\mathbf m]$ subject to
+prescribed local moment directions. Elk implements exactly this with
+\texttt{fsmtype=-2} plus a per-atom \texttt{mommtfix} block: a field
+$\mathbf B^{\rm FSM}_t$ is updated each self-consistency cycle by
+\begin{equation}
+  \mathbf B^{\rm FSM}_t\ \leftarrow\ \mathcal P_{\hat{\mathbf m}^0_t}\!\left[
+    \mathbf B^{\rm FSM}_t+\lambda\left(\mathbf m_t-\mathbf m^0_t\right)\right],
+  \label{eq:fsm}
+\end{equation}
+where $\mathcal P_{\hat{\mathbf m}^0}$ projects out the component along the
+target direction. Because the constraining field is kept perpendicular to
+$\hat{\mathbf m}^0$, the moment's \emph{magnitude} is free to relax, and once
+the moment is on target the field is perpendicular to it and does no work.
+
+Two properties make the resulting energies usable in
+Eq.~\eqref{eq:four-state-formula}. First, Elk's total energy is the
+constrained-DFT functional with \emph{no} field contribution: the kinetic energy
+is formed as $T_s=\sum_{n}\varepsilon_n-\int n v_s-\int\mathbf m\cdot\mathbf B_s$
+with $\mathbf B_s$ the \emph{total} effective field, into which the constraining
+field has already been folded, so its work is removed exactly. Second, the four
+states of a component share geometry, basis and $k$-point set, so their
+systematic errors cancel in the difference --- which is why the $k$-mesh must
+\emph{not} be symmetry-reduced: the four configurations have different magnetic
+symmetry, so a reduced mesh would differ between them and leave a residue in
+precisely the quantity being extracted.
+
+The constraint must be verified, not assumed. Since \texttt{fsmtype=-2} fixes
+only the direction, a moment whose magnitude collapses is held by nothing, and
+the resulting total energy is perfectly plausible --- undetectable downstream.
+elkpy re-reads each converged run's muffin-tin moments and refuses any
+configuration that drifted off target.
+
+\paragraph{Pseudospin systems.} For a $j_{\rm eff}=1/2$ spin--orbit Mott
+insulator such as $\alpha$-RuCl$_3$ the moment is $2/3$ orbital and $1/3$ spin,
+and constraining the spin alone leaves the dominant part free to rotate: Hou,
+Xiang and Gong (PRB \textbf{96}, 054410 (2017), arXiv:1612.00761) measure that
+spin and orbital directions then deviate seriously, and add a penalty
+$E_{\rm constr}=\lambda\sum_t[\mathbf L^t-\hat{\mathbf L}^{t,0}(\hat{\mathbf L}^{t,0}\cdot\mathbf L^t)]^2$.
+elkpy does not yet implement an orbital constraint; see
+\texttt{docs/design.md}~\S29 for the shape such a patch would take in Elk, whose
+\texttt{bforb} term already applies $\tfrac{1}{2c}\mathbf B\cdot\hat{\mathbf L}$
+per atom.
+
+\section{The Kitaev parametrisation}
+
+On a honeycomb lattice with edge-sharing octahedra, each of the three
+nearest-neighbour bond directions carries a distinguished cubic axis
+$\gamma\in\{x,y,z\}$ pointing along the ligand octahedron. In that cubic frame
+the bond tensor of a $z$-labelled bond takes the form
+\begin{equation}
+  \mathbf J_{Z}=\begin{pmatrix}
+    J & \Gamma & \Gamma'\\
+    \Gamma & J & \Gamma'\\
+    \Gamma' & \Gamma' & J+K
+  \end{pmatrix},
+  \label{eq:kitaev-tensor}
+\end{equation}
+the Rau--Lee--Kee parametrisation: $J$ isotropic, $K$ the bond-dependent Kitaev
+term, $\Gamma$ and $\Gamma'$ symmetric off-diagonal anisotropies. The cubic axes
+relate to the crystal axes by
+$\mathbf a\parallel(1,1,-2)/\sqrt6$, $\mathbf b\parallel(-1,1,0)/\sqrt2$,
+$\mathbf c^*\parallel(1,1,1)/\sqrt3$. Only bonds whose midpoint has the full
+$C_{2h}$ site symmetry are forced into exactly Eq.~\eqref{eq:kitaev-tensor}; on
+a lower-symmetry bond the two $\Gamma'$ entries become independent, so elkpy
+returns both and reports how far the measured tensor sits from the ideal form
+rather than averaging the discrepancy away.
+
+\section{How to use in code}
+
+\begin{verbatim}
+from ase.build import bulk
+from elkpy.structure import Structure
+from elkpy.parsers import exchange
+
+# a supercell large enough that periodic images do not alias the target pair
+# onto a different neighbour shell
+structure = Structure.from_ase(bulk("NiO", "rocksalt", a=4.17) * (2, 2, 2))
+calc = structure.get_calculation(
+    "nio", xc="PW", spinpol=True, ngridk=(2, 2, 2),
+    extra_blocks={"dft+u": [(1, 1), (1, 2, 0.2205, 0.0367)]},  # FLL, U/J on Ni d (Ha)
+)
+
+result = calc.get_exchange_tensor(
+    i=0, j=7,            # 0-based global atom indices, Elk's own ordering
+    magnetic="Ni",       # spectators must be constrained too
+    spin=1.0,            # S = 1 for Ni(II): fixes the convention, not just a scale
+    components="all",    # nine components = 36 constrained SCF runs
+    workers=12,
+)
+result["tensor"]      # 3x3, meV
+result["isotropic"]   # Heisenberg J
+result["dm"]          # Dzyaloshinskii-Moriya vector
+result["symmetric"]   # traceless symmetric anisotropy
+
+# for a honeycomb Kitaev magnet, rotate into the cubic octahedral frame first
+cubic = exchange.rotate_tensor(result["tensor"], exchange.honeycomb_cubic_frame())
+exchange.kitaev_parameters(cubic)     # J, K, Gamma, Gamma_p1, Gamma_p2, residual
+\end{verbatim}
+
+
 \end{document}

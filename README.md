@@ -13,8 +13,10 @@ per-species spin-orbit coupling scaling, the full quantum geometric tensor (Berr
 curvature/Chern numbers and the quantum metric) via a Wilson-loop method, fast
 eigenstate/wavefunction-overlap queries at arbitrary k-points, atom-projection,
 orbital-character (s/p/d/f), angular momentum, and spin operators applicable to those
-wavefunctions, and optical (velocity) matrix elements with the circular dichroism and
-Kubo-form quantum geometry built from them.
+wavefunctions, optical (velocity) matrix elements with the circular dichroism and
+Kubo-form quantum geometry built from them, and anisotropic magnetic exchange
+constants (Heisenberg, Dzyaloshinskii-Moriya and Kitaev-type terms) by four-state
+energy mapping.
 
 ```python
 from elkpy.structure import Structure
@@ -49,6 +51,11 @@ python3 -m pip install -e .        # add .[ase] for Structure.from_ase()/to_ase(
 - The $\mathbb Z_2$ invariant $\nu\in\{0,1\}$ of a time-reversal-invariant 2D insulator, via Wannier-charge-center pumping and the non-Abelian Wilson loop $D(k_2)=\prod_iU(F_i)$, distinguishing an ordinary insulator from a quantum spin Hall insulator [[notebook]](notebooks/12_z2_invariant.ipynb)
 - The full 3D strong/weak classification $(\nu_0;\nu_1\nu_2\nu_3)$ of a 3D time-reversal-invariant insulator, from the $Z_2$ invariant of each of the Brillouin zone's six time-reversal-invariant planes, distinguishing an ordinary insulator from a strong or weak topological insulator [[notebook]](notebooks/13_z2_invariant_3d.ipynb)
 - The same $Z_2$ invariants from parity eigenvalues alone, $\delta_i=\prod_m\xi_{2m}(\Gamma_i)$ with $(-1)^{\nu_0}=\prod_i\delta_i$ — exact and mesh-free, needing only the 8 (3D) or 4 (2D) time-reversal-invariant momenta, for crystals with an inversion centre [[notebook]](notebooks/15_parity_invariants.ipynb)
+
+## Magnetic exchange interactions ##
+- The full anisotropic exchange tensor $J_{ij}^{\alpha\beta}$ of a magnetic pair, from $H=\sum_{i<j}\mathbf S_i\cdot\mathbf J_{ij}\cdot\mathbf S_j$, by four-state energy mapping $J_{ij}^{\alpha\beta}=(E_1+E_4-E_2-E_3)/4S^2m_{ij}$ over constrained non-collinear states [[notebook]](notebooks/18_exchange_constants.ipynb)
+- Its decomposition into isotropic Heisenberg exchange, the Dzyaloshinskii-Moriya vector $D^x=\tfrac12(J^{yz}-J^{zy})$, and the symmetric anisotropy that carries the Kitaev $K$ and $\Gamma$ terms of a honeycomb magnet [[notebook]](notebooks/18_exchange_constants.ipynb)
+- Single-ion anisotropy $\mathbf A_{ii}$, which the exchange formula cancels by construction and so needs configurations and formulas of its own [[notebook]](notebooks/18_exchange_constants.ipynb)
 
 ## Quantum geometry ##
 - The full quantum geometric tensor $Q_{ab}=g_{ab}-\tfrac i2F_{ab}$ at an arbitrary k-point: Berry curvature $F_{ab}$ *and* the quantum metric $g_{ab}$ (Fubini-Study distance between neighbouring Bloch states), from the same wavefunction-overlap queries used for eigenstates below [[notebook]](notebooks/07_quantum_geometry.ipynb)
@@ -238,10 +245,11 @@ points, density = calc.get_density(grid=(24, 24, 24))  # n(r) = sum_i^occ |psi_i
 ![Alt text](images/si_density.png?raw=true "Charge density slice of bulk silicon")
 
 # Notebooks #
-Seventeen notebooks under [`notebooks/`](notebooks), one per feature area above, each
+Eighteen notebooks under [`notebooks/`](notebooks), one per feature area above, each
 executed end-to-end against a real compiled Elk binary and checked in with its actual
-output (the DFPT phonon notebook is the exception -- left unexecuted with a note,
-since a single call takes ~11-13 minutes). Listed new-physics-first, matching
+output (two are exceptions, left unexecuted with a note: the DFPT phonon notebook,
+since a single call takes ~11-13 minutes, and the exchange-constants notebook,
+whose full tensor is 36 constrained SCF runs). Listed new-physics-first, matching
 FUNCTIONALITIES/EXAMPLES above; if you're new to elkpy, `01_getting_started.ipynb`
 is the place to actually start:
 
@@ -261,6 +269,7 @@ is the place to actually start:
 | [`15_parity_invariants.ipynb`](notebooks/15_parity_invariants.ipynb) | Parity eigenvalues at the TRIM and the Fu-Kane symmetry-indicator $Z_2$ | yes |
 | [`16_effective_mass.ipynb`](notebooks/16_effective_mass.ipynb) | Effective masses from the k·p sum rule, and which bands produce them | yes |
 | [`17_spin_hall.ipynb`](notebooks/17_spin_hall.ipynb) | Spin Berry curvature, and why the two valleys agree in sign | yes |
+| [`18_exchange_constants.ipynb`](notebooks/18_exchange_constants.ipynb) | Anisotropic exchange tensor by four-state energy mapping (Heisenberg, DM, Kitaev) | yes |
 | [`01_getting_started.ipynb`](notebooks/01_getting_started.ipynb) | Ground state, band structure, density of states | -- |
 | [`02_relaxation_forces_and_properties.ipynb`](notebooks/02_relaxation_forces_and_properties.ipynb) | Forces, relaxation, effective mass, density, `run_tasks()` | -- |
 | [`03_phonon_dispersion_and_dos.ipynb`](notebooks/03_phonon_dispersion_and_dos.ipynb) | Phonon dispersion/DOS via DFPT | -- |

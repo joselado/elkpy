@@ -23,6 +23,7 @@ from .parsers import (
     dos,
     effmass,
     eigval,
+    exchange as parsers_exchange,
     forces,
     geometry,
     info,
@@ -1717,6 +1718,79 @@ class Calculation:
         out = symmetry.fu_kane_z2_3d(deltas)
         out["deltas"] = deltas
         return out
+
+    def get_exchange_tensor(
+        self,
+        i,
+        j,
+        magnetic,
+        spin=0.5,
+        components="all",
+        shell_cutoff=None,
+        workers=1,
+        label=None,
+        **kwargs,
+    ):
+        """The full 3x3 magnetic exchange tensor J_ij^{ab} (meV) of the atom
+        pair (i, j), by four-state energy mapping (Sabani, Bacaksiz &
+        Milosevic, PRB 102, 014457 (2020), arXiv:2002.10861; the method is
+        Xiang et al., PRB 84, 224429 (2011)).
+
+        Each component costs four constrained non-collinear SCF runs, so the
+        default `components="all"` costs 36 -- see `workers` and
+        docs/design.md #29. `components="symmetric"` costs 24 and is valid
+        only when the bond midpoint is an inversion centre (Moriya's theorem
+        then forces the antisymmetric/DM part to vanish); computing all nine
+        on at least one bond turns that vanishing into a real null test
+        rather than an assumption.
+
+        `i`, `j` are 0-based global atom indices in Elk's own ordering (see
+        Structure.atom_index). `magnetic` is the species symbol, list of
+        symbols, or explicit list of indices of every magnetic atom: the
+        spectators must be constrained too, since the cancellation that makes
+        the method work requires them to be identical in all four states.
+
+        `spin` is the classical spin length S entering H = sum_{i<j} S_i . J
+        . S_j with |S_i| = S -- 1 for Ni(II), 3/2 for Cr(III), 1/2 for a
+        j_eff = 1/2 pseudospin. It only rescales the result, but it sets the
+        convention the number is quoted in, so it is explicit rather than
+        defaulted silently.
+
+        `shell_cutoff` (Bohr), when given, checks that no periodic image of
+        the pair falls inside the retained interaction range at a different
+        distance -- i.e. that the supercell is big enough for this pair to be
+        extracted at all. Without it the multiplicity is still computed and
+        reported, but a too-small supercell is not diagnosed.
+
+        Returns a dict with "tensor" (3x3, meV), "isotropic", "dm",
+        "symmetric", "multiplicity", "distance" and the raw "energies".
+        """
+        from . import exchange as exchange_module
+
+        if isinstance(magnetic, str) or (
+            magnetic and isinstance(next(iter(magnetic)), str)
+        ):
+            magnetic = exchange_module.magnetic_indices(self.structure, magnetic)
+        magnetic = list(magnetic)
+        if shell_cutoff is not None:
+            avec = np.array(self.structure.avec, dtype=float) * self.structure.scale
+            parsers_exchange.check_supercell(
+                avec,
+                exchange_module.atom_cartesian(self.structure, i),
+                exchange_module.atom_cartesian(self.structure, j),
+                shell_cutoff,
+            )
+        return exchange_module.exchange_tensor(
+            self,
+            i,
+            j,
+            magnetic,
+            spin=spin,
+            components=components,
+            label=label,
+            workers=workers,
+            **kwargs,
+        )
 
     def run_tasks(self, tasks, blocks=None, resume=True, label=None):
         """Escape hatch for any Elk task not covered by a named get_*

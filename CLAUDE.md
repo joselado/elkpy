@@ -706,6 +706,61 @@ that reasoning costs. **The concrete fix, not done**: §19's $L_z$ pins the sens
 rotation, since a $C_n$ eigenvalue is $e^{-2\pi im/n}$ — cleanest with an atom ON the
 axis, which h-BN lacks.
 
+Also implemented, and — like §15/§17/§20/§21 — needing **no new Fortran at all**:
+`Calculation.get_exchange_tensor(i, j, magnetic=, spin=, components=)` (§29) — the full
+anisotropic magnetic exchange tensor $J_{ij}^{\alpha\beta}$ of a pair, by **four-state energy
+mapping** (Šabani, Bacaksiz & Milošević, PRB 102, 014457 (2020), arXiv:2002.10861; method from
+Xiang, Kan, Wei, Whangbo & Gong, PRB 84, 224429 (2011), arXiv:1106.5549), with
+`parsers/exchange.py` doing the arithmetic and decomposing into isotropic Heisenberg exchange,
+the Dzyaloshinskii-Moriya vector, and the symmetric anisotropy carrying the Kitaev $K$/$\Gamma$
+terms. Elk has no exchange-parameter capability at all, so this is genuinely new physics on top
+of the interface.
+
+The reason no Fortran is needed: Elk already does constrained non-collinear DFT via
+`fsmtype=-2` + per-atom `mommtfix` (`bfieldfsm.f90` projects the constraining field perpendicular
+to the target direction, so magnitude relaxes freely and the field does no work once on target),
+and — the load-bearing fact — **its reported total energy is the constrained functional with no
+field contribution**: `energy.f90:226` forms `engykn = evalsum - engyvcl - engyvxc - sm` where
+`sm = ∫m·B_s` uses the TOTAL effective field, into which `addbfsm.f90` has already folded the
+constraining field. Three settings are load-bearing rather than cosmetic: `nosym`/`reducek=0`
+(the four states break symmetry, `checkfsm.f90` hard-`stop`s on a non-invariant `mommtfix`, and
+an identical k-set across the four states is what makes their systematic errors cancel);
+`epsengy` (Elk's default 1e-4 Ha ≈ 2.7 meV exceeds the whole signal — elkpy defaults 1e-8); and
+`bfcmt` seeding (the perpendicular constraining field can rotate a moment but not create one).
+Two published traps are handled explicitly: Xiang's original DM formula carries an extra sign
+valid only for an already-antisymmetric Hamiltonian, so all nine components go through one
+formula and $\mathbf D$ comes from the antisymmetric part afterwards — making $\mathbf D=0$ on
+an inversion-symmetric bond a real null test; and the multiplicity $m_{ij}$ (periodic images of
+the flipped site) is computed by `check_supercell`, not assumed to be 1.
+
+**Verification status — deliberately incomplete, unlike every other entry above.** The Python
+arithmetic is pinned by 16 synthetic tests (`tests/test_parsers_exchange.py`): exact round trip
+for all nine components, the cancellation claim tested against a model containing single-ion
+anisotropy plus spectator couplings, and Šabani's correction to Xiang reproduced. Against a real
+binary, only isolated and PARTIAL pieces: a NiO perpendicular two-site probe had all moments on
+target to ~1° at a healthy 1.80 μB, but was interrupted after ~4 SCF cycles and never converged —
+so it shows the constraint locking on fast (unlike an earlier bcc Fe probe, whose moments
+collapsed to ~0.16 μB over 60 cycles), not that it holds to convergence, and `check_constraint()`
+has never fired on a completed run. Elk's `bfcmt` sign convention was measured properly (a single
+bcc Fe atom with `bfcmt=(0,0,+4)` converges to −2.75 μB, i.e. antiparallel).
+**The nine-component NiO sweep has NOT been run** — `ELKPY_RUN_SLOW_TESTS=1 python3 -m pytest
+tests/test_calculation_exchange_nio.py`, of order 60 CPU-hours at ~150 s/SCF loop × 40 loops ×
+36 configurations. Its three assertions carry the real teeth: $J_2$ antiferromagnetic and ~20 meV;
+the tensor **exactly isotropic with SOC off** (convention-free — a global spin rotation is a
+symmetry, so any deviation measures the noise floor); and $\mathbf D=0$ on the
+inversion-symmetric J₂ bond. Treat the feature as unvalidated end-to-end until that runs.
+
+**Known limitation**: `mommtfix` constrains the SPIN moment only. For a $j_{\rm eff}=1/2$
+pseudospin system such as α-RuCl₃ that is insufficient — the moment is 2/3 orbital, and Hou,
+Xiang & Gong (PRB 96, 054410 (2017), arXiv:1612.00761) measure that spin and orbital directions
+deviate seriously unless both are constrained. §29 documents the shape a patch would take
+(Elk's `bforb` term at `eveqnsv.f90:96-105,160-168` already applies $\tfrac1{2c}\mathbf B\cdot
+\hat{\mathbf L}$ per atom, so only the field source is hard-wired), including that it would need
+its own total-energy correction since that term enters the second-variational Hamiltonian rather
+than `bsmt`. Not implemented. Physics writeup: `docs/design.md` §29 and `docs/physics.tex`
+Part XVI (note: §28's own promised Part XVI was never written — pre-existing gap, so this new
+part takes that number).
+
 ## Architecture
 
 - `src/elkpy/structure.py` — `Structure`: lattice vectors (`avec`, Bohr) + species, each atom either a
@@ -759,9 +814,19 @@ axis, which h-BN lacks.
   `get_z2_invariant()` — see §20. `optical` is the same exception again: it turns the
   `MOMENTUM` query's raw matrix elements into circular dichroism and the Kubo-form quantum
   geometric tensor, pinned on synthetic massive-Dirac data (`tests/test_parsers_optical.py`)
-  without an Elk run — see §22. `symmetry` is the same again for the `PARITY` query: parity
+  without an Elk run — see §22. `exchange` is the same exception again: the four-state formula, the
+  isotropic/DM/symmetric decomposition, the Kitaev parametrisation and the supercell
+  multiplicity bookkeeping, all pinned on synthetic data without an Elk run
+  (`tests/test_parsers_exchange.py`) — see §29. `symmetry` is the same again for the `PARITY` query: parity
   eigenvalue extraction and the Fu-Kane $Z_2$ counting, with the band-window gap guard
   (`check_window_gap`) that a Kramers-parity check alone cannot supply — see §23.
+- `src/elkpy/exchange.py` — orchestration for four-state energy mapping: builds each
+  configuration's `mommtfix` block and seeded `bfcmt`, runs each as its own `Calculation` in
+  its own subdirectory (so the ground-state manifest cache applies per configuration and an
+  interrupted sweep resumes), threads the sweep over configurations, and — critically —
+  `check_constraint()` re-reads each converged run's muffin-tin moments and refuses any that
+  drifted off target, since `fsmtype=-2` lets a magnitude collapse and the resulting energy
+  looks perfectly plausible. See `docs/design.md` §29.
 - `src/elkpy/config.py` — locates the built `elk` binary (`build/elk/src/elk` by default, override via
   `ELKPY_ELK_BIN`) and the species directory (`vendor/elk/species/` by default).
 
