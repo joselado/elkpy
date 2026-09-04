@@ -248,6 +248,60 @@ tree, so upgrading `vendor/elk/` to a new upstream release stays cheap. Concrete
   quantity genuinely isn't exposed by anything Elk already computes and writes
   out — not as a blanket rule to avoid Fortran.
 
+### Toolchain resolution: the same tree on a workstation and on a cluster
+
+`build-config/make.inc` holds a workstation's answer — `gfortran`, `-lopenblas
+-lfftw3 -lfftw3f`, `-march=native`. None of those three survive an HPC cluster
+unchanged, so `build_elk.sh` link-tests them and repairs what does not work,
+rather than hardcoding a second configuration. Aalto's Triton was the concrete
+case; the three failures it exposed are generic:
+
+1. **`-llapack` does not exist.** OpenBLAS bundles a complete LAPACK, and
+   Spack-built OpenBLAS installations ship no separate reference `liblapack` at
+   all. Asking for it is a hard `cannot find -llapack` even though every symbol
+   Elk needs (`zheevx`, `zhegvx`, `dsyevd`, …) is present in `libopenblas.so`.
+   So `-llapack` is gone from the default: it was redundant everywhere it worked
+   and fatal where it did not.
+
+2. **Nothing is on the link path until the environment modules are loaded.**
+   When the default link line fails and an environment-module system is present,
+   `build_elk.sh` loads `${ELKPY_MODULES:-openblas fftw}` and retries. One trap
+   worth recording: `module` is a *shell function*, so `module load x | tee` runs
+   it in a subshell and silently discards every environment change it makes —
+   the load appears to succeed and nothing is loaded.
+
+3. **`-march=native` on the login node is wrong for the compute nodes.** On
+   Triton it resolves to `skylake-avx512` on the login node, while the default
+   batch partition is Broadwell and others are Haswell or Zen3 — so the build
+   succeeds and the first job dies with `SIGILL`. When environment modules are
+   detected (taken as "this is a cluster"), the default becomes
+   `-march=haswell -mtune=generic`: the baseline Aalto's own module tree targets,
+   supported by every current partition. The performance cost is small because
+   Elk's hot loops are inside BLAS, and OpenBLAS dispatches on the actual CPU at
+   runtime regardless of how Elk itself was compiled.
+
+A fourth problem is invisible at build time and appears on the first *run*:
+a binary linked against module-provided libraries cannot find them in a batch
+job that did not load the same modules (`libopenblas.so.0: cannot open shared
+object file`). `build_elk.sh` therefore appends `-Wl,-rpath,<dir>` for every
+directory in `LIBRARY_PATH` — which is exactly what module files manipulate, and
+which carries more than the numerics: with a module-provided compiler it also
+points at that compiler's own `libgfortran`/`libgomp`, which the system
+compiler's copy need not satisfy.
+
+Three environment variables override detection, each link-tested:
+
+| Variable | Meaning |
+| --- | --- |
+| `ELKPY_F90_LIB` | Link line, verbatim. A failure is **fatal** — an explicit request is never silently replaced by a guess. |
+| `ELKPY_MARCH` | `-march`/`-mtune` flags; a bare name such as `znver3` is read as `-march=znver3`. |
+| `ELKPY_MODULES` | Modules to load if the default link line fails (default `openblas fftw`). |
+
+Whatever is resolved is **appended** to the copied `build/elk/make.inc` rather
+than substituted into it — `make` takes the last assignment, so that file reads
+as "the defaults, then what this machine needed" and is a self-contained record
+of what was actually built.
+
 ## 9. Units
 
 Elk is atomic units throughout (Bohr, Hartree; manual ch. 3). elkpy's public

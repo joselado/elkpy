@@ -170,13 +170,15 @@ jobs:
       - uses: actions/checkout@v4
 
       # Exactly what build-config/make.inc links against: gfortran (+ -fopenmp,
-      # bundled), -lopenblas, -llapack, -lfftw3 and -lfftw3f (both come from
-      # libfftw3-dev).
+      # bundled), -lopenblas (which bundles LAPACK, so no liblapack-dev), and
+      # -lfftw3 / -lfftw3f (both come from libfftw3-dev). Installing these means
+      # build_elk.sh's default link line works and its detection fallback is
+      # never entered here -- which is the point: CI checks the default.
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            gfortran libopenblas-dev liblapack-dev libfftw3-dev
+            gfortran libopenblas-dev libfftw3-dev
 
       # build_elk.sh runs `make` SERIALLY on purpose -- Elk's own
       # src/Makefile has implicit ordering dependencies (mpi_stub.f90 before
@@ -221,7 +223,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            gfortran libopenblas-dev liblapack-dev libfftw3-dev
+            gfortran libopenblas-dev libfftw3-dev
 
       # Build in THIS job, for the -march=native reason above.
       - name: Build Elk

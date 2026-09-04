@@ -1057,5 +1057,14 @@ vendored tree:
   the binary built — confirmed ~11-13 minutes per test on a minimal 2-atom, `ngridq=(2,2,2)` grid, cost
   dominated by DFPT's per-perturbation-per-q-point work, not anything elkpy controls. Set
   `ELKPY_RUN_SLOW_TESTS=1` to actually run them.
-- `build-config/make.inc` targets GNU Fortran + OpenBLAS/LAPACK + FFTW, serial (no MPI); edit it (not
-  `vendor/elk/make.inc`) to change compiler/library configuration.
+- `build-config/make.inc` targets GNU Fortran + OpenBLAS (which bundles LAPACK — do NOT re-add
+  `-llapack`, it is absent in Spack-built OpenBLAS and redundant where it exists) + FFTW3 double and
+  single precision, serial (no MPI); edit it (not `vendor/elk/make.inc`) to change compiler/library
+  configuration. Those are the workstation defaults: `build_elk.sh` link-tests them and, when they
+  fail, loads `${ELKPY_MODULES:-openblas fftw}`, adds `-Wl,-rpath` for every `LIBRARY_PATH` entry (so
+  the binary still runs in a batch job with no modules loaded), and swaps `-march=native` for
+  `-march=haswell -mtune=generic` whenever an environment-module system is present — a login node is
+  routinely newer than the compute nodes, so `native` builds fine and then `SIGILL`s. Overrides:
+  `ELKPY_F90_LIB` (verbatim, and a link failure is fatal), `ELKPY_MARCH`, `ELKPY_MODULES`. The
+  resolved values are appended to the copied `build/elk/make.inc`, which is therefore a
+  self-contained record of what was built. See `docs/design.md` §8.

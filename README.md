@@ -40,6 +40,15 @@ energy = calc.get_energy()                      # Hartree
 python3 -m pip install -e .        # add .[ase] for Structure.from_ase()/to_ase()
 ```
 
+Elk needs BLAS/LAPACK (OpenBLAS supplies both) and FFTW3 in double *and* single
+precision — on Debian/Ubuntu, `gfortran libopenblas-dev libfftw3-dev`.
+`build_elk.sh` link-tests the compiler flags before building and repairs them if
+they do not work here: on a cluster it loads the `openblas`/`fftw` environment
+modules, links with an `-rpath` so the binary still runs in a batch job that did
+not load them, and compiles for a portable instruction set instead of the login
+node's own. Override with `ELKPY_F90_LIB`, `ELKPY_MARCH` or `ELKPY_MODULES`
+(see `docs/design.md` §8).
+
 # FUNCTIONALITIES #
 
 ## Spin-orbit coupling ##
