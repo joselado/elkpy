@@ -761,6 +761,66 @@ than `bsmt`. Not implemented. Physics writeup: `docs/design.md` §29 and `docs/p
 Part XVI (note: §28's own promised Part XVI was never written — pre-existing gap, so this new
 part takes that number).
 
+Also implemented, as patch 0011 — the eleventh entry in the Fortran patch series and the first since
+0002/0003 to add a new `.f90` file: **spin-polarised STM images** (§30) —
+`Calculation.get_spin_stm()` / `get_spin_stm_3d()` (tasks 9003/9004, `src/elkpy_stm.f90`), the
+Tersoff-Hamann differential conductance seen by a magnetic tip,
+$dI/dV(\mathbf r)\propto n(\mathbf r,E_F+eV)+P_T\,\mathbf m(\mathbf r,E_F+eV)\cdot
+\hat{\mathbf e}_T$ (Tersoff & Hamann, PRB 31, 805 (1985); the spin-polarised extension is
+Wortmann, Heinze, Kurz, Bihlmayer & Blügel, PRL 86, 4132 (2001)), with $\hat{\mathbf e}_T$ an
+arbitrary Cartesian direction. Driveable entirely from a plain `elk.in` — task 9003/9004 plus the
+`elkpy_stmdir`/`elkpy_stmpol`/`elkpy_stmbias`/`elkpy_stmint` blocks — see `examples/spin-stm/`,
+which needs no Python at all; that is a deliberate part of the feature, not a nicety.
+
+The reason it needs so little Fortran: **Elk already computes $\mathbf m(\mathbf r,E)$ and
+throws it away.** Upstream task 162 (`wfplot.f90`) makes its spin-summed STM image by replacing
+the second-variational occupations with an energy-selecting weight and calling `rhomagv`, which
+fills the global `rhomt`/`rhoir` *and* `magmt`/`magir`, symmetrises both and converts both to the
+fine grids — then plots the charge density alone. `elkpy_stm.f90` is that same routine with the
+magnetisation kept, forming $f_1=n$, $f_2=\mathbf m\cdot\hat{\mathbf e}_T$,
+$f_3=n+P_Tf_2$ pointwise (the projection is linear, so it commutes with the muffin-tin
+spherical-harmonic expansion — no re-expansion, no new radial integral) and handing all three to
+Elk's generic `plot2d`/`plot3d`. $f_1,f_2$ are complete: a different $P_T$ is a recombination,
+never a re-run. Two modes: a smeared delta at $E_F+eV$ (dI/dV map) or the smeared window between
+$E_F$ and $E_F+eV$ (constant-current) — the latter deliberately with **no** $1/w$ factor, being a
+state count rather than a density of states. `ndmag=1` (collinear) means only $\hat e_z$ can
+contribute, which is the correct answer, so it prints a note rather than failing.
+
+**An upstream bug found by the normalisation check.** `rhomagv` passes `wkpt(ik)` to `rhomagk` as
+a separate argument and `rhomagk` multiplies by it, so `occsv` must be a pure occupancy exactly as
+`occupy.f90` stores it. Upstream's task-162 branch folds `wkpt(ik)` in a second time — its image
+carries $w_{\mathbf k}^2$; the same file's task-61/62/63 branch sets `occsv = 1/wkpt` precisely to
+cancel that factor, which is what makes the double counting visible. Harmless overall scale on an
+unreduced mesh, a genuine distortion with `reducek /= 0`. elkpy omits it, and that is what lets the
+cell integral be checked absolutely.
+
+**Verification** on a freestanding Cr monolayer with the triangular lattice of Cr/Ag(111) — Elk's
+own `examples/magnetism/Cr-monolayer` with the vacuum opened to 24 Bohr and `reducebf` switching
+the seed fields off — which orders in a coplanar 120° Néel state (Kurz, Förster, Nordström,
+Bihlmayer & Blügel, PRB 69, 024415 (2004)), the system SP-STM was proposed for and has since been
+simulated in detail (Palotás, Hofer & Szunyogh, PRB 84, 174428 (2011)). Three chemically identical
+atoms with moments 120° apart make every check exact rather than a plausibility band
+(`tests/test_calculation_spin_stm.py`, 13 tests): the spin-summed LDOS is **identical**
+above all three (spread <1e-6) while the $\hat x$ projection gives ratios $0:+1:-1$ and the $\hat
+y$ projection $-1:+\tfrac12:+\tfrac12$ — rotating the tip changes which sublattice is dark, the
+signature by which a non-collinear structure is identified experimentally (Gao, Wulfhekel &
+Kirschner, PRL 101, 267205 (2008)); the projection vanishes at the hollow site for any tip; a
+$\hat z$ tip is an **exact null** (5e-7 of the charge LDOS — without SOC the seed's $m_z=0$
+subspace is invariant under the Kohn-Sham flow), which is the check that the Cartesian component
+requested is the one returned rather than $|\mathbf m|$; a $(1,1,1)$ tip reproduces
+$(\mathbf m\!\cdot\!\hat x+\mathbf m\!\cdot\!\hat y+\mathbf m\!\cdot\!\hat z)/\sqrt3$
+from three separate runs to 2.5e-7; and $|\mathbf m\cdot\hat{\mathbf e}|\le n$ pointwise, which a
+$\boldsymbol\sigma$-vs-$\mathbf S$ factor-of-2 slip would break (Elk's $\mathbf m$ is
+$n_\uparrow-n_\downarrow$, twice §17's $\langle\mathbf S\rangle$). The **absolute
+normalisation** — the one thing every check above, being a ratio or a null, leaves free — comes
+from `src/occupy.f90`'s `FERMIDOS.OUT`, the DOS at $E_F$ computed as a sum over eigenvalues with no
+density and no plotting machinery at all: agreement of order 1e-5 (measured 1.2e-5 and 3.8e-5 on
+two cells), the same order as the density representation's own total-charge error. That is the check that caught the `wkpt` double counting,
+as an exact factor of 2. Finally, against upstream task 162 on an unreduced mesh the pointwise
+ratio is constant to 1e-6 *and equals $N_{\mathbf k}$ exactly* — a quantitative confirmation that
+the whole difference between the two routines is that one weight. Physics writeup: `docs/design.md`
+§30 and `docs/physics.tex` Part XVII.
+
 ## Architecture
 
 - `src/elkpy/structure.py` — `Structure`: lattice vectors (`avec`, Bohr) + species, each atom either a
@@ -771,7 +831,7 @@ part takes that number).
   parameters (`xc`, `spinpol`, `spinorb`, `soc_scale`, `rgkmax`, `ngridk`, `extra_blocks` for anything
   else — e.g. `maxscl`). `soc_scale={"Fe": 1.5}` requires `spinorb=True` and needs the
   `patches/0001-per-species-soc-scale.patch` Fortran extension applied (i.e. a binary built via
-  `scripts/build_elk.sh` after the patch was added — see git log for when). `get_*` methods block and
+  `build_elk.sh` after the patch was added — see git log for when). `get_*` methods block and
   can be expensive — real Elk subprocesses, not in-memory work.
   `ensure_ground_state()` reuses a prior task-0 run only if a JSON manifest (`.elkpy_manifest.json`)
   shows the basis/structure/functional-defining parameters (including `extra_blocks`) and the Elk
@@ -817,7 +877,12 @@ part takes that number).
   without an Elk run — see §22. `exchange` is the same exception again: the four-state formula, the
   isotropic/DM/symmetric decomposition, the Kitaev parametrisation and the supercell
   multiplicity bookkeeping, all pinned on synthetic data without an Elk run
-  (`tests/test_parsers_exchange.py`) — see §29. `symmetry` is the same again for the `PARITY` query: parity
+  (`tests/test_parsers_exchange.py`) — see §29. `stm` is a plain parser again, for the spin-polarised STM task's own
+  `ELKPY_STMDOS.OUT` cell integrals — the images themselves go through Elk's generic
+  `plot2d`/`plot3d` writers and so through `volumetric` (`parse_plot2d` added there, whose
+  grid ORDER is the load-bearing detail: `plotpt2d.f90` runs the first plotting vector's index
+  fastest, so a column reshapes as `(n2, n1)` and getting it backwards transposes every image
+  without changing a number). `symmetry` is the same again for the `PARITY` query: parity
   eigenvalue extraction and the Fu-Kane $Z_2$ counting, with the band-window gap guard
   (`check_window_gap`) that a Kramers-parity check alone cannot supply — see §23.
 - `src/elkpy/exchange.py` — orchestration for four-state energy mapping: builds each
@@ -977,7 +1042,7 @@ vendored tree:
 
 - Build Elk out-of-tree (copies `vendor/elk/` to `build/elk/`, applies `patches/*.patch` if any, drops
   in `build-config/make.inc`, builds — never touches `vendor/elk/`):
-  `./scripts/build_elk.sh`. Must be run before any test/example that actually invokes Elk.
+  `./build_elk.sh`. Must be run before any test/example that actually invokes Elk.
   Serial by design — `make -j` races on an implicit ordering dependency in Elk's own `src/Makefile`
   (stub files like `mpi_stub.f90`/`libxcifc_stub.f90` must compile before the modules that `use` them,
   and that isn't expressed as an explicit prerequisite upstream); this is a pre-existing upstream
@@ -985,7 +1050,7 @@ vendored tree:
 - Install elkpy (editable): `python3 -m pip install -e .`
 - Run tests: `python3 -m pytest tests/`. Run a single test: `python3 -m pytest tests/test_calculation_si.py::test_get_bands`.
   `tests/test_calculation_*.py` are integration suites that run the real `elk` binary on bulk Si/Fe —
-  they self-skip if `build/elk/src/elk` doesn't exist yet, so run `./scripts/build_elk.sh` first to
+  they self-skip if `build/elk/src/elk` doesn't exist yet, so run `./build_elk.sh` first to
   actually exercise them. `tests/test_structure.py`'s ASE round-trip test self-skips if `ase` isn't
   installed (`pip install -e .[ase]`).
 - `tests/test_calculation_si_phonons.py` (DFPT phonon dispersion/DOS) is skipped by default even with

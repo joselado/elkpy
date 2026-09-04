@@ -236,7 +236,7 @@ DFT -> irvsp/vasp2trace -> Bilbao tables.
      gives `fuzz 1` and success, so an exit-code check alone would pass a
      silently mis-applied series. The job greps for fuzz explicitly.
 
-   `build-elk` runs `scripts/build_elk.sh` (measured 3m15s locally for 410
+   `build-elk` runs `build_elk.sh` (measured 3m15s locally for 410
    objects, so viable on a public runner). The binary is deliberately never
    cached or shared between jobs: `build-config/make.inc` uses `-march=native`
    and CI runner fleets are heterogeneous, so a cached binary risks `SIGILL`.

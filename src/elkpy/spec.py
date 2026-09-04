@@ -53,6 +53,13 @@ TASKS = {
     "eigenstate_session": 9002,  # elkpy extension: interactive eigenstate/overlap query
                                   # session (stdin/stdout loop), src/elkpy_eigenstates.f90 --
                                   # patches/0003-eigenstate-session.patch
+    "stm": 162,            # src/wfplot.f90 -- upstream Elk's spin-SUMMED STM
+                           # image (occupations replaced by a delta function at
+                           # the Fermi energy, then the charge density plotted)
+    "spin_stm_2d": 9003,   # elkpy extension: spin-POLARISED STM image on the
+                           # plot2d plane, src/elkpy_stm.f90 --
+                           # patches/0011-spin-polarized-stm.patch
+    "spin_stm_3d": 9004,   # elkpy extension: same on the plot3d parallelepiped
 }
 
 # output filenames, per the `open(unit, file=...)` calls in the cited source
@@ -78,6 +85,13 @@ OUTPUT_FILES = {
     "phdlines": "PHDLINES.OUT",            # src/phdisp.f90
     "berry": "ELKPY_BERRY.OUT",            # elkpy extension, src/elkpy_berry.f90
     "berry_path": "ELKPY_BERRY_PATH.OUT",  # elkpy extension, src/elkpy_berry.f90
+    "stm_2d": "STM2D.OUT",                 # src/wfplot.f90, upstream task 162
+    "spin_stm_2d": "ELKPY_STM2D.OUT",      # elkpy extension, src/elkpy_stm.f90
+    "spin_stm_3d": "ELKPY_STM3D.OUT",      # elkpy extension, src/elkpy_stm.f90
+    "spin_stm_dos": "ELKPY_STMDOS.OUT",    # elkpy extension, src/elkpy_stm.f90 --
+                                           # cell integrals of the plotted fields
+    "fermidos": "FERMIDOS.OUT",            # src/occupy.f90, DOS at the Fermi
+                                           # energy per s.c. iteration
 }
 
 # output filenames that carry indices in the name, as format templates --

@@ -7,3 +7,8 @@ __pycache__/
 .claude/
 /notebooks/_scratch/
 .ipynb_checkpoints/
+
+# examples/ are run in place (see examples/*/README.md), which drops Elk's
+# output files and the plot next to the elk.in they came from
+examples/**/*.OUT
+examples/**/*.png

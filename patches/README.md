@@ -2,7 +2,7 @@
 
 Tracks every edit elkpy makes to a `build/elk/` copy of `vendor/elk/` (see
 `docs/design.md` §8 — `vendor/elk/` itself is never touched). Applied in
-order by `scripts/build_elk.sh` via `patch -p1`.
+order by `build_elk.sh` via `patch -p1`.
 
 When bumping `vendor/elk/` to a new upstream release, check each row's
 "upstream file" against the new version before assuming a patch still
@@ -21,19 +21,20 @@ to make it a quick diff-checklist instead of a re-read of the raw patches.
 | [0008](0008-inversion-parity-operator.patch) | — | `src/elkpy_eigenstates.f90` (elkpy's own file, added by 0003) | New `elkpy_parity` subroutine (lifts getevecfv.f90's symmetry transformation of the first-variational coefficients; reuses upstream `rotzflm`, `genwfsv`, `genolpq` unmodified) + a call from `elkpy_eigenstate_session`'s query loop | `PARITY` query on the task-9002 session — the inversion operator $\langle\psi_m\|\hat I\|\psi_n\rangle$ at a time-reversal-invariant momentum, for the Fu-Kane $Z_2$ symmetry indicators |
 | [0009](0009-momentum-evecsv.patch) | — | `src/elkpy_eigenstates.f90` (elkpy's own file, added by 0003) | One new `intent(out)` argument on 0007's `elkpy_momentum` (`evecsv_out`, written where the discarded local `evecsv` was) + one extra write block in the `MOMENTUM` case of `elkpy_eigenstate_session`'s query loop | `MOMENTUM` also returns that diagonalisation's `evecsv`, so the $\S17$ spin operators and the $\S22$ velocity matrix elements share one eigenbasis — the prerequisite for the spin current operator $J^z_a=\tfrac12\{S_z,v_a\}$, spin Berry curvature and spin Hall conductivity ($\S24$) |
 | [0010](0010-symmetry-operators.patch) | — | `src/elkpy_eigenstates.f90` (elkpy's own file, added by 0003) | New `elkpy_symop` subroutine (generalises 0008's `elkpy_parity` from inversion to any space-group element; reuses `rotzflm`/`genwfsv`/`genolpq` unmodified) + `SYMLIST` and `SYMMETRY` arms in the query loop | `SYMLIST` (Elk's crystal symmetries) and `SYMMETRY` (the operator $\langle\psi_m|\hat O|\psi_n\rangle$ at a fixed k-point), for rotation-eigenvalue symmetry indicators |
+| [0011](0011-spin-polarized-stm.patch) | `src/elkpy_stm.f90` | `src/elk.f90` (task dispatch `case` + docs), `src/modmain.f90` (new module vars), `src/readinput.f90` (`elkpy_stmdir`/`elkpy_stmpol`/`elkpy_stmbias`/`elkpy_stmint` block parsers), `src/Makefile` (`SRC_ELKPY` var) | `elk.f90`: one new `case` arm (9003, 9004) | Tasks 9003/9004 — spin-polarised STM images (Tersoff-Hamann): upstream task 162's own occupation-replacement + `rhomagv` route, but keeping the magnetisation it discards, and plotting $n$, $\mathbf m\cdot\hat{\mathbf e}_T$ and $n+P_T\,\mathbf m\cdot\hat{\mathbf e}_T$ |
 
 ## Notes
 
-- 0001/0002/0003 each touch `src/elk.f90`'s task dispatch — the one
+- 0001/0002/0003/0011 each touch `src/elk.f90`'s task dispatch — the one
   genuinely unavoidable shared hook point (per `docs/design.md` §8, this is
   kept to a single added `case`/line per patch, marked `! elkpy: ...`). If a
-  future upstream version restructures `elk.f90`'s dispatch, all three will
+  future upstream version restructures `elk.f90`'s dispatch, all four will
   need re-hooking together.
-- 0002 and 0003 both edit `src/Makefile`'s `SRC_ELKPY` variable to register
-  their new file — a likely conflict point if upstream ever adds its own
+- 0002, 0003 and 0011 each edit `src/Makefile`'s `SRC_ELKPY` variable to
+  register their new file — a likely conflict point if upstream ever adds its own
   `SRC_ELKPY`-shaped variable or restructures the source list.
 - 0004-0010 only touch elkpy's own `elkpy_eigenstates.f90` (added by 0003),
-  not any upstream file — lowest risk of the ten on an upstream bump. They
+  not any upstream file — lowest risk of the eleven on an upstream bump. They
   do each *call* an upstream subroutine unmodified (`wfmtsv`, `lopzflm`,
   `genpmatk`, `rotzflm`/`genwfsv`/`genolpq`), so an upstream signature change
   to one of those is the realistic breakage mode, not a patch-application
@@ -46,6 +47,17 @@ to make it a quick diff-checklist instead of a re-read of the raw patches.
   calling it, since upstream exposes it only inline — so an upstream change
   to that transformation would need the copy re-synced, and it is the one
   place in the series where a silent divergence from upstream is possible.
-- Task numbers 9000-9002 and the `elkpy_`-prefixed block/variable names are
+- 0011 is the first patch since 0002/0003 to add a new `.f90` file, so like
+  them it edits `src/Makefile`'s `SRC_ELKPY` variable and `elk.f90`'s task
+  dispatch — the same two shared hook points, and the same re-hooking cost on
+  an upstream bump. It is also the only patch in the series whose new code
+  deliberately *differs* from the upstream routine it mirrors:
+  `wfplot.f90`'s task-162 branch folds `wkpt(ik)` into `occsv` on top of the
+  factor `rhomagv` already applies, and `elkpy_stm.f90` does not (see
+  `docs/design.md` §30). If a future upstream release fixes that, the
+  divergence disappears rather than conflicting — but the elkpy-vs-162
+  regression test's expected factor of $N_{\mathbf k}$ would then need to
+  become 1.
+- Task numbers 9000-9004 and the `elkpy_`-prefixed block/variable names are
   deliberately in an unused-by-upstream range (`docs/design.md` §8) to
   minimize collision risk on a version bump.

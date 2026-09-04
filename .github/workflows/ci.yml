@@ -5,12 +5,12 @@ name: CI
 #
 #   unit-tests   (~10 s)  -- everything that needs no elk binary
 #   patch-series (~10 s)  -- patches/ still applies to vendor/elk/ (design.md #8)
-#   build-elk    (~5-15 min, needs both above) -- scripts/build_elk.sh
+#   build-elk    (~5-15 min, needs both above) -- build_elk.sh
 #   integration  (manual/scheduled only)       -- the real-DFT test suites
 #
 # The patch-series job is the one that protects against the failure mode
 # design.md #8 calls out: bumping vendor/elk/ to a new upstream release and
-# silently breaking one of the eight patches.
+# silently breaking one of the patches.
 
 on:
   push:
@@ -104,13 +104,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The series is CUMULATIVE, not independent: 0002 re-touches elk.f90 /
-      # modmain.f90 / readinput.f90 after 0001, and 0004-0008 all edit
-      # src/elkpy_eigenstates.f90, a file that only exists once 0003 has been
-      # applied. So each patch must be applied for real before the next one is
-      # checked -- a per-patch `--dry-run` against a pristine vendor/elk/ fails
-      # for 7 of the 8. This mirrors scripts/build_elk.sh exactly, minus the
-      # compile.
+      # The series is CUMULATIVE, not independent: 0002 and 0011 re-touch
+      # elk.f90 / modmain.f90 / readinput.f90 / Makefile after 0001, and
+      # 0004-0010 all edit src/elkpy_eigenstates.f90, a file that only exists
+      # once 0003 has been applied. So each patch must be applied for real
+      # before the next one is checked -- a per-patch `--dry-run` against a
+      # pristine vendor/elk/ fails for almost all of them. This mirrors
+      # build_elk.sh exactly, minus the compile.
       #
       # `--batch` keeps patch non-interactive (it otherwise prompts on stdin for
       # a filename when context is not found, and would hang the runner).
@@ -178,13 +178,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             gfortran libopenblas-dev liblapack-dev libfftw3-dev
 
-      # scripts/build_elk.sh runs `make` SERIALLY on purpose -- Elk's own
+      # build_elk.sh runs `make` SERIALLY on purpose -- Elk's own
       # src/Makefile has implicit ordering dependencies (mpi_stub.f90 before
       # modmpi.f90, libxcifc_stub.f90 before modxcifc.f90/moddftu.f90) that are
       # not expressed as prerequisites, so `make -j` races nondeterministically.
       # Do not "parallelize" this.
       - name: Build
-        run: ./scripts/build_elk.sh
+        run: ./build_elk.sh
 
       # Elk exits 0 even when it cannot open elk.in (it prints an error and
       # stops), so the exit status proves nothing -- the banner does.
@@ -225,7 +225,7 @@ jobs:
 
       # Build in THIS job, for the -march=native reason above.
       - name: Build Elk
-        run: ./scripts/build_elk.sh
+        run: ./build_elk.sh
 
       - name: Install elkpy (editable, with optional extras)
         run: python -m pip install -e ".[ase,test]"

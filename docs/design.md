@@ -3339,3 +3339,243 @@ from elkpy.parsers import exchange
 cubic = exchange.rotate_tensor(result["tensor"], exchange.honeycomb_cubic_frame())
 exchange.kitaev_parameters(cubic)     # J, K, Gamma, Gamma', and a residual
 ```
+
+## 30. Spin-polarised STM images (Tersoff-Hamann)
+
+`Calculation.get_spin_stm()` / `get_spin_stm_3d()` (elkpy tasks 9003/9004,
+`patches/0011-spin-polarized-stm.patch`, `src/elkpy_stm.f90`) simulate what a
+spin-polarised scanning tunneling microscope measures: the vacuum local
+density of states above a magnetic surface, projected onto the tip's own
+magnetisation direction — an arbitrary Cartesian $\hat{\mathbf e}_T$, e.g.
+$(1,1,1)$.
+
+### The physics
+
+Tersoff and Hamann (PRL **50**, 1998 (1983); PRB **31**, 805 (1985)) model
+the tip as an $s$-wave orbital, which reduces the tunnel current to the
+sample's local density of states at the tip position $\mathbf r$ and the
+energy set by the bias. Wortmann, Heinze, Kurz, Bihlmayer and Blügel (PRL
+**86**, 4132 (2001)) extended this to a magnetic tip, giving
+
+$$
+\frac{dI}{dV}(\mathbf r) \;\propto\; n_T\Big[\,n(\mathbf r, E_F + eV)
+  \;+\; P_T\,\mathbf m(\mathbf r, E_F + eV)\cdot\hat{\mathbf e}_T\,\Big],
+\qquad P_T = \frac{|\mathbf m_T|}{n_T},
+$$
+
+where $n$ and $\mathbf m$ are the sample's *energy-resolved* charge and
+magnetisation densities
+
+$$
+n(\mathbf r, E) = \sum_{n\mathbf k} \delta(E-\varepsilon_{n\mathbf k})\,
+   \psi^\dagger_{n\mathbf k}(\mathbf r)\,\psi_{n\mathbf k}(\mathbf r),
+\qquad
+\mathbf m(\mathbf r, E) = \sum_{n\mathbf k} \delta(E-\varepsilon_{n\mathbf k})\,
+   \psi^\dagger_{n\mathbf k}(\mathbf r)\,\boldsymbol\sigma\,\psi_{n\mathbf k}(\mathbf r),
+$$
+
+and $n_T$, $\mathbf m_T$ the tip's own (structureless, in this
+approximation) density of states and magnetisation. What the approximation
+neglects is everything about the tip beyond those two numbers: its orbital
+character, its atomic structure, and any tip-sample interaction. What it
+captures is the part that matters for atomic-scale magnetic contrast — the
+spin-dependent projection, and the exponential vacuum decay that makes an
+STM a surface probe at all.
+
+Note $\mathbf m = n_\uparrow - n_\downarrow$ in Elk's convention (the
+expectation of $\boldsymbol\sigma$, not of $\mathbf S = \tfrac12
+\boldsymbol\sigma$ — a factor of 2 relative to the spin operators of §17), so
+$|\mathbf m \cdot \hat{\mathbf e}| \le n$ pointwise and the local spin
+polarisation the tip sees is bounded by 1.
+
+The physical content of the projection is that a *chemically identical* set
+of atoms can be magnetically inequivalent. A conventional STM integrates over
+spin and sees only the chemical lattice; the spin-polarised image carries the
+magnetic periodicity, which is generally larger — and, since each 2D Fourier
+component of the vacuum LDOS decays as $\exp\!\big(-2z\sqrt{\kappa^2 +
+|\mathbf G|^2/4}\,\big)$ with $\kappa=\sqrt{2m\Phi}/\hbar$, the
+longer-wavelength magnetic superstructure decays *more slowly* than the
+atomic corrugation. Retracting the tip therefore enhances the magnetic
+contrast relative to the chemical one (Heinze *et al.*, Science **288**, 1805
+(2000)).
+
+### Why no new physics machinery was needed, only a new field to plot
+
+Elk already computes $\mathbf m(\mathbf r, E)$ and throws it away. Upstream
+task 162 (`src/wfplot.f90`) makes an STM image by replacing the
+second-variational occupation numbers with an energy-selecting weight and
+calling `rhomagv`, which fills the *global* `rhomt`/`rhoir` **and**
+`magmt`/`magir`, symmetrises both (`symrf`/`symrvf`) and converts both to the
+fine radial/interstitial grids. Task 162 then plots the charge density alone.
+
+So `elkpy_stm.f90` is upstream's own routine with the magnetisation kept: the
+same occupation replacement, the same `rhomagv` call, and then the linear
+combination
+
+$$
+f_1 = n,\qquad
+f_2 = \mathbf m \cdot \hat{\mathbf e}_T,\qquad
+f_3 = n + P_T\,\mathbf m\cdot\hat{\mathbf e}_T
+$$
+
+formed pointwise in the same muffin-tin/interstitial representation (the
+combination is linear, so it commutes with the spherical-harmonic expansion
+and needs no re-expansion), handed to Elk's generic `plot2d`/`plot3d`
+writers. $f_1$ and $f_2$ are the complete information — any other tip
+polarisation is a recombination of them, not a re-run.
+
+Two representation details:
+
+- **Collinear vs non-collinear vs spin-orbit.** `ndmag` is 1 for a collinear
+  run and 3 for a non-collinear one (`init0.f90`: 3 if any `bfcmt` seed has an
+  $x$/$y$ component, or if `spinorb` is set — SOC is non-collinear in
+  general). With `ndmag = 1` only the $z$-component exists, so an in-plane tip
+  direction returns identically zero — the routine prints a note saying so
+  rather than failing, since that *is* the correct answer for a collinear
+  magnet. **Trap**: `init0.f90` applies `if (cmagz) ndmag=1` *after* the
+  `spinorb` line, so setting `cmagz` (a common speed knob for a collinear
+  ferromagnet with SOC) overrides it and silently collapses the magnetisation
+  back to one component. It defaults to `.false.`.
+
+  SOC needs nothing special from this task and is verified: it enters the
+  second-variational Hamiltonian (`eveqnsv`), so `evalsv`/`evecsv` already
+  carry it and `rhomagv` is unchanged downstream. Re-running the worked
+  example with `spinorb` gives the same Néel state (3.742 $\mu_B$, 120°
+  apart), the same exact $0:+1:-1$ sublattice ratios, $|\mathbf m\cdot
+  \hat{\mathbf e}|\le n$ everywhere, and a `FERMIDOS.OUT` agreement of
+  $1.3\times10^{-5}$ — the same normalisation accuracy as without SOC. Note
+  that structure's $\hat z$ null *survives* SOC ($m_z = 0$ exactly on all
+  three atoms), but for a different reason than without it: easy-plane
+  anisotropy plus the $C_3$/mirror symmetry forbids out-of-plane canting.
+  A lower-symmetry magnet with SOC would generally cant, and the null with it.
+- **Energy window.** Two modes: a smeared $\delta$-function at $E_F + eV$
+  (`elkpy_stmint = .false.`, the differential-conductance map, weight
+  $\delta_w(E_F + eV - \varepsilon)$, units of states per Hartree per
+  Bohr$^3$), or the smeared window between $E_F$ and $E_F + eV$
+  (`elkpy_stmint = .true.`, constant-current/topograph mode, weight
+  $|\Theta_w(E_F + eV - \varepsilon) - \Theta_w(E_F - \varepsilon)|$, units of
+  states per Bohr$^3$ — note *no* $1/w$ factor, this is a state count, not a
+  density of states). `swidth` sets $w$; the ground-state default of
+  $10^{-3}$ Ha is a sharper energy selection than a practical k-mesh can
+  resolve, so the STM call raises it.
+
+### An upstream bug found on the way
+
+`rhomagv` passes `wkpt(ik)` to `rhomagk` as a separate argument, and
+`rhomagk` multiplies the occupation by it — so `occsv` must be a *pure*
+occupancy, exactly as `occupy.f90` stores it. Upstream `wfplot.f90`'s
+task-162 branch sets `occsv = occmax*wkpt(ik)*sdelta(...)/swidth`, folding
+the weight in a second time; its image is therefore weighted by
+$w_{\mathbf k}^2$. The same file's task-61/62/63 branch makes this visible:
+it sets `occsv = 1/wkpt(ik)` precisely to cancel the factor `rhomagv` will
+apply. With a uniform weight this is a harmless overall scale, but with
+`reducek /= 0` the weights differ between k-points and the image is genuinely
+distorted. `elkpy_stm.f90` omits the extra factor, which is what lets its
+cell integral be checked against `FERMIDOS.OUT` (see below); the
+elkpy-vs-upstream image comparison is consequently a proportionality, not an
+equality.
+
+### Verification
+
+Against a real compiled binary, on a freestanding Cr monolayer with the
+triangular lattice of Cr/Ag(111) — Elk's own
+`examples/magnetism/Cr-monolayer` with the vacuum opened up — which orders in
+a coplanar 120° Néel state (Kurz, Förster, Nordström, Bihlmayer and Blügel,
+PRB **69**, 024415 (2004)). This is the system SP-STM was originally proposed
+for (Wortmann *et al.* above) and has since been simulated in detail (Palotás,
+Hofer and Szunyogh, PRB **84**, 174428 (2011)). Its three chemically
+identical atoms with moments 120° apart make the checks exact rather than
+plausibility bands (`tests/test_calculation_spin_stm.py`):
+
+- The spin-summed LDOS is **identical** above all three atoms (measured
+  spread $< 10^{-6}$ relative) — a conventional STM sees a 1×1 lattice — while
+  the projection onto a tip along $\hat x$ gives the ratios $0 : +1 : -1$ over
+  the three sublattices, fixed by the moment directions alone. Rotating the
+  tip to $\hat y$ changes them to $-1 : +\tfrac12 : +\tfrac12$: a different
+  sublattice goes dark. That tip-direction dependence is how a non-collinear
+  structure is identified experimentally (Gao, Wulfhekel and Kirschner, PRL
+  **101**, 267205 (2008)).
+- The projection vanishes at the hollow site equidistant from all three
+  sublattices, for any tip direction — the three moments sum to zero there.
+- A tip along $\hat z$ is an **exact null** (measured $5\times10^{-7}$ of the
+  charge LDOS): without spin-orbit coupling the seed's $m_z = 0$ subspace is
+  invariant under the Kohn-Sham flow, so the Néel state stays coplanar in
+  $xy$. This is the check that the Cartesian component asked for is the one
+  that comes back — not, say, $|\mathbf m|$.
+- A $(1,1,1)$ tip reproduces $(\mathbf m\!\cdot\!\hat x + \mathbf
+  m\!\cdot\!\hat y + \mathbf m\!\cdot\!\hat z)/\sqrt3$ from three separate Elk
+  runs to $2.5\times10^{-7}$ relative — the off-axis case is exactly linear,
+  and the normalisation of $\hat{\mathbf e}_T$ is the same every time.
+- $|\mathbf m \cdot \hat{\mathbf e}| \le n$ pointwise, which a factor-of-2
+  convention slip between $\boldsymbol\sigma$ and $\mathbf S$ would break.
+- **Absolute normalisation** — the one thing every check above, being a ratio
+  or a null, leaves free — against a genuinely independent Elk code path: the
+  unit-cell integral of the plotted spin-summed LDOS at zero bias *is* the
+  density of states at $E_F$, which `src/occupy.f90` computes as a sum over
+  eigenvalues (no charge density, no plotting machinery at all) and writes to
+  `FERMIDOS.OUT`. Measured agreement of order $10^{-5}$ relative ($1.2\times10^{-5}$ on the
+  worked example, $3.8\times10^{-5}$ on a coarser cell) — the same order as the
+  density representation's own total-charge error. This is the
+  check that caught the `wkpt` double counting described above, as an exact
+  factor of 2.
+- Agreement with upstream task 162's own `STM2D.OUT` on the identical plane,
+  on an unreduced mesh (`reducek = 0`, so every weight is $1/N_{\mathbf k}$):
+  the pointwise ratio is constant to $10^{-6}$ across the grid *and* equals
+  $N_{\mathbf k}$ exactly — not merely a proportionality, but a quantitative
+  confirmation that the whole difference between the two routines is the one
+  extra $w_{\mathbf k}$ described above.
+
+### How to use in code
+
+```python
+from elkpy.structure import Structure
+
+a, c = 5.50836, 24.0
+avec = [(1.5 * a, 0.866 * a, 0), (1.5 * a, -0.866 * a, 0), (0, 0, c)]
+# three Cr atoms with bfcmt seeds 120 degrees apart in the xy-plane
+species = {"Cr": [((0, 0, 0), (0.0, 0.1, 0.0)),
+                  ((1 / 3, 1 / 3, 0), (-0.0866, -0.05, 0.0)),
+                  ((2 / 3, 2 / 3, 0), (0.0866, -0.05, 0.0))]}
+
+calc = Structure(avec, species).get_calculation(
+    "cr", xc="PW", spinpol=True, ngridk=(6, 6, 1),
+    extra_blocks={"nempty": [8], "reducebf": [0.5]},   # seeds off once converged
+)
+
+r = calc.get_spin_stm(
+    direction=(1, 1, 1),   # tip magnetisation, CARTESIAN
+    height=0.25,           # tip plane, fraction of the c axis
+    grid=(60, 60),
+    polarization=1.0,      # P_T; only the "image" field depends on it
+    bias=0.0,              # sampling energy relative to E_F, Hartree
+    swidth=0.005,          # width of the energy selection
+)
+r["ldos_grid"]        # (n2, n1) conventional STM image
+r["spin_ldos_grid"]   # (n2, n1) magnetic contrast, m . e_T
+r["image_grid"]       # (n2, n1) n + P_T m . e_T -- what the tip measures
+r["dos"]              # cell integral of the first field = DOS at E_F
+
+# the vacuum decay, for choosing a tip height
+points, values = calc.get_spin_stm_3d(direction=(1, 1, 1), grid=(20, 20, 40))
+```
+
+The same calculation runs directly from an `elk.in`, with no Python at all —
+see `examples/spin-stm/`:
+
+```
+tasks
+  0
+  9003
+
+elkpy_stmdir
+  1.0  1.0  1.0
+
+elkpy_stmpol
+  1.0
+
+plot2d
+  0.0  0.0  0.25
+  1.0  0.0  0.25
+  0.0  1.0  0.25
+  60  60
+```

@@ -1,0 +1,103 @@
+
+! Spin-polarised STM (SP-STM) image of a freestanding Cr monolayer in its
+! coplanar 120-degree Neel state -- the structure and lattice constant of a Cr
+! monolayer on Ag(111) (Kurz, Foerster, Nordstroem, Bihlmayer and Bluegel,
+! Phys. Rev. B 69, 024415 (2004)), the system for which SP-STM was proposed as
+! a probe of complex atomic-scale spin structures (Wortmann, Heinze, Kurz,
+! Bihlmayer and Bluegel, Phys. Rev. Lett. 86, 4132 (2001)) and later simulated
+! in detail (Palotas, Hofer and Szunyogh, Phys. Rev. B 84, 174428 (2011)).
+!
+! The three chemically identical Cr atoms carry moments 120 degrees apart in
+! the xy-plane, so the spin-summed vacuum LDOS is the same above all three
+! (a 1x1 image) while the projection onto a magnetic tip's direction is not
+! (the magnetic sqrt(3) x sqrt(3) superstructure). Small magnetic fields
+! 120 degrees apart seed that state; reducebf switches them off during the
+! self-consistent loop, so the converged state is field-free.
+!
+! This is an elkpy extension: it needs an elk binary built by
+! scripts/build_elk.sh (which applies patches/), not stock Elk. Task 9003
+! writes ELKPY_STM2D.OUT with three columns per plot point,
+!
+!   n(r,E)   m(r,E).e_tip   n(r,E) + P_tip m(r,E).e_tip,
+!
+! the last being the Tersoff-Hamann differential conductance seen by a tip of
+! polarisation P_tip magnetised along e_tip. Change elkpy_stmdir and re-run
+! (or just recombine the first two columns) to rotate the tip.
+!
+! Run:   elk            (in this directory)
+! Plot:  python3 plot_stm.py
+
+tasks
+  0
+  9003
+
+! tip magnetisation direction, Cartesian; set to 0 0 1 for the null test
+! (the moments are coplanar in xy, so the z-projection vanishes identically)
+elkpy_stmdir
+  1.0  0.0  0.0
+
+! effective spin polarisation of the tip
+elkpy_stmpol
+  1.0
+
+! sample bias in Hartree: the LDOS is sampled at efermi + elkpy_stmbias
+elkpy_stmbias
+  0.0
+
+! the z-coordinate of the plotting plane is the 'height' of the STM tip:
+! 0.25 * 24 Bohr = 6 Bohr above the monolayer
+plot2d
+  0.0  0.0  0.25
+  1.0  0.0  0.25
+  0.0  1.0  0.25
+  60  60
+
+spinpol
+  .true.
+
+! the energy window the tip samples; the ground-state default (0.001 Ha) is a
+! sharper delta function than a coarse k-mesh can resolve
+swidth
+  0.005
+
+! switch the seeding fields off geometrically during the s.c. loop
+reducebf
+  0.5
+
+! note that the number of empty states should be large because non-collinear
+! effects are obtained in the second-variational step
+nempty
+  8
+
+avec
+  1.5  0.86602540378  0.0
+  1.5 -0.86602540378  0.0
+  0.0  0.0  1.0
+
+scale1
+  5.50836   : 7.79/sqrt(2)
+
+scale2
+  5.50836
+
+! vacuum: the tip plane must be far from the periodic image of the layer
+scale3
+  24.0
+
+sppath
+  '../../vendor/elk/species/'
+
+! note that the magnetic fields are in Cartesian coordinates
+atoms
+  1                                     : nspecies
+  'Cr.in'                               : spfname
+  3                                     : natoms
+  0.0             0.0             0.0    0.0             0.1   0.0   : atposl, bfcmt
+  0.333333333333  0.333333333333  0.0   -0.086602540378 -0.05  0.0
+  0.666666666667  0.666666666667  0.0    0.086602540378 -0.05  0.0
+
+ngridk
+  6  6  1
+
+vkloff
+  0.5  0.5  0.0

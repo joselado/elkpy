@@ -1,0 +1,347 @@
+diff --git a/src/Makefile b/src/Makefile
+index bc8fe37..9292b05 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -224,7 +224,7 @@ SRC_W90 = \
+ 
+ # elkpy extension (not upstream Elk): Wilson-loop / Fukui-Hatsugai-Suzuki
+ # Berry curvature (task 9000, see elkpy_berry.f90)
+-SRC_ELKPY = elkpy_berry.f90 elkpy_eigenstates.f90
++SRC_ELKPY = elkpy_berry.f90 elkpy_eigenstates.f90 elkpy_stm.f90
+ 
+ SRC = $(SRC_modules) $(SRC_FFT) $(SRC_elk) $(SRC_main) $(SRC_LAPACK) \
+  $(SRC_phonon) $(SRC_XC) $(SRC_DFTU) $(SRC_RDMFT) $(SRC_GW) $(SRC_TDDFT) \
+diff --git a/src/elk.f90 b/src/elk.f90
+index cb8d6e9..fb37235 100644
+--- a/src/elk.f90
++++ b/src/elk.f90
+@@ -291,6 +291,9 @@ do itask=1,ntasks
+   case(9002)
+ ! elkpy: interactive eigenstate/overlap session (stdin/stdout query loop)
+     call elkpy_eigenstate_session
++  case(9003,9004)
++! elkpy: spin-polarised STM image (Tersoff-Hamann), 2D (9003) or 3D (9004)
++    call elkpy_stm
+   case default
+     write(*,*)
+     write(*,'("Error(elk): task not defined : ",I0)') task
+@@ -1664,6 +1667,38 @@ end program
+ !   Chern number (a whole-Brillouin-zone integral) is produced, only a
+ !   local curvature per point. Writes to {\tt ELKPY\_BERRY\_PATH.OUT}.
+ !
++!   \block{elkpy\_stmdir}{
++!   {\tt elkpy\_stmdir} & tip magnetisation direction of the spin-polarised
++!    STM task, in Cartesian coordinates (normalised internally) & real(3) &
++!    $(0,0,1)$}
++!
++!   \block{elkpy\_stmpol}{
++!   {\tt elkpy\_stmpol} & effective spin polarisation $P_{\rm T}$ of the STM
++!    tip, in $[-1,1]$ & real & $1.0$}
++!
++!   \block{elkpy\_stmbias}{
++!   {\tt elkpy\_stmbias} & sample bias $eV$ in Hartree; the LDOS is sampled
++!    at {\tt efermi}$+${\tt elkpy\_stmbias} & real & $0.0$}
++!
++!   \block{elkpy\_stmint}{
++!   {\tt elkpy\_stmint} & set to {\tt .true.} to integrate the LDOS over the
++!    bias window (constant current mode) rather than sample it at
++!    {\tt efermi}$+${\tt elkpy\_stmbias} (differential conductance mode)
++!    & logical & {\tt .false.}}
++!   elkpy extension (not upstream Elk, tasks 9003 and 9004): these four
++!   variables control the spin-polarised STM image, which generalises
++!   upstream task 162 from the spin-summed vacuum charge density to the
++!   Tersoff-Hamann spin-polarised differential conductance
++!   $dI/dV\propto n+P_{\rm T}\,{\bf m}\cdot\hat{\bf e}_{\rm T}$
++!   (Wortmann {\it et al.}, {\it Phys. Rev. Lett.} {\bf 86}, 4132 (2001)).
++!   Task 9003 plots on the {\tt plot2d} plane (writing
++!   {\tt ELKPY\_STM2D.OUT}), task 9004 on the {\tt plot3d} parallelepiped
++!   ({\tt ELKPY\_STM3D.OUT}); both write three columns, $n$,
++!   ${\bf m}\cdot\hat{\bf e}_{\rm T}$ and
++!   $n+P_{\rm T}\,{\bf m}\cdot\hat{\bf e}_{\rm T}$, plus the cell
++!   integrals of the first two to {\tt ELKPY\_STMDOS.OUT}. Requires
++!   {\tt spinpol}.
++!
+ !   \block{spincore}{
+ !   {\tt spincore} & set to {\tt .true.} if the core should be spin-polarised
+ !    & logical & {\tt .false.}}
+diff --git a/src/elkpy_stm.f90 b/src/elkpy_stm.f90
+new file mode 100644
+index 0000000..e760d43
+--- /dev/null
++++ b/src/elkpy_stm.f90
+@@ -0,0 +1,210 @@
++
++! elkpy extension (not upstream Elk): spin-polarised scanning tunneling
++! microscopy (SP-STM) images within the Tersoff-Hamann approximation.
++! This file is distributed under the terms of the GNU General Public License.
++
++!BOP
++! !ROUTINE: elkpy_stm
++! !INTERFACE:
++subroutine elkpy_stm
++! !USES:
++use modmain
++use modmpi
++! !DESCRIPTION:
++!   Produces a spin-polarised STM image, generalising upstream Elk's task 162
++!   (see {\tt wfplot.f90}) from the spin-summed vacuum charge density to the
++!   {\it vector} spin-resolved local density of states projected onto a tip
++!   magnetisation direction. Within the Tersoff-Hamann approximation the
++!   differential conductance measured by a magnetic tip at position
++!   ${\bf r}$ is
++!   $$ \frac{dI}{dV}({\bf r}) \propto n({\bf r},E_{\rm F}+eV)
++!    + P_{\rm T}\,{\bf m}({\bf r},E_{\rm F}+eV)\cdot\hat{\bf e}_{\rm T}, $$
++!   where $n$ and ${\bf m}$ are the energy-resolved charge and magnetisation
++!   densities, $\hat{\bf e}_{\rm T}$ the tip magnetisation direction and
++!   $P_{\rm T}$ its effective spin polarisation (Wortmann, Heinze, Kurz,
++!   Bihlmayer and Bl\"ugel, {\it Phys. Rev. Lett.} {\bf 86}, 4132 (2001)).
++!
++!   Both fields are obtained exactly as upstream task 162 obtains the charge
++!   density: the second-variational occupation numbers are replaced by an
++!   energy-selecting weight and {\tt rhomagv} is called, which returns both
++!   {\tt rhomt}/{\tt rhoir} and {\tt magmt}/{\tt magir} for those weights. The
++!   weight is either a smeared $\delta$-function at $E_{\rm F}+eV$ (constant
++!   height $dI/dV$ map, {\tt elkpy\_stmint}={\tt .false.}) or the smeared
++!   window between $E_{\rm F}$ and $E_{\rm F}+eV$ (integrated, constant
++!   current mode, {\tt elkpy\_stmint}={\tt .true.}).
++!
++!   Three functions are written, in this order:
++!   \begin{list}{}{\itemsep -2pt}
++!    \item[1.] $n({\bf r},E)$, the spin-summed LDOS (the upstream task 162
++!     image);
++!    \item[2.] ${\bf m}({\bf r},E)\cdot\hat{\bf e}_{\rm T}$, the projected
++!     magnetisation LDOS;
++!    \item[3.] $n + P_{\rm T}\,{\bf m}\cdot\hat{\bf e}_{\rm T}$, the SP-STM
++!     image itself.
++!   \end{list}
++!   Columns 1 and 2 are the complete information: any other tip polarisation
++!   is the linear combination $n+P\,({\bf m}\cdot\hat{\bf e}_{\rm T})$ of
++!   them, so a different $P_{\rm T}$ needs no re-run.
++!
++!   Task 9003 plots on the {\tt plot2d} plane (the STM image proper, the tip
++!   height being the plane's offset from the surface); task 9004 plots on the
++!   {\tt plot3d} parallelepiped.
++!
++! !REVISION HISTORY:
++!   Created 2026 (elkpy)
++!EOP
++!BOC
++implicit none
++! local variables
++integer ik,ist,idm,ias,is,np
++real(8) e0,w,x,t1,t2
++real(8) e(3)
++! allocatable arrays
++real(8), allocatable :: rfmt(:,:,:),rfir(:,:)
++! external functions
++real(8), external :: sdelta,stheta,rfint
++! initialise universal variables
++call init0
++call init1
++! the magnetisation density is only computed (and only allocated) when the
++! calculation is spin-polarised; upstream task 162 covers the spin-summed case
++if (.not.spinpol) then
++  write(*,*)
++  write(*,'("Error(elkpy_stm): requires a spin-polarised calculation")')
++  write(*,'(" (set spinpol and/or spinorb; use task 162 for a spin-summed &
++   &STM image)")')
++  write(*,*)
++  stop
++end if
++! normalise the tip magnetisation direction (given in Cartesian coordinates)
++t1=sqrt(elkpy_stmdir(1)**2+elkpy_stmdir(2)**2+elkpy_stmdir(3)**2)
++if (t1 < 1.d-8) then
++  write(*,*)
++  write(*,'("Error(elkpy_stm): zero-length elkpy_stmdir vector")')
++  write(*,*)
++  stop
++end if
++e(:)=elkpy_stmdir(:)/t1
++! read the density and potentials from file; this also restores efermi, which
++! writestate.f90 stores in STATE.OUT (upstream task 162 relies on the same)
++call readstate
++! find the new linearisation energies
++call linengy
++! generate the APW radial functions
++call genapwfr
++! generate the local-orbital radial functions
++call genlofr
++! energy at which the LDOS is sampled: the sample bias shifts the tip energy
++! away from the Fermi level
++e0=efermi+elkpy_stmbias
++w=swidth
++t1=1.d0/w
++! replace the occupation numbers with an energy-selecting weight, so that
++! rhomagv returns the energy-resolved (rather than ground-state) charge and
++! magnetisation densities.
++!
++! NOTE the k-point weight is deliberately NOT folded in here: rhomagv passes
++! wkpt(ik) to rhomagk as a separate argument and rhomagk multiplies by it, so
++! occsv must be a pure occupancy, exactly as occupy.f90 stores it. Upstream
++! wfplot.f90's task-162 branch does include wkpt(ik) in occsv and therefore
++! counts it twice (its own tasks 61/62/63 branch divides by wkpt to cancel the
++! same factor, which is what makes the double counting visible). With that
++! extra factor the image is weighted by wkpt^2, which is a harmless overall
++! scale only when every k-point carries the same weight and a genuine
++! distortion otherwise (reducek /= 0); the cell integral below would also be
++! off by the same factor, breaking the check against FERMIDOS.OUT
++do ik=1,nkpt
++! get the eigenvalues from file
++  call getevalsv(filext,ik,vkl(:,ik),evalsv(:,ik))
++  do ist=1,nstsv
++    if (elkpy_stmint) then
++! integrated (constant current) mode: all states between efermi and e0. No
++! 1/swidth factor here -- this is a state count, not a density of states
++      t2=stheta(stype,(e0-evalsv(ist,ik))*t1) &
++        -stheta(stype,(efermi-evalsv(ist,ik))*t1)
++      occsv(ist,ik)=occmax*abs(t2)
++    else
++! differential conductance mode: smeared delta function at e0
++      x=(e0-evalsv(ist,ik))*t1
++      occsv(ist,ik)=occmax*sdelta(stype,x)*t1
++    end if
++  end do
++end do
++! compute the valence charge density and magnetisation with the new weights
++call rhomagv
++! assemble the three plotted functions
++allocate(rfmt(npmtmax,natmtot,3),rfir(ngtot,3))
++rfmt(:,:,:)=0.d0
++do ias=1,natmtot
++  is=idxis(ias)
++  np=npmt(is)
++  rfmt(1:np,ias,1)=rhomt(1:np,ias)
++  if (ndmag == 1) then
++! collinear: the single magnetisation component is along the Cartesian z-axis
++    rfmt(1:np,ias,2)=e(3)*magmt(1:np,ias,1)
++  else
++    do idm=1,3
++      rfmt(1:np,ias,2)=rfmt(1:np,ias,2)+e(idm)*magmt(1:np,ias,idm)
++    end do
++  end if
++  rfmt(1:np,ias,3)=rfmt(1:np,ias,1)+elkpy_stmpol*rfmt(1:np,ias,2)
++end do
++rfir(1:ngtot,1)=rhoir(1:ngtot)
++rfir(1:ngtot,2)=0.d0
++if (ndmag == 1) then
++  rfir(1:ngtot,2)=e(3)*magir(1:ngtot,1)
++else
++  do idm=1,3
++    rfir(1:ngtot,2)=rfir(1:ngtot,2)+e(idm)*magir(1:ngtot,idm)
++  end do
++end if
++rfir(1:ngtot,3)=rfir(1:ngtot,1)+elkpy_stmpol*rfir(1:ngtot,2)
++if (mp_mpi) then
++! write the cell integrals of the first two functions: for the delta-function
++! mode these are the total and the spin density of states at e0, which can be
++! checked directly against TDOS.OUT from task 10
++  t1=rfint(rfmt(:,:,1),rfir(:,1))
++  t2=rfint(rfmt(:,:,2),rfir(:,2))
++  open(50,file='ELKPY_STMDOS.OUT',form='FORMATTED')
++  write(50,'(G22.12," : integral of the spin-summed LDOS over the unit cell")')&
++   t1
++  write(50,'(G22.12," : integral of the projected magnetisation LDOS")') t2
++  write(50,'(G22.12," : sampling energy e0 = efermi + bias")') e0
++  write(50,'(G22.12," : efermi")') efermi
++  write(50,'(3G18.10," : normalised tip magnetisation direction")') e(:)
++  close(50)
++  select case(task)
++  case(9003)
++    open(50,file='ELKPY_STM2D.OUT',form='FORMATTED')
++    call plot2d(.false.,50,3,rfmt,rfir)
++    close(50)
++    write(*,*)
++    write(*,'("Info(elkpy_stm):")')
++    write(*,'(" 2D spin-polarised STM image written to ELKPY_STM2D.OUT")')
++  case(9004)
++    open(50,file='ELKPY_STM3D.OUT',form='FORMATTED')
++    call plot3d(50,3,rfmt,rfir)
++    close(50)
++    write(*,*)
++    write(*,'("Info(elkpy_stm):")')
++    write(*,'(" 3D spin-polarised STM image written to ELKPY_STM3D.OUT")')
++  end select
++  write(*,'("  columns : n(r,e0), m(r,e0).e_tip, n + P m.e_tip")')
++  write(*,'(" tip direction (Cartesian) : ",3G18.10)') e(:)
++  write(*,'(" tip polarisation : ",G18.10)') elkpy_stmpol
++  if (elkpy_stmint) then
++    write(*,'(" integrated (constant current) mode, bias : ",G18.10)') &
++     elkpy_stmbias
++  else
++    write(*,'(" differential conductance mode, bias : ",G18.10)') elkpy_stmbias
++  end if
++  if (ndmag == 1) then
++    write(*,'(" note : collinear calculation (ndmag = 1), so only the z-&
++     &component")')
++    write(*,'("  of the tip direction contributes to the projection")')
++  end if
++  write(*,'(" cell integrals written to ELKPY_STMDOS.OUT")')
++end if
++deallocate(rfmt,rfir)
++end subroutine
++!EOC
+diff --git a/src/modmain.f90 b/src/modmain.f90
+index 661926f..6c14ffc 100644
+--- a/src/modmain.f90
++++ b/src/modmain.f90
+@@ -248,6 +248,15 @@ real(8) elkpy_berrypath_dk
+ integer elkpy_berrypath_ist0,elkpy_berrypath_ist1
+ integer elkpy_berrypath_np
+ real(8), allocatable :: elkpy_berrypath_vkl(:,:)
++! elkpy: spin-polarised STM (Tersoff-Hamann) task -- the tip magnetisation
++! elkpy: direction (Cartesian, normalised internally), the tip spin
++! elkpy: polarisation, the sample bias relative to the Fermi energy, and
++! elkpy: whether the LDOS is integrated over the bias window (constant
++! elkpy: current) rather than sampled at e0 (differential conductance); see
++! elkpy: elkpy_stmdir/elkpy_stmpol/elkpy_stmbias/elkpy_stmint in
++! elkpy: readinput.f90 and elkpy_stm.f90
++real(8) elkpy_stmdir(3),elkpy_stmpol,elkpy_stmbias
++logical elkpy_stmint
+ ! bforb is .true. for external B-field-orbit coupling
+ logical bforb
+ ! bfdmag is .true. for external B-field diamagnetic coupling
+diff --git a/src/readinput.f90 b/src/readinput.f90
+index 100d2a7..c6c54c1 100644
+--- a/src/readinput.f90
++++ b/src/readinput.f90
+@@ -164,6 +164,12 @@ elkpy_berrypath_dk=0.d0
+ elkpy_berrypath_ist0=0
+ elkpy_berrypath_ist1=0
+ elkpy_berrypath_np=0
++! elkpy: spin-polarised STM defaults -- tip along +z, fully polarised tip,
++! elkpy: zero bias, differential-conductance (not integrated) mode
++elkpy_stmdir(:)=[0.d0,0.d0,1.d0]
++elkpy_stmpol=1.d0
++elkpy_stmbias=0.d0
++elkpy_stmint=.false.
+ bforb=.false.
+ bfdmag=.false.
+ atpopt=1
+@@ -666,6 +672,27 @@ case('elkpy_socscale')
+   write(*,'("Adjust maxspecies in modmain and recompile code")')
+   write(*,*)
+   stop
++case('elkpy_stmdir')
++! elkpy: tip magnetisation direction of the spin-polarised STM task, in
++! elkpy: Cartesian coordinates; normalised in elkpy_stm.f90
++  read(50,*,err=20) elkpy_stmdir(:)
++case('elkpy_stmpol')
++! elkpy: effective spin polarisation of the STM tip, in [-1,1]
++  read(50,*,err=20) elkpy_stmpol
++  if (abs(elkpy_stmpol) > 1.d0) then
++    write(*,*)
++    write(*,'("Error(readinput): |elkpy_stmpol| > 1 : ",G18.10)') elkpy_stmpol
++    write(*,*)
++    stop
++  end if
++case('elkpy_stmbias')
++! elkpy: sample bias of the spin-polarised STM task, in Hartree: the LDOS is
++! elkpy: sampled at efermi+elkpy_stmbias
++  read(50,*,err=20) elkpy_stmbias
++case('elkpy_stmint')
++! elkpy: .true. to integrate the LDOS over the bias window (constant current
++! elkpy: mode) instead of sampling it at efermi+elkpy_stmbias (dI/dV mode)
++  read(50,*,err=20) elkpy_stmint
+ case('elkpy_berry')
+ ! elkpy: Berry curvature (Wilson-loop / Fukui-Hatsugai-Suzuki) task parameters:
+ ! elkpy: the two k-mesh grid directions spanning the Wilson-loop plane, and

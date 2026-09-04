@@ -34,7 +34,7 @@ energy = calc.get_energy()                      # Hartree
 ```bash
 # 1. Build Elk out-of-tree (vendor/elk/ -> build/elk/, applies patches/*.patch,
 #    never touches vendor/elk/ itself)
-./scripts/build_elk.sh
+./build_elk.sh
 
 # 2. Install elkpy (editable)
 python3 -m pip install -e .        # add .[ase] for Structure.from_ase()/to_ase()
@@ -56,6 +56,10 @@ python3 -m pip install -e .        # add .[ase] for Structure.from_ase()/to_ase(
 - The full anisotropic exchange tensor $J_{ij}^{\alpha\beta}$ of a magnetic pair, from $H=\sum_{i<j}\mathbf S_i\cdot\mathbf J_{ij}\cdot\mathbf S_j$, by four-state energy mapping $J_{ij}^{\alpha\beta}=(E_1+E_4-E_2-E_3)/4S^2m_{ij}$ over constrained non-collinear states [[notebook]](notebooks/18_exchange_constants.ipynb)
 - Its decomposition into isotropic Heisenberg exchange, the Dzyaloshinskii-Moriya vector $D^x=\tfrac12(J^{yz}-J^{zy})$, and the symmetric anisotropy that carries the Kitaev $K$ and $\Gamma$ terms of a honeycomb magnet [[notebook]](notebooks/18_exchange_constants.ipynb)
 - Single-ion anisotropy $\mathbf A_{ii}$, which the exchange formula cancels by construction and so needs configurations and formulas of its own [[notebook]](notebooks/18_exchange_constants.ipynb)
+
+## Spin-polarized scanning tunneling microscopy ##
+- Spin-polarized STM images in the Tersoff-Hamann picture, $dI/dV(\mathbf r)\propto n(\mathbf r,E_F+eV)+P_T\,\mathbf m(\mathbf r,E_F+eV)\cdot\hat{\mathbf e}_T$ — the vacuum local density of states projected onto an arbitrary Cartesian tip magnetization direction, which resolves magnetically inequivalent but chemically identical atoms [[notebook]](notebooks/19_spin_polarized_stm.ipynb)
+- Both the differential-conductance map at one energy and the bias-window-integrated (constant-current) image, at any tip height [[notebook]](notebooks/19_spin_polarized_stm.ipynb)
 
 ## Quantum geometry ##
 - The full quantum geometric tensor $Q_{ab}=g_{ab}-\tfrac i2F_{ab}$ at an arbitrary k-point: Berry curvature $F_{ab}$ *and* the quantum metric $g_{ab}$ (Fubini-Study distance between neighbouring Bloch states), from the same wavefunction-overlap queries used for eigenstates below [[notebook]](notebooks/07_quantum_geometry.ipynb)
@@ -138,6 +142,20 @@ result["nu0_by_axis"] # (1, 1, 1): the strong index agrees identically across al
                       # axes -- an algebraic consistency check that does hold
 ```
 ![Alt text](images/cs_dimerized_z2_invariant_3d.png?raw=true "Wannier charge centers on the k1=0 and k1=pi planes of a dimerized diamond lattice; the crossing count on the k1=0 plane is mesh-dependent, see docs/design.md section 23")
+
+## Spin-polarized STM of a non-collinear 120-degree Néel Cr monolayer ##
+The three Cr atoms are chemically identical, so a conventional STM sees only the 1x1
+lattice; projecting the vacuum LDOS onto a magnetic tip resolves the magnetic
+superstructure instead, $dI/dV\propto n+P_T\,\mathbf m\cdot\hat{\mathbf e}_T$ (Wortmann,
+Heinze, Kurz, Bihlmayer & Blügel, PRL 86, 4132 (2001)):
+```python
+# one run returns n, m.e_T and n + P_T m.e_T at every point of the tip plane
+stm = cr.get_spin_stm(direction=(1, 0, 0), height=0.25, grid=(60, 60), swidth=0.005)
+
+plt.pcolormesh(x, y, stm["ldos_grid"])       # conventional STM: 1x1, nearly flat
+plt.pcolormesh(x, y, stm["spin_ldos_grid"])  # spin contrast: the magnetic superstructure
+```
+![Alt text](images/cr_spin_stm.png?raw=true "Spin-summed and spin-projected vacuum LDOS above a 120-degree Neel Cr monolayer, showing the magnetic superstructure the spin-averaged image cannot resolve")
 
 ## Quantum metric alongside Berry curvature, along Gamma-K-M-K'-Gamma of monolayer h-BN ##
 Time-reversal symmetry requires $g_{ab}(K)=g_{ab}(K')$ even though $\Omega(K')=-\Omega(K)$ --
@@ -270,6 +288,7 @@ is the place to actually start:
 | [`16_effective_mass.ipynb`](notebooks/16_effective_mass.ipynb) | Effective masses from the k·p sum rule, and which bands produce them | yes |
 | [`17_spin_hall.ipynb`](notebooks/17_spin_hall.ipynb) | Spin Berry curvature, and why the two valleys agree in sign | yes |
 | [`18_exchange_constants.ipynb`](notebooks/18_exchange_constants.ipynb) | Anisotropic exchange tensor by four-state energy mapping (Heisenberg, DM, Kitaev) | yes |
+| [`19_spin_polarized_stm.ipynb`](notebooks/19_spin_polarized_stm.ipynb) | Spin-polarized STM image of a non-collinear 120-degree Néel Cr monolayer | yes |
 | [`01_getting_started.ipynb`](notebooks/01_getting_started.ipynb) | Ground state, band structure, density of states | -- |
 | [`02_relaxation_forces_and_properties.ipynb`](notebooks/02_relaxation_forces_and_properties.ipynb) | Forces, relaxation, effective mass, density, `run_tasks()` | -- |
 | [`03_phonon_dispersion_and_dos.ipynb`](notebooks/03_phonon_dispersion_and_dos.ipynb) | Phonon dispersion/DOS via DFPT | -- |

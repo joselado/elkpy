@@ -3290,5 +3290,219 @@ cubic = exchange.rotate_tensor(result["tensor"], exchange.honeycomb_cubic_frame(
 exchange.kitaev_parameters(cubic)     # J, K, Gamma, Gamma_p1, Gamma_p2, residual
 \end{verbatim}
 
+\part{Spin-polarised scanning tunneling microscopy}
+\label{part:spinstm}
+
+\section{What a scanning tunneling microscope measures}
+
+Tersoff and Hamann (PRL \textbf{50}, 1998 (1983); PRB \textbf{31}, 805 (1985))
+showed that if the tip apex is modelled as a single $s$-wave orbital, the
+Bardeen tunneling matrix element reduces to the value of the sample
+wavefunction at the tip centre $\mathbf r$, so the differential conductance at
+small bias becomes proportional to the sample's \emph{local density of states}
+in the vacuum,
+\begin{equation}
+  \frac{dI}{dV}(\mathbf r)\;\propto\;n_T\,n(\mathbf r,E_F+eV),
+  \qquad
+  n(\mathbf r,E)=\sum_{n\mathbf k}\delta(E-\varepsilon_{n\mathbf k})\,
+    \psi^\dagger_{n\mathbf k}(\mathbf r)\psi_{n\mathbf k}(\mathbf r),
+  \label{eq:tersoff-hamann}
+\end{equation}
+with $n_T$ the tip's density of states, $E_F$ the sample Fermi energy and $eV$
+the sample bias. The approximation discards everything about the tip except a
+single number; what survives is the statement that an STM image is a constant
+$n(\mathbf r,E)$ contour a few {\AA} above the surface, and that it is
+exponentially sensitive to height because every vacuum-decaying state is.
+
+\section{The magnetic tip: the spin-polarised extension}
+
+For a tip that is itself magnetic, Wortmann, Heinze, Kurz, Bihlmayer and
+Bl\"ugel (PRL \textbf{86}, 4132 (2001)) repeat the derivation with a spinor
+tip state. The current picks up a second term, the overlap of the tip and
+sample \emph{vector} spin-resolved densities of states,
+\begin{equation}
+  \frac{dI}{dV}(\mathbf r)\;\propto\;
+    n_T\,n(\mathbf r,E_F+eV)+\mathbf m_T\cdot\mathbf m(\mathbf r,E_F+eV)
+  \;=\;n_T\Big[n(\mathbf r,E)+P_T\,\mathbf m(\mathbf r,E)\cdot\hat{\mathbf e}_T\Big],
+  \label{eq:sp-stm}
+\end{equation}
+where
+\begin{equation}
+  \mathbf m(\mathbf r,E)=\sum_{n\mathbf k}\delta(E-\varepsilon_{n\mathbf k})\,
+    \psi^\dagger_{n\mathbf k}(\mathbf r)\,\boldsymbol\sigma\,\psi_{n\mathbf k}(\mathbf r)
+  \label{eq:vector-ldos}
+\end{equation}
+is the sample's energy-resolved magnetisation density, $\hat{\mathbf e}_T$ the
+tip magnetisation direction and $P_T=|\mathbf m_T|/n_T\in[-1,1]$ its effective
+spin polarisation. Equation~\eqref{eq:sp-stm} is the whole content of the
+method: an SP-STM image is the ordinary STM image plus a projection of the
+sample's spin texture onto one chosen axis.
+
+Two conventions matter. First, $\mathbf m$ in
+Eq.~\eqref{eq:vector-ldos} is the expectation of $\boldsymbol\sigma$, not of
+$\mathbf S=\tfrac12\boldsymbol\sigma$ --- it is $n_\uparrow-n_\downarrow$, a
+factor of $2$ larger than the spin operators of Part~\ref{part:spin}. It
+follows that $|\mathbf m\cdot\hat{\mathbf e}|\le n$ pointwise for a unit
+$\hat{\mathbf e}$: the local spin polarisation the tip sees cannot exceed
+unity. Second, $\hat{\mathbf e}_T$ is a direction in \emph{spin} space
+expressed in Cartesian coordinates; for a collinear calculation only its
+$z$-component can contribute, because a collinear ground state carries no
+transverse magnetisation to project onto.
+
+\section{Why the magnetic superstructure survives to larger tip heights}
+
+Expand the vacuum LDOS at height $z$ in the surface reciprocal lattice. A
+state of parallel momentum $\mathbf k_\parallel$ decays into the vacuum as
+$\exp(-\sqrt{\kappa^2+k_\parallel^2}\,z)$ with $\kappa=\sqrt{2m\Phi}/\hbar$ set
+by the work function $\Phi$, so the Fourier component of the \emph{density} at
+surface reciprocal vector $\mathbf G$ --- a product of two states differing by
+$\mathbf G$ --- decays as
+\begin{equation}
+  n_{\mathbf G}(z)\;\sim\;\exp\!\left(-2z\sqrt{\kappa^2+|\mathbf G|^2/4}\right).
+  \label{eq:corrugation-decay}
+\end{equation}
+A magnetic superstructure has a \emph{longer} period than the chemical lattice,
+hence a smaller $|\mathbf G|$, hence a slower decay. Retracting the tip
+therefore suppresses the atomic corrugation faster than the magnetic one: at a
+few {\AA} the spin-averaged image can be nearly flat while the spin-polarised
+image still shows the magnetic cell clearly. This is the argument Heinze
+\emph{et al.} (Science \textbf{288}, 1805 (2000)) used to explain how SP-STM
+resolves an antiferromagnetic surface whose chemical lattice is featureless.
+
+\section{Evaluating $n$ and $\mathbf m$ in the LAPW basis}
+
+Both fields in Eq.~\eqref{eq:sp-stm} are ordinary densities evaluated with a
+non-ordinary weight. Writing the smeared energy selection as
+$w_{n\mathbf k}$, the LAPW code's existing charge/magnetisation accumulation
+computes exactly
+\begin{equation}
+  n(\mathbf r)=\sum_{n\mathbf k}w_{n\mathbf k}\,
+    \psi^\dagger_{n\mathbf k}\psi_{n\mathbf k},
+  \qquad
+  \mathbf m(\mathbf r)=\sum_{n\mathbf k}w_{n\mathbf k}\,
+    \psi^\dagger_{n\mathbf k}\boldsymbol\sigma\psi_{n\mathbf k},
+  \label{eq:weighted-density}
+\end{equation}
+so replacing the ground-state occupations $f_{n\mathbf k}$ by
+\begin{equation}
+  w_{n\mathbf k}=\frac{1}{w}\,\tilde\delta\!\left(\frac{E_F+eV-\varepsilon_{n\mathbf k}}{w}\right)
+  \qquad\text{or}\qquad
+  w_{n\mathbf k}=\left|\tilde\Theta\!\left(\frac{E_F+eV-\varepsilon_{n\mathbf k}}{w}\right)
+   -\tilde\Theta\!\left(\frac{E_F-\varepsilon_{n\mathbf k}}{w}\right)\right|
+  \label{eq:stm-weights}
+\end{equation}
+turns them into the energy-resolved quantities. The first choice is a smeared
+$\delta$-function of width $w$ at the sampling energy and gives the
+differential conductance map; the second is the smeared window between $E_F$
+and $E_F+eV$ and gives the integrated (constant-current) image. Note the
+absence of the $1/w$ prefactor in the second: it is a state count per volume,
+not a density of states per volume.
+
+$\tilde\delta$ and $\tilde\Theta$ are the smearing function and its integral;
+$w$ is a genuine physical parameter here, not a numerical nuisance --- it is
+how wide an energy window the tip samples --- and it must be wide enough that
+the $\mathbf k$-mesh resolves the energy shell being selected.
+
+Since the projection $\mathbf m\cdot\hat{\mathbf e}_T$ is \emph{linear} and
+\emph{pointwise}, it commutes with the muffin-tin spherical-harmonic expansion
+and the interstitial Fourier representation: the projected field is the same
+linear combination of the stored expansion coefficients, with no re-expansion
+and no new radial integral. The same holds for the tip polarisation, so
+\begin{equation}
+  f_1=n,\qquad f_2=\mathbf m\cdot\hat{\mathbf e}_T,\qquad
+  f_3=n+P_T f_2
+  \label{eq:stm-fields}
+\end{equation}
+are all available from one calculation, and $f_1,f_2$ are complete: a
+different $P_T$ is a recombination, never a re-run.
+
+\section{Consistency checks the construction must satisfy}
+
+Three relations follow from the formalism and are used as tests rather than
+assumed:
+\begin{enumerate}
+\item $|f_2|\le f_1$ pointwise, from $\mathbf m=n_\uparrow-n_\downarrow$.
+\item $\int f_1\,d^3r = \sum_{n\mathbf k}w_{n\mathbf k}$, since each
+  $\psi_{n\mathbf k}$ is normalised. At zero bias in the $\delta$-function mode
+  this is precisely the density of states at the Fermi energy, computable from
+  the eigenvalues alone with no reference to any density --- an absolute
+  normalisation check, which the ratio-valued and null-valued tests below
+  cannot provide.
+\item $f_2$ is linear in $\hat{\mathbf e}_T$, so an off-axis tip such as
+  $\hat{\mathbf e}_T=(1,1,1)/\sqrt3$ must equal the corresponding combination
+  of the three Cartesian projections.
+\end{enumerate}
+
+\section{A worked case: the $120^\circ$ N\'eel monolayer}
+
+A Cr monolayer on the triangular lattice of Cr/Ag(111) orders in a coplanar
+$120^\circ$ N\'eel state (Kurz, F\"orster, Nordstr\"om, Bihlmayer and
+Bl\"ugel, PRB \textbf{69}, 024415 (2004)); it is the system for which SP-STM
+was proposed as a probe of complex spin structures in the first place
+(Wortmann \emph{et al.}) and has since been simulated in detail (Palot\'as,
+Hofer and Szunyogh, PRB \textbf{84}, 174428 (2011)).
+
+Its three atoms are chemically identical and related by a $C_3$ rotation
+combined with a $120^\circ$ spin rotation, so $n(\mathbf r,E)$ is the same
+above all three: a conventional STM sees a $1\times1$ lattice. The moments
+point along $\hat{\mathbf u}_i$ at $120^\circ$ to one another in the $xy$
+plane, so the projected field above site $i$ is proportional to
+$\hat{\mathbf u}_i\cdot\hat{\mathbf e}_T$, giving the ratios
+\begin{equation}
+  \hat{\mathbf e}_T=\hat{\mathbf x}:\;0:+1:-1,
+  \qquad
+  \hat{\mathbf e}_T=\hat{\mathbf y}:\;-1:+\tfrac12:+\tfrac12,
+  \qquad
+  \hat{\mathbf e}_T=\hat{\mathbf z}:\;0:0:0 .
+  \label{eq:neel-ratios}
+\end{equation}
+Rotating the tip changes which sublattice is dark --- the signature by which
+a non-collinear structure is identified experimentally (Gao, Wulfhekel and
+Kirschner, PRL \textbf{101}, 267205 (2008)). The $\hat{\mathbf z}$ case is an
+exact null: without spin--orbit coupling the $m_z=0$ subspace is invariant
+under the Kohn--Sham flow, so a coplanar seed stays coplanar. And at the
+hollow site equidistant from all three sublattices the three moments sum to
+zero, so $f_2$ vanishes there for \emph{every} $\hat{\mathbf e}_T$.
+
+\section{How to use in code}
+
+\begin{verbatim}
+from elkpy.structure import Structure
+
+a, c = 5.50836, 24.0
+avec = [(1.5*a, 0.866*a, 0), (1.5*a, -0.866*a, 0), (0, 0, c)]
+# three Cr atoms, bfcmt seeds 120 degrees apart in the xy-plane
+species = {"Cr": [((0, 0, 0),          (0.0,     0.1,  0.0)),
+                  ((1/3, 1/3, 0),      (-0.0866, -0.05, 0.0)),
+                  ((2/3, 2/3, 0),      (0.0866,  -0.05, 0.0))]}
+
+calc = Structure(avec, species).get_calculation(
+    "cr", xc="PW", spinpol=True, ngridk=(6, 6, 1),
+    extra_blocks={"nempty": [8], "reducebf": [0.5]},
+)
+
+r = calc.get_spin_stm(
+    direction=(1, 1, 1),   # tip magnetisation e_T, Cartesian
+    height=0.25,           # tip plane as a fraction of the c axis
+    grid=(60, 60),
+    polarization=1.0,      # P_T
+    bias=0.0,              # sampling energy relative to E_F, Hartree
+    swidth=0.005,          # width w of the energy selection
+)
+r["ldos_grid"]        # n           -- conventional STM image
+r["spin_ldos_grid"]   # m . e_T     -- the magnetic contrast
+r["image_grid"]       # n + P_T m . e_T
+r["dos"]              # cell integral of n = DOS at E_F
+
+# the vacuum decay, for choosing a tip height
+points, values = calc.get_spin_stm_3d(direction=(1, 1, 1), grid=(20, 20, 40))
+\end{verbatim}
+
+The same calculation runs from a plain \texttt{elk.in} with no Python at all
+(see \texttt{examples/spin-stm/}): task \texttt{9003} for the 2D image on the
+\texttt{plot2d} plane or \texttt{9004} for the \texttt{plot3d} box, with the
+tip set by the \texttt{elkpy\_stmdir}, \texttt{elkpy\_stmpol},
+\texttt{elkpy\_stmbias} and \texttt{elkpy\_stmint} blocks.
+
 
 \end{document}

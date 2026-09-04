@@ -30,6 +30,7 @@ from .parsers import (
     moke,
     optical,
     quantum_geometry,
+    stm,
     symmetry,
     totenergy,
     volumetric,
@@ -630,6 +631,178 @@ class Calculation:
         blocks = {"plot3d": self._plot3d_lines(box, grid)}
         subdir = self._run_resumed("elf", [spec.TASKS["elf_3d"]], blocks)
         return volumetric.parse_plot3d(subdir / spec.OUTPUT_FILES["elf_3d"])
+
+    @staticmethod
+    def _plot2d_lines(plane, grid):
+        """The `plot2d` block's four lines: the plotting parallelogram's
+        origin and its two other corner vertices in lattice coordinates, then
+        the grid size (src/readinput.f90 case('plot2d'), src/plotpt2d.f90).
+
+        Note the two corners are absolute vertices, not edge vectors -- the
+        parallelogram is spanned by (v1 - origin) and (v2 - origin), so an
+        STM plane at a fixed height repeats that height in all three lines.
+        """
+        return [tuple(plane[0]), tuple(plane[1]), tuple(plane[2]), tuple(grid)]
+
+    def _spin_stm_blocks(self, direction, polarization, bias, integrated, swidth):
+        direction = tuple(float(x) for x in direction)
+        if not (self.spinpol or self.spinorb):
+            raise ValueError(
+                "get_spin_stm() needs a spin-polarized calculation (spinpol=True "
+                "and/or spinorb=True): without it Elk computes no magnetisation "
+                "density at all. Use run_tasks([162]) for a spin-summed STM image."
+            )
+        if np.linalg.norm(direction) == 0.0:
+            raise ValueError("tip magnetisation `direction` must be a nonzero vector")
+        if abs(polarization) > 1.0:
+            raise ValueError(f"tip `polarization` must lie in [-1, 1], got {polarization}")
+        blocks = {
+            "elkpy_stmdir": [direction],
+            "elkpy_stmpol": [float(polarization)],
+            "elkpy_stmbias": [float(bias)],
+            "elkpy_stmint": [bool(integrated)],
+        }
+        if swidth is not None:
+            blocks["swidth"] = [float(swidth)]
+        return blocks
+
+    def get_spin_stm(
+        self,
+        direction=(0, 0, 1),
+        height=0.25,
+        plane=None,
+        grid=(60, 60),
+        polarization=1.0,
+        bias=0.0,
+        integrated=False,
+        swidth=None,
+        ngridk=None,
+    ):
+        """Spin-polarised STM image (elkpy task 9003, src/elkpy_stm.f90 --
+        docs/design.md #30).
+
+        Within the Tersoff-Hamann approximation (Tersoff and Hamann, PRB 31,
+        805 (1985)) the tunnel current is set by the sample's local density of
+        states in the vacuum at the tip position; for a magnetic tip this
+        becomes (Wortmann, Heinze, Kurz, Bihlmayer and Bluegel, PRL 86, 4132
+        (2001))
+
+            dI/dV(r) ~ n(r, E_F + eV) + P_T m(r, E_F + eV) . e_T,
+
+        with n the spin-summed and m the vector spin-resolved LDOS, e_T the tip
+        magnetisation direction and P_T = |m_T| / n_T its effective spin
+        polarisation. Elk's own task 162 plots n alone; this adds the m . e_T
+        projection, which is what a spin-polarised STM measures.
+
+        Arguments:
+
+        - `direction`: the tip magnetisation direction e_T, in CARTESIAN
+          coordinates (normalised internally) -- e.g. (1, 1, 1). For a
+          COLLINEAR run (spinpol without spinorb and with only z-directed
+          `bfcmt` seeds) Elk stores a single magnetisation component along the
+          Cartesian z-axis, so only the z-component of `direction` contributes
+          and an in-plane tip returns identically zero; a non-collinear run
+          (an x/y `bfcmt` component anywhere, or spinorb=True) stores all
+          three. Spin-orbit coupling needs nothing special here -- it enters
+          the second-variational Hamiltonian, upstream of everything this
+          task does -- but note that `cmagz` (via `extra_blocks`) overrides
+          the spinorb non-collinearity in src/init0.f90 and would silently
+          leave only the z-component.
+        - `height`: the tip height as a fractional coordinate along the third
+          lattice vector. Used only to build the default plotting plane (the
+          full a1-a2 cell at that height); ignored if `plane` is given.
+        - `plane`: the plot2d parallelogram [origin, v1, v2] in lattice
+          coordinates, for full control over the scanned region.
+        - `grid`: (n1, n2) plot points along (v1 - origin) and (v2 - origin).
+        - `polarization`: P_T, in [-1, 1]. Only the third returned field
+          depends on it -- the first two are the complete information, so a
+          different P_T is a recombination, not a re-run.
+        - `bias`: the sample bias eV in Hartree; the LDOS is sampled at
+          E_F + bias.
+        - `integrated`: if True, integrate the LDOS over the whole bias window
+          from E_F to E_F + bias (constant-current/topograph mode) instead of
+          sampling it at E_F + bias (dI/dV mode). Note a positive bias probes
+          EMPTY states, so `nempty` (via `extra_blocks`) has to be large
+          enough to cover the window.
+        - `swidth`: the smearing width (Hartree) of the energy selection, i.e.
+          how wide an energy window the tip samples. Overrides the calculation's
+          own value for this call only; the ground-state default (0.001 Ha) is
+          a sharper delta function than a practical k-mesh can resolve.
+        - `ngridk`: k-mesh override for this call only (a sampling-only
+          parameter -- see docs/design.md #4). A vacuum LDOS at E_F wants a
+          denser mesh than a total energy does.
+
+        Returns a dict:
+
+        - "points" (N, 2): in-plane Cartesian coordinates in Bohr, in the
+          plotting parallelogram's own frame (src/plotpt2d.f90).
+        - "grid": the (n1, n2) tuple; the first index runs fastest, so each
+          field reshapes to an image as `field.reshape(n2, n1)`.
+        - "ldos", "spin_ldos", "image" (N,): n, m . e_T and
+          n + P_T m . e_T, in electrons per Bohr^3 per Hartree (or per Bohr^3
+          if `integrated`).
+        - "ldos_grid", "spin_ldos_grid", "image_grid" (n2, n1): the same three
+          reshaped for plotting.
+        - "dos", "spin_dos": the unit-cell integrals of the first two fields.
+          At zero bias in dI/dV mode "dos" is the density of states at the
+          Fermi energy, the same quantity src/occupy.f90 writes to
+          FERMIDOS.OUT.
+        - "energy", "efermi", "direction": the sampling energy E_F + bias, the
+          Fermi energy, and the normalised tip direction actually used.
+        """
+        blocks = self._spin_stm_blocks(direction, polarization, bias, integrated, swidth)
+        if plane is None:
+            plane = [(0, 0, height), (1, 0, height), (0, 1, height)]
+        blocks["plot2d"] = self._plot2d_lines(plane, grid)
+        subdir = self._run_resumed(
+            "spin_stm",
+            [spec.TASKS["spin_stm_2d"]],
+            blocks,
+            ngridk=tuple(ngridk) if ngridk else None,
+        )
+        points, values, grid_shape = volumetric.parse_plot2d(
+            subdir / spec.OUTPUT_FILES["spin_stm_2d"], nf=3
+        )
+        result = dict(stm.parse_stm_dos(subdir / spec.OUTPUT_FILES["spin_stm_dos"]))
+        result["points"] = points
+        result["grid"] = grid_shape
+        n1, n2 = grid_shape
+        for i, name in enumerate(("ldos", "spin_ldos", "image")):
+            result[name] = values[:, i]
+            result[name + "_grid"] = values[:, i].reshape(n2, n1)
+        return result
+
+    def get_spin_stm_3d(
+        self,
+        direction=(0, 0, 1),
+        box=None,
+        grid=(20, 20, 20),
+        polarization=1.0,
+        bias=0.0,
+        integrated=False,
+        swidth=None,
+        ngridk=None,
+    ):
+        """The same spin-polarised LDOS fields as get_spin_stm(), on a 3D
+        parallelepiped instead of a plane (elkpy task 9004).
+
+        `box` is the plot3d parallelepiped [origin, v1, v2, v3] in lattice
+        coordinates (default: the unit cell), same convention as
+        get_density(). Useful for the vacuum decay of the spin-resolved LDOS,
+        i.e. for choosing a tip height, rather than for an image at one.
+
+        Returns (points, values): points shape (N, 3) in Cartesian Bohr,
+        values shape (N, 3) with columns n, m . e_T and n + P_T m . e_T.
+        """
+        blocks = self._spin_stm_blocks(direction, polarization, bias, integrated, swidth)
+        blocks["plot3d"] = self._plot3d_lines(box, grid)
+        subdir = self._run_resumed(
+            "spin_stm_3d",
+            [spec.TASKS["spin_stm_3d"]],
+            blocks,
+            ngridk=tuple(ngridk) if ngridk else None,
+        )
+        return volumetric.parse_plot3d(subdir / spec.OUTPUT_FILES["spin_stm_3d"], nf=3)
 
     def get_moke(self, wplot=(0.0, 0.5), nwplot=500, swidth=None, ngridk=None):
         """Complex magneto-optic Kerr angle (tasks 120 then 122,

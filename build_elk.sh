@@ -11,7 +11,7 @@
 # by editing vendor/elk/.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$ROOT/build/elk"
 
 rm -rf "$BUILD_DIR"
