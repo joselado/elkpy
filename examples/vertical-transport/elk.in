@@ -1,0 +1,107 @@
+
+! Vertical tunnelling transport through monolayer graphene: from a point tip
+! above the sheet into an infinite, featureless substrate plane below it.
+!
+! This answers a different question from an STM image. Task 9003 (and upstream
+! task 162) plot what a tip SEES -- the vacuum local density of states at the
+! tip position, the Tersoff-Hamann picture. Task 9005 computes what gets
+! THROUGH: the electron enters at a point r above the material and leaves into
+! a metal underneath, so the current is set by the NONLOCAL Green's function
+! between the two,
+!
+!   T(r;E) = int_plane |G(r,r';E)|^2 d^2r'
+!   G(r,r') = sum_kn psi_kn(r) psi*_kn(r') / (E - eps_kn + i eta)
+!
+! A substrate invariant under every lateral lattice translation conserves the
+! lateral momentum, so the k-sum is incoherent and only bands at the SAME k
+! interfere on the way out. What survives is one Hermitian matrix per k-point
+! -- the bands' Gram matrix restricted to the exit plane,
+! S_k[n,n'] = int_plane psi*_kn psi_kn' -- and the whole transmission is one
+! quadratic form, T(r;E) = sum_k w_k sum_nm a_n(r) a*_m(r) S_k[n,m].
+!
+! Task 9005 writes S_k and the tip amplitudes psi_kn(r_p) to
+! ELKPY_TRANSPORT.OUT. The energy weighting and the contraction are two dozen
+! lines of Python (elkpy.parsers.transport) rather than Fortran, deliberately:
+! they are then unit-testable against synthetic data, and an energy sweep
+! costs nothing extra since neither the wavefunctions nor S_k depend on E.
+!
+! For MONOLAYER graphene the answer is a theorem. The states at the Fermi
+! level are the Dirac doublet at K, and the symmetry the tip/substrate
+! geometry leaves intact -- C3v, whose mirror exchanges the two sublattices
+! without flipping z -- still acts irreducibly on that pair. By Schur's lemma
+! S_K is a multiple of the identity: the substrate cannot tell the partners
+! apart, there is nothing off-diagonal for the current to interfere through,
+! and the transmission map IS the tunnelling image. Stack a second layer
+! (AB-stacked, so the low-energy states become layer-polarized) and it is not.
+!
+! Note the transport k-grid below is generated and diagonalised by the task
+! itself, so it is independent of ngridk and of reducek. It must be a multiple
+! of 3 to contain K -- graphene's states at E_F all sit there, and on a mesh
+! without it the map is identically zero, not merely small.
+!
+! This is an elkpy extension: it needs an elk binary built by build_elk.sh
+! (which applies patches/), not stock Elk.
+!
+! Run:   elk                       (in this directory, ~2 minutes)
+! Plot:  python3 plot_transport.py
+
+tasks
+  0
+  9005
+
+! MANDATORY. Elk otherwise relocates the origin -- onto the inversion centre,
+! which for a honeycomb is the bond midpoint -- while the plot2d and exit
+! planes below stay in the frame written here. The two would then sit on the
+! wrong side of the sheet, which the task refuses rather than computes.
+tshift
+  .false.
+
+! the exit (substrate) plane: normal to the third lattice vector, at
+! fractional coordinate 0.38 -- 2.4 Bohr below the sheet, in the vacuum. The
+! plane is spanned by the other two lattice vectors, which is what makes the
+! exit integral an exact orthogonality relation rather than a quadrature.
+elkpy_transport_exit
+  3   0.38
+
+! export every state within this window (Hartree, relative to the Fermi
+! energy). The on-shell weight applied on the Python side kills the rest, so
+! this is what keeps the file small
+elkpy_transport_window
+  -0.04   0.04
+
+! the transport k-grid: generated here and diagonalised fresh, so it needs no
+! relation at all to ngridk below. A multiple of 3 contains K
+elkpy_transport_kgrid
+  6  6  1
+
+! the TIP plane, in the usual plot2d block: 2.4 Bohr above the sheet, the same
+! standoff as the exit plane below it. The material must lie BETWEEN them
+plot2d
+  0.0  0.0  0.62
+  1.0  0.0  0.62
+  0.0  1.0  0.62
+  24  24
+
+avec
+  4.647926   0.000000   0.000000
+ -2.323963   4.025000   0.000000
+  0.000000   0.000000  20.000000
+
+atoms
+  1                                        : nspecies
+  'C.in'                                   : spfname
+  2                                        : natoms
+  0.00000000  0.00000000  0.50000000    0.0 0.0 0.0
+  0.33333333  0.66666667  0.50000000    0.0 0.0 0.0
+
+sppath
+  '../../vendor/elk/species/'
+
+ngridk
+  6  6  1
+
+rgkmax
+  7.0
+
+nempty
+  10

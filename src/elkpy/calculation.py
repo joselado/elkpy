@@ -33,6 +33,7 @@ from .parsers import (
     stm,
     symmetry,
     totenergy,
+    transport as parsers_transport,
     volumetric,
     wilson,
 )
@@ -803,6 +804,202 @@ class Calculation:
             ngridk=tuple(ngridk) if ngridk else None,
         )
         return volumetric.parse_plot3d(subdir / spec.OUTPUT_FILES["spin_stm_3d"], nf=3)
+
+    def get_vertical_transport(
+        self,
+        exit_height,
+        height=None,
+        plane=None,
+        grid=(24, 24),
+        kgrid=(6, 6, 1),
+        koffset=(0.0, 0.0, 0.0),
+        axis=3,
+        energies=None,
+        broadening=0.005,
+        window=None,
+        nsigma=8.0,
+        substrate_direction=(0, 0, 1),
+        substrate_polarization=0.0,
+        exit_region="plane",
+        incoherent=True,
+    ):
+        """Vertical tunnelling transport through a two-dimensional material
+        (elkpy task 9005, src/elkpy_transport.f90 -- docs/design.md #31).
+
+        Not what an STM tip SEES above the sheet (that is get_spin_stm(), the
+        Tersoff-Hamann local density of states) but what gets THROUGH it: the
+        electron enters at a point r on the tip plane and leaves into an
+        infinite, featureless metallic plane below the material, so the current
+        is set by the nonlocal Green's function between the two,
+
+            T(r; E) = int_plane |G(r, r'; E)|^2 d^2r'
+            G(r, r') = sum_kn psi_kn(r) psi*_kn(r') / (E - eps_kn + i eta)
+
+        A substrate invariant under every lateral lattice translation conserves
+        the lateral momentum, so the k-sum is incoherent and only bands at the
+        SAME k interfere on the way out. What survives is one Hermitian Gram
+        matrix per k-point, S_k[n,n'] = int_plane psi*_kn psi_kn', contracted
+        with the on-shell tip amplitudes -- see parsers.transport for the two
+        conventions (the on-shell amplitude and the conjugation on the exit
+        variable) that this rests on.
+
+        Requires `tshift=False` (via `extra_blocks`): Elk otherwise relocates
+        the origin -- onto the inversion centre when the crystal has one --
+        while both plotting planes stay in YOUR frame, so the geometry would
+        silently be wrong. Same requirement, same reason, as the rotation
+        indicators of docs/design.md #28.
+
+        Both planes must lie in the vacuum, outside every muffin-tin sphere:
+        the whole construction uses the interstitial plane-wave representation,
+        which is not the wavefunction inside a sphere. The Fortran task checks
+        this and refuses rather than returning a plausible number. Note also
+        that `rgkmax` sets how far into the vacuum tail that representation
+        stays meaningful, so keep both planes reasonably close to the slab.
+
+        Arguments:
+
+        - `exit_height`: the substrate plane's fractional coordinate along
+          `axis`. It sits BELOW the material.
+        - `height`/`plane`/`grid`: the tip plane, exactly as in
+          get_spin_stm() -- a fractional coordinate along the third lattice
+          vector (spanning the whole a1-a2 cell), or an explicit plot2d
+          parallelogram [origin, v1, v2], sampled on `grid` points. The
+          material must lie BETWEEN the exit plane and the tip plane.
+        - `kgrid`/`koffset`: the transport k-mesh. It is generated and
+          diagonalised fresh by the task itself, so it is completely
+          independent of the ground state's own `ngridk` and of `reducek` --
+          no re-run and no symmetry restriction. Note a mesh whose divisions
+          are not a multiple of three does not contain K, and graphene's
+          states at the Fermi level all sit there: the map is then
+          identically zero, not merely small.
+        - `energies`: the sample bias, in Hartree RELATIVE to the Fermi
+          energy (default: 0, i.e. at E_F), scalar or sequence. Sweeping it
+          is nearly free -- neither the wavefunctions nor S_k depend on the
+          energy, only the per-state weight does, so a whole dI/dV curve at
+          every pixel costs one contraction per energy on top of a sampling
+          step paid once.
+        - `broadening`: eta in Hartree, the width of the energy window the
+          tip and substrate let states through in. This is the leads' own
+          coupling, not a numerical smearing.
+        - `window`: the (emin, emax) band-export window in Hartree relative to
+          the Fermi energy; by default `nsigma` broadenings either side of the
+          requested energies, which is what keeps the export small.
+        - `substrate_direction`/`substrate_polarization`: a magnetic
+          substrate, which accepts 1 + P n.sigma -- the spin-space sibling of
+          get_spin_stm()'s magnetic TIP, but sitting inside the overlap
+          integral rather than applied to a density. Needs nspinor=2.
+        - `exit_region`: "cell" replaces every S_k by the identity, which is
+          the Tersoff-Hamann limit -- T becomes the tunnelling density of
+          states at the tip, the same quantity get_spin_stm() computes through
+          an entirely separate Fortran path.
+        - `incoherent`: also build the map with every substrate channel
+          tunnelling on its own, so the interference can be read off.
+
+        Returns a dict: "points" (N, 2) in-plane Cartesian Bohr and "grid"
+        (n2, n1) as in get_spin_stm(); "bias" (nE,) as passed and "energies"
+        (nE,) the absolute energies it became; "transmission"
+        (nE, N) and "transmission_grid" (nE, n2, n1) in arbitrary units (the
+        tip and substrate couplings are unfixed prefactors, so what this
+        carries is the map and its contrast); "incoherent"/"interference" the
+        same shape; "channels" the mean number of open substrate channels;
+        "offdiagonal_weight" how much of S_k sits off its diagonal; plus
+        "least_eigenvalue", "hermiticity", "efermi" and "raw" (the parsed
+        export, for a check against the definition).
+        """
+        if exit_region not in ("plane", "cell"):
+            raise ValueError(
+                f"unknown exit_region {exit_region!r}: use 'plane' (the "
+                "substrate) or 'cell' (the Tersoff-Hamann diagnostic)"
+            )
+        if axis not in (1, 2, 3):
+            raise ValueError(f"`axis` must be 1, 2 or 3, got {axis}")
+        if abs(substrate_polarization) > 1.0:
+            raise ValueError(
+                "`substrate_polarization` must lie in [-1, 1], got "
+                f"{substrate_polarization}"
+            )
+        if substrate_polarization != 0.0 and not (self.spinpol or self.spinorb):
+            raise ValueError(
+                "a spin-polarized substrate needs nspinor=2 (spinpol=True "
+                "and/or spinorb=True): without it Elk's wavefunctions carry no "
+                "spin index for the projector to act on"
+            )
+        tshift = self.extra_blocks.get("tshift")
+        if tshift is None or bool(tshift[0]) is not False:
+            raise ValueError(
+                "get_vertical_transport() needs tshift=False -- pass "
+                "extra_blocks={'tshift': [False]} to Calculation(). Elk "
+                "otherwise relocates the origin (onto the inversion centre "
+                "when the crystal has one) while the plot2d and exit planes "
+                "stay in your own frame, so the two planes would silently sit "
+                "on the wrong side of the material. Same requirement as the "
+                "rotation symmetry indicators, docs/design.md #28"
+            )
+        energies = [0.0] if energies is None else np.atleast_1d(energies).tolist()
+        if window is None:
+            # the exported window is relative to the Fermi energy, as
+            # `energies` is; nsigma broadenings either side is what makes the
+            # export small enough to hold in a text file
+            pad = nsigma * broadening
+            window = (min(energies) - pad, max(energies) + pad)
+        if plane is None:
+            if height is None:
+                raise ValueError("pass either `height` or an explicit `plane`")
+            plane = [(0, 0, height), (1, 0, height), (0, 1, height)]
+        blocks = {
+            "elkpy_transport_exit": [(int(axis), float(exit_height))],
+            "elkpy_transport_window": [(float(window[0]), float(window[1]))],
+            "elkpy_transport_kgrid": [tuple(int(n) for n in kgrid)],
+            "elkpy_transport_koffset": [tuple(float(x) for x in koffset)],
+            "elkpy_transport_sdir": [tuple(float(x) for x in substrate_direction)],
+            "elkpy_transport_spol": [float(substrate_polarization)],
+            "plot2d": self._plot2d_lines(plane, grid),
+        }
+        subdir = self._run_resumed("transport", [spec.TASKS["transport"]], blocks)
+        out = subdir / spec.OUTPUT_FILES["transport"]
+        if not out.exists():
+            # the task refuses a geometry it cannot compute (a plane cutting a
+            # muffin-tin sphere, or planes on the wrong side of the material)
+            # with a message and a bare Fortran `stop`, which exits 0 -- so the
+            # launcher sees nothing wrong and the missing file is the signal
+            log = (subdir / "elk.out").read_text().strip().splitlines()
+            raise RuntimeError(
+                "the vertical transport task wrote no output; elk said:\n  "
+                + "\n  ".join(log[-12:])
+            )
+        data = parsers_transport.parse_transport(out)
+        absolute = [data["efermi"] + float(e) for e in energies]
+        result = parsers_transport.compute_transmission(
+            data,
+            energies=absolute,
+            broadening=broadening,
+            stype=self._smearing_type(),
+            exit_region=exit_region,
+            incoherent=incoherent,
+        )
+        n2, n1 = data["grid"]
+        result["bias"] = np.asarray(energies, dtype=float)
+        result["points"] = data["points"]
+        result["grid"] = data["grid"]
+        result["efermi"] = data["efermi"]
+        result["raw"] = data
+        for name in ("transmission", "incoherent", "interference"):
+            field = result[name]
+            result[name + "_grid"] = (
+                None if field is None else field.reshape(-1, n2, n1)
+            )
+        return result
+
+    def _smearing_type(self):
+        """Elk's `stype`, so that the Python-side on-shell amplitude weight is
+        the square root of the SAME smeared delta src/sdelta.f90 uses.
+
+        Not cosmetic: the Tersoff-Hamann cross-check against get_spin_stm()
+        (which builds its weight from Elk's own sdelta) is exact only if both
+        sides use the same one. Elk's default is 3, Fermi-Dirac.
+        """
+        block = self.extra_blocks.get("stype")
+        return 3 if block is None else int(block[0])
 
     def get_moke(self, wplot=(0.0, 0.5), nwplot=500, swidth=None, ngridk=None):
         """Complex magneto-optic Kerr angle (tasks 120 then 122,

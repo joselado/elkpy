@@ -821,6 +821,87 @@ ratio is constant to 1e-6 *and equals $N_{\mathbf k}$ exactly* — a quantitativ
 the whole difference between the two routines is that one weight. Physics writeup: `docs/design.md`
 §30 and `docs/physics.tex` Part XVII.
 
+Also implemented, as patch 0012 — the twelfth entry in the Fortran patch series:
+**vertical tunnelling transport through a two-dimensional material** (§31) —
+`Calculation.get_vertical_transport()` (task 9005, `src/elkpy_transport.f90`), which computes
+what gets *through* the sheet rather than what an STM tip sees above it (§30). A point tip at
+$\mathbf r$ above the material, an infinite featureless metallic substrate plane below it: the
+current is then set by the **nonlocal** Green's function between the two, since a point tip makes
+$\Gamma_{\rm t}$ rank one and collapses the Landauer trace exactly to
+$T(\mathbf r;E)=\int_{\rm plane}|G(\mathbf r,\mathbf r';E)|^2d^2r'$. The band sum happens *before*
+the modulus: different bands are different routes through the material and they add as amplitudes.
+Driveable entirely from a plain `elk.in` (task 9005 plus the `elkpy_transport_exit`/`_window`/
+`_kgrid`/`_koffset`/`_sdir`/`_spol` blocks and the usual `plot2d`) — see
+`examples/vertical-transport/`.
+
+Because the substrate is invariant under every lateral lattice translation it conserves
+$\mathbf k_\parallel$, so the k-sum is **incoherent** and only bands at the same $\mathbf k$
+interfere. What survives is one Hermitian Gram matrix per k-point,
+$S_{\mathbf k}[n,n']=\int_{\rm plane}\psi^*_{n\mathbf k}\hat P_{\rm s}\psi_{n'\mathbf k}$, and one
+quadratic form. In the interstitial (both planes are in vacuum) Elk's wavefunction is an exact
+plane-wave sum, so **$S_{\mathbf k}$ is computed in closed form** — the in-plane G-vector
+orthogonality collapse, one gather and one `zgemm` per k-point, nothing sampled and nothing
+converging. The k-mesh is the task's own (`elkpy_transport_wf` diagonalises fresh, the
+`bandstr.f90` route), so it is independent of `ngridk` **and of `reducek`** — which also avoids a
+failure mode a reduced wedge would carry here, the reduction using $z$-flipping operations whose
+Gram matrix is the overlap on the *mirror-image* plane.
+
+**Two conventions are taken from `defumat`'s measurements rather than rediscovered.** The literal
+resolvent denominator **cannot be evaluated by a truncated band sum** — the far-from-$E$ states
+build the barrier's evanescent decay entirely by cancellation (measured cancellation ratio 349 on
+a completely diagonalised cell) — so the amplitude is the on-shell one,
+$a=\psi\sqrt{f_{\rm occ}\delta_\eta/\eta}$, which is *exactly* the resolvent's modulus and keeps
+the interference between bands degenerate at the tip energy. And $G$ carries $\psi$ conjugated in
+the **exit** variable, so the contraction is $\sum a_na^*_mS[n,m]$, not $\sum a^*_na_mS[n,m]$; the
+transposed version is real, non-negative, blind to a degenerate rotation and exactly right in the
+Tersoff-Hamann limit, so only a literal $\int|G|^2$ quadrature separates them.
+
+All arithmetic is Python (`parsers/transport.py`), like `berry`/`wilson`/`optical` — which is what
+makes an energy sweep free (neither the wavefunctions nor $S_{\mathbf k}$ depend on $E$) and the
+formula unit-testable. This is the one deliberate asymmetry with §30: `examples/spin-stm/` needs
+no Python at all, `examples/vertical-transport/` needs a dozen lines of it, because putting the
+contraction in Fortran too would put one formula in two languages.
+
+**Verification.** No code computes this quantity for comparison (QE's `PWCOND` is a Landauer
+transmission between two semi-infinite *crystalline leads* — no point contact, therefore no map),
+so the checks close inside the package. The **Tersoff-Hamann limit is exact rather than
+approximate**: `exit_region="cell"` makes every $S_{\mathbf k}$ the identity and $T$ becomes the
+tunnelling density of states — agreeing with `get_spin_stm()`'s (§30, via `rhomagv`) to **1.6e-5 of
+the peak with NO factor**, which is the only check a wrong overall normalisation could not hide in,
+every other one here being a ratio or a null. Setting the tip plane *equal to* the exit plane makes
+the exported amplitudes sample the exit plane itself, so the closed-form $S_{\mathbf k}$ can be
+checked against a literal rectangle rule (**7e-15**) and the contraction against a literal
+$\int|G|^2$ (**8e-15**, where the transposed convention differs). **The physics is an exact
+symmetry statement**, sharpened by Fable: the group that matters is not K's little group but its
+subgroup of **$z$-preserving** elements, since anything flipping $z$ maps the substrate plane onto
+the tip side. For **monolayer graphene** that is $C_{3v}$, whose $\sigma_v$ exchanges the two
+sublattices without flipping $z$ — the Dirac doublet is still the 2D irrep $E$, so by Schur
+$S_K\propto\mathbb 1$: measured eigenvalues 0.05242094 and 0.05242103, **equal to 8.5e-7**, exactly
+2.000000 open channels, zero off-diagonal weight, correlation with the tunnelling image >0.999.
+(`defumat`, a plane-wave pseudopotential code, gets $\mathrm{diag}(0.05405086,0.05405084)$ for the
+same object — cross-code agreement in the *value*.) For the **AB bilayer** the only element
+exchanging the pair is an in-plane $C_2'$, which flips $z$; the intact group $C_3$ is abelian and
+Schur gives nothing, the states being the non-dimer sites of two *different* layers. Measured with
+equal standoffs: $S_K$ eigenvalues 3.33e-5 and 4.36e-2, a **ratio of 1311**, half of
+$S_{\mathbf k}$ off-diagonal, correlation down to 0.81, incoherent map 74x above the coherent one.
+
+**Traps, all guarded in Fortran rather than documented**: a plane cutting a muffin-tin sphere (the
+plane-wave part is not the wavefunction there and returns a plausible number — note the radius that
+matters is `checkmt`'s, which shrinks carbon from 1.80 to 1.32 Bohr); `tshift=False` is **mandatory**,
+the same trap as §28, since Elk otherwise moves the origin onto the inversion centre while both
+plotting planes stay in the input frame (measured: the sheet moves from $z$=0.5 to 0 and both planes
+end up on the same side); the material must lie *between* the planes. Two limitations are documented
+rather than guarded: `rgkmax` bounds how far into the vacuum tail the plane-wave representation is
+meaningful ($S_{\mathbf k}$ stays Hermitian/PSD while becoming meaningless), and a k-mesh without K
+gives graphene a map that is **identically zero, not small**. Not implemented, deliberately: the
+resolvent method, a finite contact patch, a tilted exit plane, plane-to-plane geometry, and any
+absolute conductance (the two lead couplings are unfixed prefactors — what this delivers is the map
+and its contrast). The **magnetic substrate** ($\hat P_{\rm s}=1+P_{\rm s}\hat{\mathbf n}\cdot
+\boldsymbol\sigma$, §30's normalisation so $P_{\rm s}=0$ gives the plain spin-summed Gram matrix)
+is implemented and structurally exercised, but has **no end-to-end physics test**: the natural one
+is spin-layer locking in a 2H WSe2 bilayer or an A-type AFM bilayer, which is 10-30x the graphene
+cost. Physics writeup: `docs/design.md` §31 and `docs/physics.tex` Part XVIII.
+
 ## Architecture
 
 - `src/elkpy/structure.py` — `Structure`: lattice vectors (`avec`, Bohr) + species, each atom either a

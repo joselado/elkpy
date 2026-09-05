@@ -70,6 +70,11 @@ node's own. Override with `ELKPY_F90_LIB`, `ELKPY_MARCH` or `ELKPY_MODULES`
 - Spin-polarized STM images in the Tersoff-Hamann picture, $dI/dV(\mathbf r)\propto n(\mathbf r,E_F+eV)+P_T\,\mathbf m(\mathbf r,E_F+eV)\cdot\hat{\mathbf e}_T$ — the vacuum local density of states projected onto an arbitrary Cartesian tip magnetization direction, which resolves magnetically inequivalent but chemically identical atoms [[notebook]](notebooks/19_spin_polarized_stm.ipynb)
 - Both the differential-conductance map at one energy and the bias-window-integrated (constant-current) image, at any tip height [[notebook]](notebooks/19_spin_polarized_stm.ipynb)
 
+## Vertical tunnelling transport ##
+- What gets *through* a two-dimensional material rather than what an STM tip sees above it: the transmission from a point tip into a substrate plane, $T(\mathbf r;E)=\int_{\rm plane}|G(\mathbf r,\mathbf r';E)|^2 d^2r'$, set by the *nonlocal* Green's function $G(\mathbf r,\mathbf r')=\sum_{n\mathbf k}\psi_{n\mathbf k}(\mathbf r)\psi^*_{n\mathbf k}(\mathbf r')/(E-\varepsilon_{n\mathbf k}+i\eta)$ — so bands add as amplitudes, not as probabilities [[notebook]](notebooks/20_vertical_transport.ipynb)
+- The interference no local picture contains: a substrate invariant under every lateral translation conserves $\mathbf k_\parallel$, leaving one Gram matrix per k-point, $S_{\mathbf k}[n,n']=\int_{\rm plane}\psi^*_{n\mathbf k}\psi_{n'\mathbf k}$, whose off-diagonal is the whole departure from a Tersoff-Hamann image [[notebook]](notebooks/20_vertical_transport.ipynb)
+- A magnetic substrate, which accepts $1+P_{\rm s}\hat{\mathbf n}\cdot\boldsymbol\sigma$ inside that overlap — the spin-space sibling of a magnetic tip, but selecting which states leave rather than which are seen [[docs]](docs/design.md)
+
 ## Quantum geometry ##
 - The full quantum geometric tensor $Q_{ab}=g_{ab}-\tfrac i2F_{ab}$ at an arbitrary k-point: Berry curvature $F_{ab}$ *and* the quantum metric $g_{ab}$ (Fubini-Study distance between neighbouring Bloch states), from the same wavefunction-overlap queries used for eigenstates below [[notebook]](notebooks/07_quantum_geometry.ipynb)
 - The same tensor in its Kubo (sum-over-states) form $T_{ab}=\sum_{n\in W,\,m\notin W}\langle n|v_a|m\rangle\langle m|v_b|n\rangle/(\varepsilon_n-\varepsilon_m)^2$, needing no k-derivative at all — an independent route to $g_{ab}=\mathrm{Re}\,T_{ab}$ and $F_{ab}=-2\,\mathrm{Im}\,T_{ab}$ [[notebook]](notebooks/14_optical_matrix_elements.ipynb)
@@ -165,6 +170,41 @@ plt.pcolormesh(x, y, stm["ldos_grid"])       # conventional STM: 1x1, nearly fla
 plt.pcolormesh(x, y, stm["spin_ldos_grid"])  # spin contrast: the magnetic superstructure
 ```
 ![Alt text](images/cr_spin_stm.png?raw=true "Spin-summed and spin-projected vacuum LDOS above a 120-degree Neel Cr monolayer, showing the magnetic superstructure the spin-averaged image cannot resolve")
+
+## What gets through a sheet, rather than what a tip sees above it ##
+For monolayer graphene the two are the same picture, and that is a theorem: the states at
+$E_F$ are the Dirac doublet at K, the symmetry the tip/substrate geometry leaves intact
+($C_{3v}$, whose mirror swaps the sublattices without flipping $z$) still acts irreducibly
+on it, so by Schur's lemma $S_K$ is a multiple of the identity and there is nothing
+off-diagonal for the current to interfere through:
+```python
+# `mono` is a monolayer-graphene Calculation built as above, with
+# extra_blocks={"tshift": [False]} -- mandatory, so that the two plotting
+# planes and the atoms stay in the same frame.
+# The k-grid is the task's own -- independent of ngridk and reducek. A multiple
+# of 3 contains K, and graphene's states at E_F are all there
+geom = dict(exit_height=0.38, height=0.62, grid=(24, 24), kgrid=(6, 6, 1), broadening=0.005)
+flow = mono.get_vertical_transport(**geom)                      # through the sheet
+local = mono.get_vertical_transport(exit_region="cell", **geom)  # what an STM sees
+
+flow["channels"]             # 2.0000 -- two channels the substrate cannot tell apart
+flow["offdiagonal_weight"]   # 0.0    -- so nothing interferes, and the maps coincide
+```
+![Alt text](images/graphene_vertical_transport.png?raw=true "Vertical transmission through monolayer graphene next to the Tersoff-Hamann image at the same tip plane; the two are the same picture, correlation 1.000000")
+
+Stack a second layer AB and the element exchanging the two zero-energy states is an in-plane
+$C_2'$, which *flips* $z$ and is broken by having a tip above and a substrate below. The
+states are then the non-dimer sites of two different layers, and $S_K$'s two eigenvalues
+differ by a factor of 1311 instead of 1.0000017:
+```python
+# `bi` is the AB-stacked bilayer: layers at z1, z2 = 3.35 A apart, and `gap`
+# the same standoff above and below, so only the substrate side differs
+biflow = bi.get_vertical_transport(exit_height=z1 - gap, height=z2 + gap,
+                                   grid=(24, 24), kgrid=(6, 6, 1), broadening=0.005)
+biflow["offdiagonal_weight"]  # 0.50 -- half of S_k is off its diagonal
+biflow["interference"]        # coherent minus incoherent: what no local map contains
+```
+![Alt text](images/bilayer_vertical_transport.png?raw=true "Vertical transmission through AB bilayer graphene next to the Tersoff-Hamann image; the current has to cross both layers and the map departs from the local one, correlation 0.81")
 
 ## Quantum metric alongside Berry curvature, along Gamma-K-M-K'-Gamma of monolayer h-BN ##
 Time-reversal symmetry requires $g_{ab}(K)=g_{ab}(K')$ even though $\Omega(K')=-\Omega(K)$ --
@@ -298,6 +338,7 @@ is the place to actually start:
 | [`17_spin_hall.ipynb`](notebooks/17_spin_hall.ipynb) | Spin Berry curvature, and why the two valleys agree in sign | yes |
 | [`18_exchange_constants.ipynb`](notebooks/18_exchange_constants.ipynb) | Anisotropic exchange tensor by four-state energy mapping (Heisenberg, DM, Kitaev) | yes |
 | [`19_spin_polarized_stm.ipynb`](notebooks/19_spin_polarized_stm.ipynb) | Spin-polarized STM image of a non-collinear 120-degree Néel Cr monolayer | yes |
+| [`20_vertical_transport.ipynb`](notebooks/20_vertical_transport.ipynb) | Vertical tunnelling transport: monolayer vs AB-bilayer graphene, and where the local picture fails | yes |
 | [`01_getting_started.ipynb`](notebooks/01_getting_started.ipynb) | Ground state, band structure, density of states | -- |
 | [`02_relaxation_forces_and_properties.ipynb`](notebooks/02_relaxation_forces_and_properties.ipynb) | Forces, relaxation, effective mass, density, `run_tasks()` | -- |
 | [`03_phonon_dispersion_and_dos.ipynb`](notebooks/03_phonon_dispersion_and_dos.ipynb) | Phonon dispersion/DOS via DFPT | -- |

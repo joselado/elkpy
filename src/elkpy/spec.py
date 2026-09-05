@@ -60,6 +60,11 @@ TASKS = {
                            # plot2d plane, src/elkpy_stm.f90 --
                            # patches/0011-spin-polarized-stm.patch
     "spin_stm_3d": 9004,   # elkpy extension: same on the plot3d parallelepiped
+    "transport": 9005,     # elkpy extension: vertical tunnelling transport
+                           # (point tip -> substrate plane), the exit-plane
+                           # Gram matrices and tip amplitudes,
+                           # src/elkpy_transport.f90 --
+                           # patches/0012-vertical-transport.patch
 }
 
 # output filenames, per the `open(unit, file=...)` calls in the cited source
@@ -90,6 +95,8 @@ OUTPUT_FILES = {
     "spin_stm_3d": "ELKPY_STM3D.OUT",      # elkpy extension, src/elkpy_stm.f90
     "spin_stm_dos": "ELKPY_STMDOS.OUT",    # elkpy extension, src/elkpy_stm.f90 --
                                            # cell integrals of the plotted fields
+    "transport": "ELKPY_TRANSPORT.OUT",    # elkpy extension,
+                                           # src/elkpy_transport.f90
     "fermidos": "FERMIDOS.OUT",            # src/occupy.f90, DOS at the Fermi
                                            # energy per s.c. iteration
 }

@@ -1,0 +1,707 @@
+diff --git a/src/Makefile b/src/Makefile
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -224,7 +224,8 @@
+ 
+ # elkpy extension (not upstream Elk): Wilson-loop / Fukui-Hatsugai-Suzuki
+ # Berry curvature (task 9000, see elkpy_berry.f90)
+-SRC_ELKPY = elkpy_berry.f90 elkpy_eigenstates.f90 elkpy_stm.f90
++SRC_ELKPY = elkpy_berry.f90 elkpy_eigenstates.f90 elkpy_stm.f90 \
++ elkpy_transport.f90
+ 
+ SRC = $(SRC_modules) $(SRC_FFT) $(SRC_elk) $(SRC_main) $(SRC_LAPACK) \
+  $(SRC_phonon) $(SRC_XC) $(SRC_DFTU) $(SRC_RDMFT) $(SRC_GW) $(SRC_TDDFT) \
+diff --git a/src/elk.f90 b/src/elk.f90
+--- a/src/elk.f90
++++ b/src/elk.f90
+@@ -294,6 +294,10 @@
+   case(9003,9004)
+ ! elkpy: spin-polarised STM image (Tersoff-Hamann), 2D (9003) or 3D (9004)
+     call elkpy_stm
++  case(9005)
++! elkpy: vertical tunnelling transport through a 2D material (point tip to
++! elkpy: substrate plane, nonlocal Green's function)
++    call elkpy_transport
+   case default
+     write(*,*)
+     write(*,'("Error(elk): task not defined : ",I0)') task
+@@ -1699,6 +1703,45 @@
+ !   integrals of the first two to {\tt ELKPY\_STMDOS.OUT}. Requires
+ !   {\tt spinpol}.
+ !
++!   \block{elkpy_transport_exit}{
++!   {\tt axis, height} & the lattice vector the exit (substrate) plane is
++!    normal to, and its fractional coordinate along that vector & integer,
++!    real & $3$, $0.0$}
++!
++!   \block{elkpy_transport_window}{
++!   {\tt w1, w2} & energy window in Hartree, relative to the Fermi energy,
++!    within which states are exported & real, real & $-0.02$, $0.02$}
++!
++!   \block{elkpy_transport_kgrid}{
++!   {\tt n1, n2, n3} & the transport k-grid, generated and diagonalised
++!    fresh by the task itself, independently of {\tt ngridk} and
++!    {\tt reducek} & integer(3) & $1,1,1$}
++!
++!   \block{elkpy_transport_koffset}{
++!   {\tt k1, k2, k3} & offset of the transport k-grid, in units of one grid
++!    spacing & real(3) & $0,0,0$}
++!
++!   \block{elkpy_transport_sdir}{
++!   {\tt elkpy\_transport\_sdir} & substrate magnetisation direction, in
++!    Cartesian coordinates (normalised internally) & real(3) & $(0,0,1)$}
++!
++!   \block{elkpy_transport_spol}{
++!   {\tt elkpy\_transport\_spol} & the substrate's effective spin
++!    polarisation, in $[-1,1]$ & real & $0.0$}
++!   elkpy extension (not upstream Elk, task 9005): these six variables
++!   control the vertical tunnelling transport task, which computes what gets
++!   {\it through} a two-dimensional material rather than what an STM tip
++!   sees above it. An electron enters at a point on the {\tt plot2d} plane
++!   (the tip) and leaves into an infinite, featureless plane below the
++!   material (the substrate), so the current is set by the nonlocal Green's
++!   function $G({\bf r},{\bf r}')$ between the two rather than by the local
++!   density of states at the tip. Writes the exit-plane Gram matrices
++!   $S_{\bf k}[n,n']=\int_{\rm plane}\psi^*_{n{\bf k}}\hat P_{\rm s}
++!   \psi_{n'{\bf k}}$ and the tip amplitudes $\psi_{n{\bf k}}({\bf r}_p)$ to
++!   {\tt ELKPY\_TRANSPORT.OUT}; the on-shell amplitude weight and the
++!   contraction are done on the elkpy (Python) side. Both planes must lie in
++!   the interstitial region, which is checked.
++!
+ !   \block{spincore}{
+ !   {\tt spincore} & set to {\tt .true.} if the core should be spin-polarised
+ !    & logical & {\tt .false.}}
+diff --git a/src/modmain.f90 b/src/modmain.f90
+--- a/src/modmain.f90
++++ b/src/modmain.f90
+@@ -257,6 +257,16 @@
+ ! elkpy: readinput.f90 and elkpy_stm.f90
+ real(8) elkpy_stmdir(3),elkpy_stmpol,elkpy_stmbias
+ logical elkpy_stmint
++! elkpy: vertical tunnelling transport task -- the exit (substrate) plane's
++! elkpy: axis and fractional coordinate, the energy window relative to the
++! elkpy: Fermi energy within which states are exported, the transport k-grid
++! elkpy: (generated and diagonalised fresh by the task itself, independently
++! elkpy: of ngridk/reducek) and its offset, and the substrate's spin
++! elkpy: acceptance direction and polarisation; see elkpy_transport_* in
++! elkpy: readinput.f90 and elkpy_transport.f90
++integer elkpy_trans_axis,elkpy_trans_ngrid(3)
++real(8) elkpy_trans_height,elkpy_trans_window(2),elkpy_trans_koff(3)
++real(8) elkpy_trans_sdir(3),elkpy_trans_spol
+ ! bforb is .true. for external B-field-orbit coupling
+ logical bforb
+ ! bfdmag is .true. for external B-field diamagnetic coupling
+diff --git a/src/readinput.f90 b/src/readinput.f90
+--- a/src/readinput.f90
++++ b/src/readinput.f90
+@@ -170,6 +170,17 @@
+ elkpy_stmpol=1.d0
+ elkpy_stmbias=0.d0
+ elkpy_stmint=.false.
++! elkpy: vertical transport defaults -- exit plane normal to the third
++! elkpy: lattice vector at the cell origin, a +/- 0.02 Ha window about the
++! elkpy: Fermi energy, a single (Gamma) transport k-point, and a
++! elkpy: spin-unpolarised substrate
++elkpy_trans_axis=3
++elkpy_trans_height=0.d0
++elkpy_trans_window(:)=[-0.02d0,0.02d0]
++elkpy_trans_ngrid(:)=[1,1,1]
++elkpy_trans_koff(:)=0.d0
++elkpy_trans_sdir(:)=[0.d0,0.d0,1.d0]
++elkpy_trans_spol=0.d0
+ bforb=.false.
+ bfdmag=.false.
+ atpopt=1
+@@ -672,6 +683,39 @@
+   write(*,'("Adjust maxspecies in modmain and recompile code")')
+   write(*,*)
+   stop
++case('elkpy_transport_exit')
++! elkpy: the exit (substrate) plane of the vertical transport task: the
++! elkpy: lattice vector it is normal to, and its fractional coordinate along
++! elkpy: that vector. The plane is spanned by the other two lattice vectors,
++! elkpy: which is what makes the exit integral an exact orthogonality
++! elkpy: relation rather than a quadrature -- a tilted plane has no such
++! elkpy: relation and is not offered
++  read(50,*,err=20) elkpy_trans_axis,elkpy_trans_height
++case('elkpy_transport_window')
++! elkpy: the energy window, in Hartree relative to the Fermi energy, within
++! elkpy: which states are exported by the vertical transport task
++  read(50,*,err=20) elkpy_trans_window(1),elkpy_trans_window(2)
++case('elkpy_transport_kgrid')
++! elkpy: the transport k-grid, generated and diagonalised fresh by the task
++! elkpy: itself -- independent of ngridk and of reducek
++  read(50,*,err=20) elkpy_trans_ngrid(:)
++case('elkpy_transport_koffset')
++! elkpy: offset of the transport k-grid, in units of one grid spacing
++  read(50,*,err=20) elkpy_trans_koff(:)
++case('elkpy_transport_sdir')
++! elkpy: the substrate magnetisation direction, in Cartesian coordinates
++! elkpy: (normalised in elkpy_transport.f90)
++  read(50,*,err=20) elkpy_trans_sdir(:)
++case('elkpy_transport_spol')
++! elkpy: the substrate's effective spin polarisation, in [-1,1]
++  read(50,*,err=20) elkpy_trans_spol
++  if (abs(elkpy_trans_spol) > 1.d0) then
++    write(*,*)
++    write(*,'("Error(readinput): |elkpy_transport_spol| > 1 : ",G18.10)') &
++     elkpy_trans_spol
++    write(*,*)
++    stop
++  end if
+ case('elkpy_stmdir')
+ ! elkpy: tip magnetisation direction of the spin-polarised STM task, in
+ ! elkpy: Cartesian coordinates; normalised in elkpy_stm.f90
+diff --git a/src/elkpy_transport.f90 b/src/elkpy_transport.f90
+new file mode 100644
+--- /dev/null
++++ b/src/elkpy_transport.f90
+@@ -0,0 +1,548 @@
++
++! elkpy extension (not upstream Elk): vertical tunnelling transport through a
++! two-dimensional material -- from a point tip above the sheet into an
++! infinite featureless substrate plane below it.
++! This file is distributed under the terms of the GNU General Public License.
++
++!BOP
++! !ROUTINE: elkpy_transport
++! !INTERFACE:
++subroutine elkpy_transport
++! !USES:
++use modmain
++! !DESCRIPTION:
++!   Exports the two raw ingredients of the vertical tunnelling transmission
++!   from a point tip at ${\bf r}$ above a two-dimensional material into an
++!   infinite, featureless substrate plane below it. In the tunnelling regime
++!   the Landauer-B\"uttiker transmission
++!   $T={\rm Tr}[\Gamma_{\rm t}G^r\Gamma_{\rm s}G^a]$ collapses, for a
++!   {\it point} tip (which makes $\Gamma_{\rm t}$ rank one), to an integral
++!   of the nonlocal Green's function over the exit plane,
++!   $$ T({\bf r};E)\propto\int_{\rm plane}|G({\bf r},{\bf r}';E)|^2\,d^2r',
++!    \qquad G({\bf r},{\bf r}')=\sum_{n{\bf k}}
++!    \frac{\psi_{n{\bf k}}({\bf r})\psi^*_{n{\bf k}}({\bf r}')}
++!         {E-\varepsilon_{n{\bf k}}+i\eta}. $$
++!   A substrate invariant under every lateral lattice translation conserves
++!   the lateral momentum, so states at different ${\bf k}$ cannot interfere
++!   with one another on their way out and the ${\bf k}$-sum is incoherent.
++!   What survives is one Hermitian matrix per $k$-point -- the bands' Gram
++!   matrix restricted to the plane --
++!   $$ S_{\bf k}[n,n']=\int_{\rm plane\ in\ one\ cell}
++!    \psi^*_{n{\bf k}}({\bf r}')\,\hat P_{\rm s}\,\psi_{n'{\bf k}}({\bf r}')
++!    \,d^2r', $$
++!   with $\hat P_{\rm s}=1+P_{\rm s}\hat{\bf n}\cdot
++!   \boldsymbol\sigma$ the substrate's spin acceptance, and the whole
++!   transmission is one quadratic form per $k$-point,
++!   $$ T({\bf r};E)=\sum_{\bf k}w_{\bf k}\sum_{nm}a_n({\bf r})a^*_m({\bf r})
++!    S_{\bf k}[n,m]. $$
++!   This routine writes $S_{\bf k}$ and the tip amplitudes
++!   $\psi_{n{\bf k}}({\bf r}_p)$; the per-state on-shell amplitude weight, the
++!   contraction, the coherent/incoherent split and every diagnostic are done
++!   on the elkpy (Python) side -- {\tt elkpy.parsers.transport}.
++!
++!   Both the tip points and the exit plane must lie in the {\it interstitial}
++!   region (the vacuum above and below a slab), which is what makes this
++!   exact and cheap: there Elk's wavefunction is the plane-wave sum
++!   $\psi({\bf r})=\Omega^{-1/2}\sum_{\bf G}c_{\bf G}
++!   e^{i({\bf k}+{\bf G})\cdot{\bf r}}$, so the tip amplitude is that sum
++!   evaluated at a point and the exit integral is an orthogonality relation
++!   between the in-plane G-vector indices,
++!   $$ S_{\bf k}[n,n']=\frac{A}{\Omega}\sum_{{\bf G}_\parallel}
++!    b^*_n({\bf G}_\parallel)b_{n'}({\bf G}_\parallel),\qquad
++!    b_n({\bf G}_\parallel)=\sum_{G_3}c_n({\bf G}_\parallel,G_3)
++!    e^{2\pi iG_3s_3}, $$
++!   with $A=|{\bf a}_i\times{\bf a}_j|$ the surface cell area and $s_3$ the
++!   plane's fractional coordinate along the remaining lattice vector. Nothing
++!   is sampled and nothing converges. A plane not spanned by two lattice
++!   vectors has no such relation, which is why the exit plane is specified as
++!   an axis plus a height rather than as a general parallelogram -- a
++!   two-dimensional material's substrate is never tilted. Both restrictions
++!   are checked here rather than documented: inside a muffin-tin sphere the
++!   plane-wave part is not the wavefunction, and both formulas would return a
++!   perfectly plausible number.
++!
++!   The $k$-points are generated here as a uniform grid
++!   ({\tt elkpy\_transport\_kgrid}, with an optional offset) and each is
++!   diagonalised fresh ({\tt elkpy\_transport\_wf}, the same
++!   {\tt eveqnfv}/{\tt eveqnsv} route {\tt bandstr.f90} uses for an arbitrary
++!   band-structure path). The transport mesh is therefore completely
++!   independent of the ground state's own {\tt ngridk} and of {\tt reducek}.
++!   Only states inside the energy window {\tt elkpy\_transport\_window}
++!   (relative to the Fermi energy) are written, which is what keeps the export
++!   small: the on-shell amplitude weight applied on the Python side kills
++!   everything outside it.
++!
++! !REVISION HISTORY:
++!   Created 2026 (elkpy)
++!EOP
++!BOC
++implicit none
++! local variables
++integer iax,jax,kax,i1,i2,i3,ik,nkpt_t,ip,np,ig,igp,iu,nu
++integer ist,jst,nsel,ispn,jspn,ias,is,ia,m,ic,nc
++integer h1,h2,h3
++real(8) hgt,area,wkpt_t,t1,t2,e0,e1,pol,ta
++real(8) vn(3),vc1(3),vc2(3),vc3(3),va(3),vb(3),sdir(3),vpnl(3)
++real(8) vklt(3),vfr(3),dmin,d,smin,smax
++complex(8) proj(2,2),z1
++character(256) fname
++! allocatable arrays. NOTE these are deliberately NOT automatic arrays: a
++! Fortran automatic array is dimensioned on entry to the subroutine, and
++! nstsv/ngkmax/nspnfv are only set by the init0/init1 calls below -- so with
++! task 9005 run on its own (rather than after a ground-state task in the same
++! process, which happens to have set them already) they would all have size
++! zero
++integer, allocatable :: ngp(:),igpig(:,:),isel(:)
++real(8), allocatable :: evalt(:)
++integer, allocatable :: imap(:,:),igrp(:)
++real(8), allocatable :: vpl(:,:),vppc(:,:)
++complex(8), allocatable :: wfgp(:,:,:),cpk(:,:,:),b(:,:,:)
++complex(8), allocatable :: smat(:,:),amp(:,:,:),phs(:,:),tmp(:,:)
++! the tip amplitudes are formed in chunks of plotting points so that the
++! (ngkmax x npoints) phase matrix never has to exist in full
++integer, parameter :: nchunk=64
++if (spinsprl) then
++  write(*,*)
++  write(*,'("Error(elkpy_transport): spin-spirals not supported")')
++  write(*,*)
++  stop
++end if
++iax=elkpy_trans_axis
++if ((iax < 1).or.(iax > 3)) then
++  write(*,*)
++  write(*,'("Error(elkpy_transport): exit axis must be 1, 2 or 3 : ",I8)') iax
++  write(*,*)
++  stop
++end if
++do i1=1,3
++  if (elkpy_trans_ngrid(i1) < 1) then
++    write(*,*)
++    write(*,'("Error(elkpy_transport): elkpy_transport_kgrid must be &
++     &positive : ",3I8)') elkpy_trans_ngrid
++    write(*,*)
++    stop
++  end if
++end do
++if (elkpy_trans_window(2) <= elkpy_trans_window(1)) then
++  write(*,*)
++  write(*,'("Error(elkpy_transport): empty energy window : ",2G18.10)') &
++   elkpy_trans_window
++  write(*,*)
++  stop
++end if
++! initialise universal variables (the same sequence bandstr.f90 uses, since
++! this task also diagonalises fresh at arbitrary k-points rather than reading
++! stored eigenvectors); readstate also restores efermi from STATE.OUT
++call init0
++call init1
++call readstate
++call genvsig
++call linengy
++call genapwlofr
++call gensocfr
++allocate(ngp(nspnfv),igpig(ngkmax,nspnfv),isel(nstsv),evalt(nstsv))
++hgt=elkpy_trans_height
++pol=elkpy_trans_spol
++! the two lattice vectors spanning the exit plane, and the one it is offset
++! along
++jax=mod(iax,3)+1
++kax=mod(iax+1,3)+1
++vc1(:)=avec(:,jax)
++vc2(:)=avec(:,kax)
++va(:)=avec(:,iax)
++call r3cross(vc1,vc2,vc3)
++area=sqrt(vc3(1)**2+vc3(2)**2+vc3(3)**2)
++vn(:)=vc3(:)/area
++! a spin-polarised substrate needs a spinor wavefunction for the projector to
++! act on. Without one the code below would silently scale the whole Gram matrix
++! by 1+P*n_z instead, which is a plausible-looking number and not a spin
++! selection at all (the Python front end refuses this before running; this is
++! the guard for a plain elk.in)
++if ((abs(elkpy_trans_spol) > 1.d-8).and.(.not.spinpol)) then
++  write(*,*)
++  write(*,'("Error(elkpy_transport): elkpy_transport_spol /= 0 requires a &
++   &spin-polarised")')
++  write(*,'(" calculation (set spinpol and/or spinorb): without one there is &
++   &no spin index")')
++  write(*,'("  for the substrate projector 1 + P n.sigma to act on")')
++  write(*,*)
++  stop
++end if
++! normalise the substrate magnetisation direction
++t1=sqrt(elkpy_trans_sdir(1)**2+elkpy_trans_sdir(2)**2+elkpy_trans_sdir(3)**2)
++if (t1 > 1.d-8) then
++  sdir(:)=elkpy_trans_sdir(:)/t1
++else
++  sdir(:)=[0.d0,0.d0,1.d0]
++end if
++! the substrate's spin acceptance 1 + P n.sigma, as a 2x2 matrix in spin
++! space. Unlike a tip polarisation applied to a density (elkpy_stm.f90), this
++! has to sit INSIDE the overlap integral, between two different bands -- a
++! density has already been squared. The normalisation is elkpy_stm.f90's own
++! rather than the (1 + P n.sigma)/2 a Landauer coupling matrix is usually
++! written with, so that tr[(1 + P n.sigma) rho] = n + P m.n exactly matches
++! the spin-polarised STM task, and so that P = 0 gives the plain spin-summed
++! Gram matrix with no factor. The overall substrate coupling is an unfixed
++! prefactor in any case
++proj(1,1)=cmplx(1.d0+pol*sdir(3),0.d0,8)
++proj(2,2)=cmplx(1.d0-pol*sdir(3),0.d0,8)
++proj(1,2)=cmplx(pol*sdir(1),-pol*sdir(2),8)
++proj(2,1)=cmplx(pol*sdir(1),pol*sdir(2),8)
++!-------------------------------!
++!     the tip plotting plane    !
++!-------------------------------!
++np=np2d(1)*np2d(2)
++allocate(vpl(3,np),vppc(2,np))
++call plotpt2d(avec,ainv,vpnl,vpl,vppc)
++!------------------------------------------------------------------!
++!     both planes must lie in the interstitial, and the material    !
++!     must lie between them                                         !
++!------------------------------------------------------------------!
++! the exit plane: every atom's perpendicular distance to it, including the
++! plane's own periodic images along the offset axis. Lateral images all lie
++! IN the plane, so they need no loop -- that is the whole point of an exit
++! plane spanned by two lattice vectors
++ta=va(1)*vn(1)+va(2)*vn(2)+va(3)*vn(3)
++dmin=1.d8
++do ias=1,natmtot
++  is=idxis(ias)
++  ia=idxia(ias)
++  d=atposc(1,ia,is)*vn(1)+atposc(2,ia,is)*vn(2)+atposc(3,ia,is)*vn(3) &
++   -hgt*ta
++  do m=-2,2
++    dmin=min(dmin,abs(d+dble(m)*ta)-rmt(is))
++  end do
++end do
++if (dmin <= 0.d0) then
++  write(*,*)
++  write(*,'("Error(elkpy_transport): the exit plane cuts a muffin-tin &
++   &sphere")')
++  write(*,'(" closest approach minus muffin-tin radius : ",G18.10)') dmin
++  write(*,'(" the exit-plane Gram matrix is built from the interstitial &
++   &plane-wave")')
++  write(*,'("  representation alone, which is not the wavefunction inside a &
++   &sphere.")')
++  write(*,'("  Move the elkpy_transport exit height into the vacuum")')
++  write(*,*)
++  stop
++end if
++! the tip points, against every atom and its nearest periodic images
++dmin=1.d8
++do ip=1,np
++  do ias=1,natmtot
++    is=idxis(ias)
++    ia=idxia(ias)
++    do i1=-1,1
++      do i2=-1,1
++        do i3=-1,1
++          vfr(1)=vpl(1,ip)-atposl(1,ia,is)-dble(i1)
++          vfr(2)=vpl(2,ip)-atposl(2,ia,is)-dble(i2)
++          vfr(3)=vpl(3,ip)-atposl(3,ia,is)-dble(i3)
++          call r3mv(avec,vfr,vb)
++          d=sqrt(vb(1)**2+vb(2)**2+vb(3)**2)-rmt(is)
++          dmin=min(dmin,d)
++        end do
++      end do
++    end do
++  end do
++end do
++if (dmin <= 0.d0) then
++  write(*,*)
++  write(*,'("Error(elkpy_transport): a tip point lies inside a muffin-tin &
++   &sphere")')
++  write(*,'(" closest approach minus muffin-tin radius : ",G18.10)') dmin
++  write(*,'(" the tip amplitude is the interstitial plane-wave sum, which is &
++   &not the")')
++  write(*,'("  wavefunction inside a sphere. Move the plot2d plane into the &
++   &vacuum")')
++  write(*,*)
++  stop
++end if
++! the material has to lie BETWEEN the two planes: a cell is periodic, so
++! "above" and "below" are only meaningful relative to where the atoms are.
++! Measured as fractional coordinates along the exit axis, taken relative to
++! the exit plane and wrapped into [0,1)
++smin=1.d8
++smax=-1.d8
++do ias=1,natmtot
++  is=idxis(ias)
++  ia=idxia(ias)
++  t1=atposl(iax,ia,is)-hgt
++  t1=t1-dble(floor(t1))
++  smin=min(smin,t1)
++  smax=max(smax,t1)
++end do
++t1=0.d0
++do ip=1,np
++  t2=vpl(iax,ip)-hgt
++  t1=t1+(t2-dble(floor(t2)))
++end do
++t1=t1/dble(np)
++! a tip plane coincident with the exit plane is the deliberate self-check
++! configuration -- it makes the exported tip amplitudes a sampling of the exit
++! plane itself, so the closed-form Gram matrix below can be checked against a
++! literal real-space quadrature of the same integral, and the a_n a*_m S[n,m]
++! contraction against a literal evaluation of int |G(r,r')|^2. It is not a
++! transport geometry, so the between-the-planes test does not apply to it
++if (t1 < epslat) then
++  write(*,*)
++  write(*,'("Info(elkpy_transport): the tip plane coincides with the exit &
++   &plane.")')
++  write(*,'(" This is the self-check configuration (the exported amplitudes &
++   &sample the")')
++  write(*,'("  exit plane itself), not a transport geometry")')
++else if (t1 < smax) then
++  write(*,*)
++  write(*,'("Error(elkpy_transport): the material does not lie between the &
++   &two planes")')
++  write(*,'(" atoms span [",G18.10,",",G18.10,"], mean tip plane at ", &
++   &G18.10)') smin,smax,t1
++  write(*,'("  (fractional coordinates along axis ",I1,", relative to the &
++   &exit plane;")') iax
++  write(*,'("  the tip plane must come AFTER the atoms, not before them).")')
++  write(*,'("  What this computes would then not be a current through the &
++   &material.")')
++  if (tshift) then
++    write(*,'("  NOTE tshift is .true., so Elk has relocated the origin (for &
++     &a crystal")')
++    write(*,'("  with inversion, onto the inversion centre) while the plot2d &
++     &and exit")')
++    write(*,'("  planes are still in YOUR frame. Set tshift .false. to keep &
++     &the two")')
++    write(*,'("  frames the same -- the usual cause of this message")')
++  end if
++  write(*,*)
++  stop
++end if
++if (tshift) then
++  write(*,*)
++  write(*,'("Info(elkpy_transport): tshift is .true., so the atomic basis &
++   &Elk uses")')
++  write(*,'(" is not necessarily the one in elk.in, while both plotting &
++   &planes are")')
++  write(*,'(" taken in the input frame. Along axis ",I1," the atoms sit at &
++   &fractional")') iax
++  write(*,'(" coordinates ",G18.10," to ",G18.10," relative to the exit &
++   &plane.")') smin,smax
++  write(*,'(" Set tshift .false. to keep the two frames identical")')
++end if
++!--------------------------!
++!     the k-point loop     !
++!--------------------------!
++nkpt_t=elkpy_trans_ngrid(1)*elkpy_trans_ngrid(2)*elkpy_trans_ngrid(3)
++wkpt_t=1.d0/dble(nkpt_t)
++e0=efermi+elkpy_trans_window(1)
++e1=efermi+elkpy_trans_window(2)
++allocate(wfgp(ngkmax,nspinor,nstsv))
++allocate(igrp(ngkmax))
++allocate(imap(intgv(1,jax):intgv(2,jax),intgv(1,kax):intgv(2,kax)))
++allocate(phs(ngkmax,nchunk))
++fname='ELKPY_TRANSPORT.OUT'
++open(50,file=trim(fname),action='WRITE',form='FORMATTED')
++write(50,'("elkpy vertical transport: exit-plane Gram matrices and tip &
++ &amplitudes")')
++write(50,'(6I8," : nkpt nspinor npoints np2d(1) np2d(2) exit-axis")') &
++ nkpt_t,nspinor,np,np2d(1),np2d(2),iax
++write(50,'(4G24.15," : efermi exit-height area omega")') efermi,hgt,area,omega
++write(50,'(6G24.15," : window(1) window(2) polarisation direction(1:3)")') &
++ elkpy_trans_window(1),elkpy_trans_window(2),pol,sdir(1),sdir(2),sdir(3)
++write(50,'("tip points: x y (plane frame, Bohr) then lattice coordinates")')
++do ip=1,np
++  write(50,'(5G24.15)') vppc(1,ip),vppc(2,ip),vpl(1,ip),vpl(2,ip),vpl(3,ip)
++end do
++do ik=1,nkpt_t
++  i3=(ik-1)/(elkpy_trans_ngrid(1)*elkpy_trans_ngrid(2))
++  i2=mod((ik-1)/elkpy_trans_ngrid(1),elkpy_trans_ngrid(2))
++  i1=mod(ik-1,elkpy_trans_ngrid(1))
++  vklt(1)=(dble(i1)+elkpy_trans_koff(1))/dble(elkpy_trans_ngrid(1))
++  vklt(2)=(dble(i2)+elkpy_trans_koff(2))/dble(elkpy_trans_ngrid(2))
++  vklt(3)=(dble(i3)+elkpy_trans_koff(3))/dble(elkpy_trans_ngrid(3))
++! fresh diagonalisation, plus the interstitial G+p-space coefficients
++  call elkpy_transport_wf(vklt,evalt,wfgp,ngp,igpig)
++! select the states inside the energy window
++  nsel=0
++  do ist=1,nstsv
++    if ((evalt(ist) >= e0).and.(evalt(ist) <= e1)) then
++      nsel=nsel+1
++      isel(nsel)=ist
++    end if
++  end do
++  write(50,'(4G24.15,I8," : k (lattice), weight, states in window")') &
++   vklt(1),vklt(2),vklt(3),wkpt_t,nsel
++  do ist=1,nsel
++    write(50,'(I8,G24.15)') isel(ist),evalt(isel(ist))
++  end do
++  if (nsel == 0) cycle
++! repack the selected states' coefficients contiguously
++  allocate(cpk(ngp(1),nsel,nspinor))
++  do ispn=1,nspinor
++    do ist=1,nsel
++      cpk(1:ngp(1),ist,ispn)=wfgp(1:ngp(1),ispn,isel(ist))
++    end do
++  end do
++!-------------------------------------!
++!     the exit-plane Gram matrix      !
++!-------------------------------------!
++! collapse the G-sphere onto its shadow on the surface reciprocal lattice,
++! carrying the plane's height in the phase of the summed-over component
++  imap(:,:)=0
++  nu=0
++  do igp=1,ngp(1)
++    ig=igpig(igp,1)
++    h1=ivg(jax,ig)
++    h2=ivg(kax,ig)
++    if (imap(h1,h2) == 0) then
++      nu=nu+1
++      imap(h1,h2)=nu
++    end if
++    igrp(igp)=imap(h1,h2)
++  end do
++  allocate(b(nu,nsel,nspinor))
++  b(:,:,:)=0.d0
++  do igp=1,ngp(1)
++    ig=igpig(igp,1)
++    h3=ivg(iax,ig)
++    t1=twopi*dble(h3)*hgt
++    z1=cmplx(cos(t1),sin(t1),8)
++    iu=igrp(igp)
++    do ispn=1,nspinor
++      b(iu,1:nsel,ispn)=b(iu,1:nsel,ispn)+z1*cpk(igp,1:nsel,ispn)
++    end do
++  end do
++  allocate(smat(nsel,nsel),tmp(nsel,nsel))
++  smat(:,:)=0.d0
++  do ispn=1,nspinor
++    do jspn=1,nspinor
++      if (abs(proj(ispn,jspn)) < 1.d-14) cycle
++      call zgemm('C','N',nsel,nsel,nu,zone,b(:,:,ispn),nu,b(:,:,jspn),nu, &
++       zzero,tmp,nsel)
++      smat(:,:)=smat(:,:)+proj(ispn,jspn)*tmp(:,:)
++    end do
++  end do
++  smat(:,:)=(area/omega)*smat(:,:)
++  deallocate(tmp,b)
++!-------------------------!
++!     tip amplitudes      !
++!-------------------------!
++  allocate(amp(nsel,np,nspinor))
++  ic=1
++  do while (ic <= np)
++    nc=min(nchunk,np-ic+1)
++    do ip=1,nc
++      do igp=1,ngp(1)
++        ig=igpig(igp,1)
++        t1=twopi*((vklt(1)+dble(ivg(1,ig)))*vpl(1,ic+ip-1) &
++                 +(vklt(2)+dble(ivg(2,ig)))*vpl(2,ic+ip-1) &
++                 +(vklt(3)+dble(ivg(3,ig)))*vpl(3,ic+ip-1))
++        phs(igp,ip)=cmplx(cos(t1),sin(t1),8)
++      end do
++    end do
++    z1=cmplx(1.d0/sqrt(omega),0.d0,8)
++    do ispn=1,nspinor
++! note 'T' and not 'C': the tip amplitude is the plane-wave sum itself, with
++! no conjugation -- psi(r) = Omega^{-1/2} sum_G c_G exp(i(k+G).r)
++      call zgemm('T','N',nsel,nc,ngp(1),z1,cpk(:,:,ispn),ngp(1),phs,ngkmax, &
++       zzero,amp(1,ic,ispn),nsel)
++    end do
++    ic=ic+nc
++  end do
++! write the Gram matrix and the amplitudes
++  do jst=1,nsel
++    do ist=1,nsel
++      write(50,'(2G24.15)') dble(smat(ist,jst)),aimag(smat(ist,jst))
++    end do
++  end do
++  do ispn=1,nspinor
++    do ist=1,nsel
++      do ip=1,np
++        write(50,'(2G24.15)') dble(amp(ist,ip,ispn)),aimag(amp(ist,ip,ispn))
++      end do
++    end do
++  end do
++  deallocate(cpk,smat,amp)
++end do
++close(50)
++deallocate(vpl,vppc,wfgp,igrp,imap,phs,ngp,igpig,isel,evalt)
++write(*,*)
++write(*,'("Info(elkpy_transport):")')
++write(*,'(" exit-plane Gram matrices and tip amplitudes written to ",A)') &
++ trim(fname)
++write(*,'(" transport k-grid : ",3I6," (",I0," points, generated here and &
++ &diagonalised fresh)")') elkpy_trans_ngrid,nkpt_t
++write(*,'(" exit plane : axis ",I1," at fractional coordinate ",G18.10)') &
++ iax,hgt
++write(*,'(" energy window relative to efermi : ",2G18.10)') elkpy_trans_window
++write(*,'(" substrate polarisation ",G18.10," along ",3G18.10)') pol,sdir
++end subroutine
++!EOC
++
++!BOP
++! !ROUTINE: elkpy_transport_wf
++! !INTERFACE:
++subroutine elkpy_transport_wf(vpl,evalsv_out,wfgp,ngp,igpig)
++! !USES:
++use modmain
++! !DESCRIPTION:
++!   Second-variational eigenvalues and the {\it interstitial} $G+p$-space
++!   wavefunction coefficients at an arbitrary $k$-point {\tt vpl}, by fresh
++!   on-the-fly diagonalisation of the converged Kohn-Sham Hamiltonian
++!   ({\tt eveqnfv}/{\tt eveqnsv}) -- the same route {\tt elkpy\_wfcorner}
++!   ({\tt elkpy\_berry.f90}) and {\tt elkpy\_diagonalize}
++!   ({\tt elkpy\_eigenstates.f90}) take, and the same one {\tt bandstr.f90}
++!   uses for an arbitrary band-structure path.
++!
++!   It differs from both in what it then expands: only the interstitial part,
++!   via {\tt wfirsv} with {\tt tgp}={\tt .true.}, and no muffin-tin part at
++!   all. That is not an optimisation for its own sake -- the vertical
++!   transport task evaluates the wavefunction only in the vacuum, where the
++!   muffin-tin expansion would be both unused and, at {\tt natmtot} atoms
++!   times {\tt nstsv} states, the dominant cost.
++!
++!   The returned coefficients carry no $\Omega^{-1/2}$: with them,
++!   $\psi({\bf r})=\Omega^{-1/2}\sum_{\bf G}c_{\bf G}
++!   e^{i({\bf k}+{\bf G})\cdot{\bf r}}$ in the interstitial. (This is
++!   {\tt wfirsv}'s own convention -- it applies {\tt t0}=$\Omega^{-1/2}$ only
++!   on its real-space branch -- and {\tt genolpq} confirms it by scaling its
++!   interstitial contribution back up by $\sqrt\Omega$.)
++!
++! !REVISION HISTORY:
++!   Created 2026 (elkpy)
++!EOP
++!BOC
++implicit none
++! arguments
++real(8), intent(in) :: vpl(3)
++real(8), intent(out) :: evalsv_out(nstsv)
++complex(8), intent(out) :: wfgp(ngkmax,nspinor,nstsv)
++integer, intent(out) :: ngp(nspnfv),igpig(ngkmax,nspnfv)
++! local variables
++integer ispn,nmatp
++real(8) vl(3),vc(3)
++! automatic arrays
++real(8) vgpl(3,ngkmax,nspnfv),vgpc(3,ngkmax),gpc(ngkmax)
++real(8) evalfv(nstfv,nspnfv)
++integer, parameter :: idx0(1)=(/0/)
++! allocatable arrays
++complex(8), allocatable :: sfacgp(:,:),apwalm(:,:,:,:,:)
++complex(8), allocatable :: evecfv(:,:,:),evecsv(:,:)
++allocate(sfacgp(ngkmax,natmtot))
++allocate(apwalm(ngkmax,apwordmax,lmmaxapw,natmtot,nspnfv))
++allocate(evecfv(nmatmax,nstfv,nspnfv),evecsv(nstsv,nstsv))
++do ispn=1,nspnfv
++  vl(1:3)=vpl(1:3)
++  vc(1:3)=bvec(1:3,1)*vpl(1)+bvec(1:3,2)*vpl(2)+bvec(1:3,3)*vpl(3)
++  call gengkvec(ngvc,ivg,vgc,vl,vc,gkmax,ngkmax,ngp(ispn),igpig(:,ispn), &
++   vgpl(:,:,ispn),vgpc,gpc)
++  call gensfacgp(ngp(ispn),vgpc,ngkmax,sfacgp)
++  call match(ngp(ispn),vgpc,gpc,sfacgp,apwalm(:,:,:,:,ispn))
++  nmatp=ngp(ispn)+nlotot
++  call eveqnfv(nmatp,ngp(ispn),igpig(:,ispn),vc,vgpc,apwalm(:,:,:,:,ispn), &
++   evalfv(:,ispn),evecfv(:,:,ispn))
++end do
++deallocate(sfacgp)
++call eveqnsv(ngp(1),igpig(:,1),vgpc,apwalm,evalfv,evecfv,evalsv_out,evecsv)
++! interstitial wavefunction in G+p-space for every state (idx(1)=0)
++call wfirsv(.true.,nstsv,idx0,ngdgc,igfc,ngp,igpig,evecfv,evecsv,ngkmax,wfgp)
++deallocate(apwalm,evecfv,evecsv)
++end subroutine
++!EOC

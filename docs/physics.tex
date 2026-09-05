@@ -3505,4 +3505,288 @@ tip set by the \texttt{elkpy\_stmdir}, \texttt{elkpy\_stmpol},
 \texttt{elkpy\_stmbias} and \texttt{elkpy\_stmint} blocks.
 
 
+\part{Vertical tunnelling transport through a two-dimensional material}
+\label{part:transport}
+
+\section{A different question from an STM image}
+
+Part~\ref{part:spinstm} answers ``what does the tip see?''. This part answers
+``what gets \emph{through}?''. The geometry is a point tip at $\mathbf r$
+above a two-dimensional sheet and, below it, an infinite metallic substrate
+the sheet sits on. The electron enters at the tip and leaves into the
+substrate, so the current is no longer set by the sample's local density of
+states at the tip: it is set by the amplitude to travel from the tip, through
+the material, to the substrate, which is the \emph{nonlocal} Green's function.
+
+In the tunnelling regime the Landauer-B\"uttiker transmission is
+\begin{equation}
+  T = \mathrm{Tr}\big[\Gamma_{\rm t}\,G^r\,\Gamma_{\rm s}\,G^a\big],
+  \label{eq:landauer}
+\end{equation}
+with $\Gamma_{\rm t}$ and $\Gamma_{\rm s}$ the level-width (coupling) matrices
+of tip and substrate and $G^{r,a}$ the retarded and advanced Green's functions
+of the sample. A \emph{point} tip makes $\Gamma_{\rm t}$ rank one, and the
+trace then collapses exactly to
+\begin{equation}
+  T(\mathbf r;E)\;\propto\;\int_{\rm plane}
+    \big|G(\mathbf r,\mathbf r';E)\big|^2\,d^2r',
+  \qquad
+  G(\mathbf r,\mathbf r';E)=\sum_{n\mathbf k}
+    \frac{\psi_{n\mathbf k}(\mathbf r)\,\psi^*_{n\mathbf k}(\mathbf r')}
+         {E-\varepsilon_{n\mathbf k}+i\eta},
+  \label{eq:transmission}
+\end{equation}
+where $\psi_{n\mathbf k}$ and $\varepsilon_{n\mathbf k}$ are the Kohn-Sham
+states and energies, and $\eta$ is the energy width the leads let states
+through in --- the leads' own coupling, not a numerical smearing. The two
+coupling strengths are unfixed prefactors, so what Eq.~\eqref{eq:transmission}
+delivers is the \emph{map}, its contrast and its bias dependence, not an
+absolute conductance.
+
+The band sum in $G$ happens \emph{before} the modulus is taken. That is the
+physical content: different bands are different routes through the material,
+and they add as amplitudes rather than as probabilities.
+
+\section{The substrate, and why the calculation is cheap}
+
+The substrate is taken to be an infinite, featureless plane --- a metal,
+structureless at the scale of the surface cell. This is a physical assumption,
+not a convenience, and everything below rests on it. A plane invariant under
+every lateral lattice translation conserves the lateral crystal momentum:
+\begin{equation}
+  \int_{\rm all\ cells} d^2r'\;\psi^*_{n\mathbf k}(\mathbf r')\,
+    \psi_{n'\mathbf k'}(\mathbf r')
+  \;\sim\;\delta\big(\mathbf k'_\parallel-\mathbf k_\parallel
+    +\mathbf G_\parallel\big),
+\end{equation}
+which on a Brillouin-zone mesh forces $\mathbf k'=\mathbf k$. Routes at
+different $\mathbf k$ therefore \emph{cannot} interfere with each other, and
+routes at the same $\mathbf k$ can. What survives is one Hermitian matrix per
+$k$-point,
+\begin{equation}
+  S_{\mathbf k}[n,n']=\int_{\rm plane\ in\ one\ cell} d^2r'\;
+    \psi^*_{n\mathbf k}(\mathbf r')\,\hat P_{\rm s}\,
+    \psi_{n'\mathbf k}(\mathbf r'),
+  \label{eq:gram}
+\end{equation}
+the bands' \emph{Gram matrix restricted to the plane}, and the whole
+transmission is one quadratic form per $k$-point,
+\begin{equation}
+  T(\mathbf r;E)=\sum_{\mathbf k}w_{\mathbf k}\sum_{nm}
+    a_{n\mathbf k}(\mathbf r)\,a^*_{m\mathbf k}(\mathbf r)\,
+    S_{\mathbf k}[n,m].
+  \label{eq:contraction}
+\end{equation}
+Here $w_{\mathbf k}$ is the $k$-point weight and $a_{n\mathbf k}$ the
+energy-weighted tip amplitude of Sec.~\ref{sec:onshell}. A \emph{finite}
+contact patch is a different physical regime and is not described by this.
+
+Three consequences of Eq.~\eqref{eq:gram} being a Gram matrix are
+load-bearing. It is positive semi-definite, so $T\ge0$ by construction rather
+than by luck. Widening the exit region from a plane to the whole cell makes
+$S_{\mathbf k}\to\delta_{nn'}$ by orthonormality, so Eq.~\eqref{eq:contraction}
+becomes the Tersoff-Hamann tunnelling density of states of
+Part~\ref{part:spinstm} \emph{exactly} --- which is a theorem, and therefore
+also a validation route sharing no code with what it checks. And a quadratic
+form is invariant under a unitary rotation inside a degenerate multiplet, so
+the arbitrary basis a degenerate eigensolver returns (Part~\ref{part:eigenstates})
+cannot change the answer.
+
+The operator $\hat P_{\rm s}$ is the substrate's spin acceptance,
+\begin{equation}
+  \hat P_{\rm s}=1+P_{\rm s}\,\hat{\mathbf n}\cdot\boldsymbol\sigma,
+\end{equation}
+with $\hat{\mathbf n}$ the substrate magnetisation direction and $P_{\rm s}$
+its effective spin polarisation. This is the spin-space sibling of
+Part~\ref{part:spinstm}'s magnetic \emph{tip}, but it must sit \emph{inside}
+the overlap integral, between two different bands, where a density has already
+been squared. The normalisation is chosen so that
+$\mathrm{tr}[\hat P_{\rm s}\rho]=n+P_{\rm s}\mathbf m\cdot\hat{\mathbf n}$
+reproduces Eq.~\eqref{eq:sp-stm} exactly, and so that $P_{\rm s}=0$ gives the
+plain spin-summed Gram matrix with no factor.
+
+\section{The on-shell amplitude, and why the resolvent cannot be summed}
+\label{sec:onshell}
+
+Evaluating Eq.~\eqref{eq:transmission} literally, with the denominator
+$1/(E-\varepsilon_{n\mathbf k}+i\eta)$, is the exact Landauer expression and
+\emph{a sum over states cannot do it}. The denominator has a long tail, so the
+states far from $E$ carry the barrier's evanescent decay, and that decay is
+built entirely out of cancellation between them: measured on a cell small
+enough to diagonalise completely, the running sum for a single
+$G(\mathbf r_{\rm tip},\mathbf r_{\rm exit})$ wanders over more than an order
+of magnitude with band count and only lands when the basis is \emph{complete},
+at a cancellation ratio of $349$ between the sum of the moduli of the terms
+and the modulus of their sum. There is no band count at which a truncated
+version of it is right.
+
+What does converge is the \emph{modulus} of that denominator with its phase
+held fixed --- the weak-coupling (tunnelling) limit of the same expression,
+which is Bardeen's golden rule with the sample's states visited on shell:
+\begin{equation}
+  a_{n\mathbf k}(\mathbf r)=\psi_{n\mathbf k}(\mathbf r)\,
+    \sqrt{\frac{f_{\rm occ}\,\delta_\eta(E-\varepsilon_{n\mathbf k})}{\eta}},
+  \label{eq:onshell}
+\end{equation}
+with $\delta_\eta$ a smeared delta function of width $\eta$ and $f_{\rm occ}$
+the spin-degeneracy factor ($2$ for a spin-degenerate calculation, $1$ for a
+spinor one). Two things make this the right object rather than a retreat to a
+cruder one. It is \emph{exactly} the resolvent's modulus: for a Lorentzian,
+$|1/(E-\varepsilon+i\eta)|=\sqrt{\pi\delta_\eta(E-\varepsilon)/\eta}$, so the
+only thing dropped is the arctangent the resolvent's phase sweeps through
+across a resonance. And the interference it keeps is the one that matters ---
+between bands \emph{degenerate at the tip energy}, which are exactly the paths
+a tunnelling experiment lets interfere and which no local density of states
+can represent. What it drops is direct tunnelling through the barrier without
+going on shell in the sample, which is what a weak-coupling tunnelling
+geometry is defined by not having.
+
+The normalisation in Eq.~\eqref{eq:onshell} is fixed, not free: it is chosen so
+that $|a|^2=f_{\rm occ}|\psi|^2\delta_\eta/\eta$ is precisely the weight
+Eq.~\eqref{eq:tersoff-hamann} carries, which makes the whole-cell limit equal
+to the Tersoff-Hamann image with \emph{no} factor between them.
+
+\section{Where the conjugation goes}
+
+$G(\mathbf r,\mathbf r')=\sum_n a_n(\mathbf r)\psi^*_n(\mathbf r')$ carries
+$\psi$ conjugated in the \emph{exit} variable $\mathbf r'$. Therefore
+\begin{equation}
+  \int_{\rm plane}|G|^2\,d^2r'
+  =\sum_{nm}a_n\,a^*_m\int_{\rm plane}\psi^*_n\psi_m
+  =\sum_{nm}a_n\,a^*_m\,S[n,m],
+\end{equation}
+and \emph{not} $\sum_{nm}a^*_na_mS[n,m]$. The two differ by a transpose of a
+Hermitian matrix. The wrong one is real, non-negative, blind to a rotation
+inside a degenerate multiplet, and exactly correct in the Tersoff-Hamann limit
+where $S=\mathbb 1$ and the two coincide --- it is wrong only where $S$ has an
+off-diagonal, which is to say only where the interference this whole
+construction exists for actually lives. Nothing but a literal evaluation of
+$\int|G|^2$ by quadrature separates them.
+
+\section{Evaluation in an all-electron LAPW basis}
+
+Both the tip point and the exit plane lie in the vacuum, that is in the
+\emph{interstitial} region, and this is what makes the evaluation exact. There
+Elk's wavefunction is a plane-wave sum,
+\begin{equation}
+  \psi_{n\mathbf k}(\mathbf r)=\Omega^{-1/2}\sum_{\mathbf G}
+    c_{n}(\mathbf G)\,e^{i(\mathbf k+\mathbf G)\cdot\mathbf r},
+  \label{eq:interstitial}
+\end{equation}
+with $\Omega$ the unit-cell volume, so the tip amplitude is
+Eq.~\eqref{eq:interstitial} evaluated at a point. For an exit plane at
+fractional coordinate $s_3$ along one lattice vector and spanned by the other
+two, the in-plane integral in Eq.~\eqref{eq:gram} is an orthogonality relation
+between the in-plane G-vector indices:
+\begin{equation}
+  S_{\mathbf k}[n,n']=\frac{A}{\Omega}\sum_{\mathbf G_\parallel}
+    b^*_n(\mathbf G_\parallel)\,b_{n'}(\mathbf G_\parallel),
+  \qquad
+  b_n(\mathbf G_\parallel)=\sum_{G_3}c_n(\mathbf G_\parallel,G_3)\,
+    e^{2\pi iG_3s_3},
+  \label{eq:collapse}
+\end{equation}
+with $A=|\mathbf a_i\times\mathbf a_j|$ the surface cell area. One gather and
+one matrix product per $k$-point: nothing is sampled and nothing converges.
+A plane that is not spanned by two lattice vectors has no such relation, which
+is why a tilted exit plane is refused rather than approximated --- a
+two-dimensional material's substrate never is one.
+
+Two limitations of the representation, rather than of the formalism, are worth
+stating. Inside a muffin-tin sphere Eq.~\eqref{eq:interstitial} is not the
+wavefunction at all, so both planes must lie in the vacuum (this is checked,
+not assumed). And the plane-wave cutoff $\mathtt{rgkmax}$ bounds how far into
+the exponentially decaying vacuum tail Eq.~\eqref{eq:interstitial} remains
+meaningful: $S_{\mathbf k}$ stays Hermitian and positive semi-definite while
+becoming numerically meaningless, so the tip must not be retracted
+arbitrarily far.
+
+\section{The physics: when the local picture is right, and when it is not}
+
+The departure of Eq.~\eqref{eq:contraction} from a Tersoff-Hamann image comes
+entirely from the \emph{off-diagonal} of $S_{\mathbf k}$ --- interference
+between bands degenerate at the same $\mathbf k$ and the same energy. Whether
+there is any is a question of symmetry, and the group that matters is not the
+little group of the $k$-point but its subgroup of \emph{$z$-preserving}
+elements: any operation that flips $z$ (a horizontal mirror, an in-plane
+two-fold axis, inversion) maps the substrate plane onto the tip side and is
+broken by the geometry.
+
+For \textbf{monolayer graphene} the states at $E_F$ are the Dirac doublet at
+$K$. The little group is $D_{3h}$; its $z$-preserving subgroup is
+$C_{3v}=\{E,2C_3,3\sigma_v\}$, and the mirror $\sigma_v$ exchanges the two
+sublattices \emph{without} flipping $z$. The doublet therefore still spans the
+two-dimensional irreducible representation $E$ of the intact group, and by
+Schur's lemma any invariant operator restricted to it --- $S_K$ included --- is
+a multiple of the identity. The substrate cannot tell the two partners apart,
+there is nothing off-diagonal for the current to interfere through, and
+Eq.~\eqref{eq:contraction} collapses onto the local density of states. This is
+a theorem, and it is measured as one: the two eigenvalues of $S_K$ agree to
+$8.5\times10^{-7}$ relative.
+
+For the \textbf{AB (Bernal) bilayer} the zero-energy pair at $K$ --- the two
+non-dimer sites, one on each layer --- is degenerate for a symmetry reason
+too, but the only element of the little group $D_3$ that exchanges its members
+is the in-plane $C_2'$, which \emph{flips $z$}. The intact subgroup is $C_3$
+alone, which is abelian, so Schur's lemma gives nothing: under $C_3$ the
+doublet splits as $\omega\oplus\omega^*$, $S_K$ is diagonal in the layer basis,
+and its two entries differ by however much one carbon layer attenuates. The
+current has to cross both sheets and the routes interfere; a microscope only
+ever looks at the top one. Measured with equal standoffs above and below, the
+two eigenvalues of $S_K$ differ by a factor of $1311$, half of
+$S_{\mathbf k}$ sits off its diagonal, and the coherent map falls far below
+the incoherent one in which every substrate channel tunnels on its own. That
+difference --- reported separately as $T_{\rm coh}-T_{\rm inc}$ --- is the
+part of the answer that no local picture can produce.
+
+\section{How to use in code}
+
+\begin{verbatim}
+from elkpy.structure import Structure
+
+a, c = 4.647926, 20.0
+avec = [(a, 0, 0), (-a/2, a*3**0.5/2, 0), (0, 0, c)]
+species = {"C": [(0.0, 0.0, 0.5), (1/3, 2/3, 0.5)]}
+
+calc = Structure(avec, species).get_calculation(
+    "graphene", xc="PW", ngridk=(6, 6, 1), rgkmax=7.0,
+    # tshift=False is mandatory: Elk otherwise moves the origin onto the
+    # inversion centre while both plotting planes stay in your own frame
+    extra_blocks={"tshift": [False], "nempty": [10]},
+)
+
+r = calc.get_vertical_transport(
+    exit_height=0.38,     # the substrate plane, below the sheet
+    height=0.62,          # the tip plane, above it
+    grid=(24, 24),        # tip sampling
+    kgrid=(6, 6, 1),      # the task's own mesh, independent of ngridk/reducek
+    broadening=0.005,     # eta, in Hartree
+    energies=[0.0],       # bias relative to E_F; a sweep is nearly free
+)
+r["transmission_grid"][0]   # what gets through, as an image
+r["interference"]           # coherent minus incoherent
+r["channels"]               # open substrate channels
+
+# the substrate widened to the whole cell IS the Tersoff-Hamann image
+local = calc.get_vertical_transport(
+    exit_height=0.38, height=0.62, grid=(24, 24), kgrid=(6, 6, 1),
+    broadening=0.005, exit_region="cell", incoherent=False)
+
+# a magnetic substrate, which accepts 1 + P n.sigma (needs nspinor = 2)
+spin = calc.get_vertical_transport(
+    exit_height=0.38, height=0.62, kgrid=(6, 6, 1),
+    substrate_direction=(0, 0, 1), substrate_polarization=1.0)
+\end{verbatim}
+
+The Elk run itself is drivable from a plain \texttt{elk.in} (see
+\texttt{examples/vertical-transport/}): task \texttt{9005} with the
+\texttt{elkpy\_transport\_exit}, \texttt{elkpy\_transport\_window},
+\texttt{elkpy\_transport\_kgrid}, \texttt{elkpy\_transport\_koffset},
+\texttt{elkpy\_transport\_sdir} and \texttt{elkpy\_transport\_spol} blocks and
+the usual \texttt{plot2d}. Unlike Part~\ref{part:spinstm}, the final
+contraction is deliberately not in Fortran --- keeping it in Python
+(\texttt{elkpy.parsers.transport}) is what makes it unit-testable against
+synthetic data and what makes an energy sweep free.
+
+
 \end{document}
