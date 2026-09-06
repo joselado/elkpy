@@ -4346,6 +4346,14 @@ proposes is low by a factor of order $10^2$–$10^3$ on real data, against 140x
 on the synthetic case — and it is a *lower* bound, which is the dangerous
 direction for a tolerance meant to bound from above.
 
+The response is plain text over the session's pipe and is $O(n_{\rm mat}^2)$
+tokens, so its cost tracks the matrix rather than the physics: 0.2 s at
+$n_{\rm mat}=161$ (bulk Si, `rgkmax=7`), 17 s and ~220 MB of text at
+$n_{\rm mat}=1402$ (monolayer h-BN with 30 Bohr of vacuum). That is the right
+trade for a reference at a handful of $k$-points and the wrong one for a bulk
+export; if the port ever needs the latter, the fix is a binary side file, not a
+wider pipe.
+
 ### Traps for a caller, all of them measured
 
 - **Use Elk's `atposc`, never the input positions.** `tshift` is on by default

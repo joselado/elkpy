@@ -149,6 +149,14 @@ def test_derivative_matrix_matches_an_independent_polynomial_fit(exported):
     the apwfr/rsp tails that Phase 1 will build D from. At apword=1 only
     row 1 exists and this reduces to D = u(R), which still pins that the
     last exported radial point is the muffin-tin boundary.
+
+    At apword=2 it additionally pins D's ORIENTATION -- row is the
+    derivative order, column the APW index -- because u and du/dE are
+    unrelated functions, so a transposed D would compare d^1 u_0 against
+    d^0 u_1 and fail. That is worth having explicitly: handing `match` a
+    transposed D is one of the two errors docs/jax_port_phase0.md records
+    as leaving the dmatch identity passing at 3e-16 while every coefficient
+    is wrong by O(1).
     """
     npapw = exported["npapw"]
     worst = 0.0

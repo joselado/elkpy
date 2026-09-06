@@ -596,6 +596,13 @@ class EigenstateSession:
         every key, its shape, and the two conventions that matter (H and O
         arrive Hermitised from the upper triangle Elk actually fills, and
         atposc is Elk's own position, which `tshift` may have moved).
+
+        The response is O(nmat^2) numeric tokens of plain text over the
+        session's pipe, so its cost is set by the matrix size and not by the
+        physics: measured, 0.2 s at nmat=161 (bulk Si, rgkmax=7) and 17 s /
+        ~220 MB of text at nmat=1402 (monolayer h-BN with 30 Bohr of
+        vacuum). That is fine for the handful of k-points a reference needs
+        and is not a bulk-export route.
         """
         k = tuple(float(x) for x in k)
         self._send(f"LAPW {_fmt(k[0])} {_fmt(k[1])} {_fmt(k[2])}")
