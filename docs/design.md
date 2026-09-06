@@ -4449,6 +4449,67 @@ $1.3\times10^{-2}$ Ha, which reaches the assembled $H$ as $3.7\times10^{-3}$ Ha
 and `evalfv` as $4.3\times10^{-7}$ Ha. Bulk silicon cannot see it — its local
 orbitals are one s and one p, so no pair shares an $\ell$.
 
+### Patch 0015: the potential behind the radial integrals
+
+Patch 0014 exports the radial integrals; patch **0015** exports what *they*
+are built from, which is the last thing standing between the port and a
+spectrum that is a function of the Kohn-Sham potential rather than of a set of
+imported numbers. It appends the muffin-tin potential `vsmt`, the radial mesh
+`rlmt` and its quadrature weights `wr2mt`, the APW and local-orbital
+linearisation energies (`apwe`, `lorbe`) with their derivative orders
+(`apwdm`, `lorbdm`, `deapw`, `delorb`) and energy ordering (`idxelo`), and
+`apwfr`, `apwdfr` and `lofr` **in full** — patch 0013 wrote only the last
+`npapw` points of `apwfr`, which is all `match` needs.
+
+Two of those choices are deliberate. `wr2mt` is exported rather than rebuilt
+from the mesh: it is a Simpson-like weight array from `wsplint`, not $r^2dr$,
+and a caller that rebuilt it would agree with Elk to the quadrature's own
+truncation error instead of to roundoff. And `vsmt` is written **exactly as
+Elk packs it** — $l_{\max}^{\rm i}$ harmonics per radial point over the inner
+region, $l_{\max}^{\rm o}$ over the outer one, radial-point-slowest — because
+that packing, and not the values, is what a transcription of `hmlrad` gets
+wrong; unpacking it in Fortran would hide the very thing being checked.
+
+**The patch also calls `genapwlofr` before building anything, and that is
+load-bearing.** `gndstate.f90` calls `genapwlofr` at the *top* of an SCF
+iteration and `potks`/`mixerifc` at the *bottom*, so when the loop exits,
+`apwfr`, `lofr` and the five radial integrals belong to the potential of the
+**previous** iteration while `vsmt` is the current one. The export was
+therefore internally inconsistent by exactly one mixing step. It went
+unnoticed for as long as the potential was not exported — nothing else in the
+response depends on it — and the moment it is, the discrepancy is
+indistinguishable from a transcription bug. Measured on bulk Si before the
+fix: every radial integral that does *not* touch the potential (the
+$\ell_2=0$ elements, which are $\langle u|\hat Hu\rangle$) agreed to
+$2.6\times10^{-16}$ relative, while every one that does was off by
+$3\times10^{-10}$. That split is what identified the cause; a single
+aggregate number would have looked like a subtle indexing error.
+
+Regenerating leaves the exported arrays consistent with each other by
+construction, and `evalfv` is still computed by `eveqnfv` through Elk's own
+configured path afterwards, so diagonalising the exported $H$, $O$ and
+recovering it remains a real check. `linengy` is deliberately *not* called:
+the linearisation energies are exported as they stand and held fixed, which is
+also what Elk's own forces assume. The side effect is that a `LAPW` query
+updates those global arrays for the rest of the session — idempotent, and what
+the next SCF iteration would have done anyway.
+
+One knock-on worth recording, because it is a general lesson about what to
+pin. The regeneration moves Elk's own matrices by $\sim3\times10^{-10}$
+relative, and that retuned a constant in the smearing suite by 13x: the naive
+`eigh` rule's error at graphene's $K$ went from
+$2.8\times10^{-10},2.8\times10^{-9},2.8\times10^{-8}$ to
+$2.2\times10^{-11},2.2\times10^{-10},3.1\times10^{-9}$ across the three
+smearing widths, while the Dirac splitting itself moved only in its eighth
+digit ($3.3712177\times10^{-7}\to3.3712180\times10^{-7}$ Ha) and the safe
+rule stayed on its $3$–$6\times10^{-14}$ floor. Measured both ways, with the
+call switched off and on, rather than inferred. The mechanism is that the
+naive rule's error is set by $\lVert A-A^\dagger\rVert/\delta\lambda$ with
+$A=v^\dagger\delta Hv$, and inside a pair split at the assembly's own roundoff
+the eigensolver's choice of basis is free to rotate. So the separation between
+the two rules is a mechanism, not a number: the test now asserts growth in the
+smearing width and a widening separation instead of a fixed factor.
+
 ### What the port does with it
 
 `src/elkjax/hamiltonian.py` transcribes `olpfv`/`hmlfv`'s muffin-tin half and

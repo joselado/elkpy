@@ -44,25 +44,38 @@ import numpy as np
 
 import jax.numpy as jnp
 
-from elkpy.parsers.eigenstates import unpack_muffin_tin
 
 
-def potential_arrays(export):
+def potential_arrays(export, packed=None):
     """The muffin-tin Kohn-Sham potential, unpacked, one dense array per atom.
 
     Returns a list of `(nr, lmmaxo)` arrays indexed `[ir, lm]`, with the
     harmonics the inner region does not carry set to zero.
+
+    `packed` defaults to the exported `vsmt` and is the differentiable input:
+    everything downstream -- the radial functions, the radial integrals, $H$
+    and the spectrum -- is a function of it.  The unpacking is done with
+    `jnp` rather than `parsers.eigenstates.unpack_muffin_tin` so a traced
+    array survives it; that function is the NumPy reference for the same
+    layout and is what `tests/test_calculation_lapw_radial.py` checks this
+    against.
     """
     idxis = np.asarray(export["idxis"]) - 1
     nrmt = np.asarray(export["nrmt"])
     nrmti = np.asarray(export["nrmti"])
     lmmaxi, lmmaxo = int(export["lmmaxi"]), int(export["lmmaxo"])
-    vsmt = np.asarray(export["vsmt"])
+    packed = export["vsmt"] if packed is None else packed
     out = []
     for ias in range(int(export["natmtot"])):
-        is_ = idxis[ias]
-        out.append(unpack_muffin_tin(vsmt[ias], int(nrmt[is_]),
-                                     int(nrmti[is_]), lmmaxi, lmmaxo))
+        is_ = int(idxis[ias])
+        nr, nri = int(nrmt[is_]), int(nrmti[is_])
+        row = packed[ias]
+        inner = jnp.reshape(row[:lmmaxi * nri], (nri, lmmaxi))
+        outer = jnp.reshape(
+            row[lmmaxi * nri:lmmaxi * nri + lmmaxo * (nr - nri)],
+            (nr - nri, lmmaxo))
+        dense = jnp.zeros((nr, lmmaxo))
+        out.append(dense.at[:nri, :lmmaxi].set(inner).at[nri:, :].set(outer))
     return out
 
 
