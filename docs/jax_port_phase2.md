@@ -26,7 +26,7 @@ $V_s$ itself, which is what this phase is for.
 | **2c** the Weinert Poisson solver | not started |
 | **2d** a GGA functional | **done for PBE (`xctype=20`)** (§2b): energy densities exact against Elk's own `exir`/`ecir` (4e-16), and `jax.grad` of the discretised energy reproduces Elk's hand-coded potential to 2.4e-5 median — with the gap identified as discretise-then-differentiate versus differentiate-then-discretise, not as an error in either |
 | **2e** symmetrisation | not started |
-| **2f** total energy at fixed input potential | not started |
+| **2f** total energy at fixed input potential | **partly** (§2c): the cell integral and inner product are built (`rfint`/`rfinp`), so the charge integrates to the electron count within 1.1e-14 — the study's forward criterion asks 1e-8 — and $E_x$/$E_c$ match Elk's own INFO.OUT to 1e-9. The total energy needs the density and the Poisson solve |
 
 ---
 
@@ -281,3 +281,55 @@ spin-resolved, but no spin-polarised fixture has been run). And the exchange
 enhancement's own limits are checked ($F_x\to1+\mu s^2$ and $F_x\to1+\kappa$)
 but the correlation's $H$ has no comparable closed-form limit checked beyond
 $H(0)=0$.
+
+
+---
+
+## 2c. Integrals over the cell
+
+### What was at stake
+
+Elk splits every real-space function into a packed muffin-tin part and a value
+on the interstitial FFT grid, so *every* scalar in Phase 2 and beyond — the
+total charge, each energy component, any statement that a density is what it
+should be — is one of two operations: `rfint`/`rfmtint` (the integral of one
+function) or `rfinp` (the inner product of two). Both are short, and both are
+easy to get subtly wrong in ways that stay plausible.
+
+### What was built, and the three references
+
+`elkjax.integrate` transcribes them:
+
+$$\int_\Omega f\,d^3r
+ = \frac{\Omega}{N_{\rm FFT}}\sum_i f_i\Theta_i
+ + \sqrt{4\pi}\sum_\alpha\sum_r w^{(2)}_r f^\alpha_{00}(r),$$
+
+with $\sqrt{4\pi}=1/Y_{00}$ from $\int R_{00}d\Omega$, and the interstitial sum
+weighted by the characteristic function so the spheres are not counted twice.
+The inner product differs in one structural way that a tolerance would never
+reveal: it sums over **every** $(\ell,m)$, the real harmonics being
+orthonormal, where a plain integral takes only $\ell=0$.
+
+| reference | result |
+|---|---|
+| $\int_\Omega 1 = \Omega$ (pure geometry, and each half separately) | < 1e-9 relative |
+| $\int_\Omega\rho = N_{\rm electrons}$ | **1.1e-14** (criterion: 1e-8) |
+| $E_x = \langle\rho,\varepsilon_x\rangle$ vs Elk's INFO.OUT | 1e-9 (its print width) |
+| $E_c = \langle\rho,\varepsilon_c\rangle$ vs Elk's INFO.OUT | 1e-9 (its print width) |
+
+The first two owe nothing to Elk's own arithmetic. The electron count has one
+trap: `rhomt` **includes the core density** (`rhocore` adds it), so the target
+is 28 for two silicons and not the 8 valence electrons — an implementation that
+assumed valence would miss by 20 electrons, not by a tolerance. And the energy
+comparison is the check with teeth on the inner product specifically: an
+implementation using only the $\ell=0$ coefficient passes both integral tests
+and fails this one, which is asserted by measuring that the non-spherical
+channels carry more than 1 Ha of $E_x$ here.
+
+### What this settles
+
+Half of the study's Phase 2 forward criterion — "cell charge integral to
+$10^{-8}$ electrons" — is met at $10^{-14}$, and the machinery every remaining
+energy component needs exists and is checked. The other half, the total energy
+at a fixed input potential, needs the density (`rhomag`) and the Weinert
+Poisson solve, neither of which is started.

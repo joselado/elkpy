@@ -311,6 +311,10 @@ def parse_lapw_response(tokens):
                                    avec(:, j) convention, atomic units)
       vkc                       -- (3,) the k-point in Cartesian a.u.
       idxis                     -- (natmtot,) 1-based species of each atom
+      rlmt, wr2mt               -- (nspecies, max nrmt) the radial mesh and
+                                   its r^2-weighted quadrature weights
+                                   (`wsplint`, a Simpson-like rule -- not
+                                   r^2 dr), zero-padded
       rmt                       -- (nspecies,) muffin-tin radii
       nrmt                      -- (nspecies,) radial points per sphere
       apword                    -- (lmaxapw+1, nspecies) APW order per l
@@ -680,6 +684,10 @@ def parse_groundstate_response(tokens):
       nrmt, nrmti, npmt         -- (nspecies,) radial points, inner-region
                                    radial points, packed muffin-tin length
       idxis                     -- (natmtot,) 1-based species of each atom
+      rlmt, wr2mt               -- (nspecies, max nrmt) the radial mesh and
+                                   its r^2-weighted quadrature weights
+                                   (`wsplint`, a Simpson-like rule -- not
+                                   r^2 dr), zero-padded
       ivg                       -- (3, ngtot) integer G-vectors
       igfft                     -- (ngtot,) 1-based map from the G-vector
                                    index to the FFT array position
@@ -738,6 +746,13 @@ def parse_groundstate_response(tokens):
     out.update(nrmt=nrmt, nrmti=nrmti, npmt=npmt)
     flat, pos = _take(tokens, pos, natmtot, int)
     out["idxis"] = np.array(flat)
+    nrmtmax = int(nrmt.max())
+    for key in ("rlmt", "wr2mt"):
+        arr = np.zeros((nspecies, nrmtmax))
+        for is_ in range(nspecies):
+            flat, pos = _take(tokens, pos, int(nrmt[is_]), float)
+            arr[is_, :int(nrmt[is_])] = flat
+        out[key] = arr
     flat, pos = _take(tokens, pos, 3 * ngtot, int)
     out["ivg"] = np.array(flat).reshape(3, ngtot, order="F")
     flat, pos = _take(tokens, pos, ngtot, int)

@@ -1,6 +1,6 @@
 --- a/src/elkpy_eigenstates.f90
 +++ b/src/elkpy_eigenstates.f90
-@@ -1595,6 +1595,125 @@
+@@ -1595,6 +1595,132 @@
  !EOC
  
  !BOP
@@ -68,6 +68,13 @@
 +do ias=1,natmtot
 +  write(*,*) idxis(ias)
 +end do
++! the radial mesh and its quadrature weights, so a cell integral can be done
++do is=1,nspecies
++  write(*,'(4ES25.16E3)') rlmt(1:nrmt(is),1,is)
++end do
++do is=1,nspecies
++  write(*,'(4ES25.16E3)') wr2mt(1:nrmt(is),is)
++end do
 +! the reciprocal-lattice set the interstitial functions live on
 +do ig=1,ngtot
 +  write(*,*) ivg(1,ig),ivg(2,ig),ivg(3,ig)
@@ -126,7 +133,7 @@
  ! !ROUTINE: elkpy_eigenstate_session
  ! !INTERFACE:
  subroutine elkpy_eigenstate_session
-@@ -1672,6 +1791,14 @@
+@@ -1672,6 +1798,14 @@
  !    JAX port (docs/jax\_port.md), not a physical observable: nothing
  !    upstream writes {\tt apwalm} at all. $H$ and $O$ carry only the upper
  !    triangle Elk fills.
@@ -141,7 +148,7 @@
  !   \item {\tt PARITY k1 k2 k3 ist0 ist1} -- the inversion (parity) operator
  !    $\langle\psi_m|\hat I|\psi_n\rangle$ over the band window
  !    $[ist0,ist1]$, plus all {\tt nstsv} eigenvalues of the same
-@@ -1743,6 +1870,11 @@
+@@ -1743,6 +1877,11 @@
    if (ios /= 0) cycle
    select case(trim(cmd))
  
