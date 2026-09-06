@@ -1246,6 +1246,22 @@ Phase 0e asks for production shapes that this machine cannot hold.
 | 0d | `vmap(eigh)` vs `lax.map` at $n=1000$ on a real GPU | **timing deferred (no GPU); memory settled by 0e** — at production shapes a `lax.scan` accumulator holds 0.411 GiB of temporaries and `vmap` holds 40.2 GiB, so `vmap` over the k-axis does not fit on a 40 GB device whatever the timing says |
 | 0e | `jit` compile time and peak memory for one traced SCF step at production shapes | **done — `docs/jax_port_phase0.md`.** Compile time is FLAT in the shapes (0.46 s at both $(200,4)$ and $(3000,100)$) and **superlinear (exponent ≈1.85) in HLO op count** — isolated with the corrector, which is linear in its pass count, since Gram-Schmidt's own op count is quadratic in `n_lo` — while a `lax.scan` over 4x more radial points costs nothing. Design rule: `scan` repeated structure, unroll only what must be. Differentiating the step adds only ~1.2x |
 
+**$\kappa(O)$ for a real LAPW overlap is measured, and the cheap estimate is
+useless.** Patch 0013 (§33) supplies real $H$ and $O$; `python3 -m elkjax.phase0b_overlap`
+reproduces the table in `docs/jax_port_phase0.md` §0b(ii). At the standard `rgkmax=7`,
+$\kappa(O)\approx5\times10^3$, so the safe-$K$ tolerance
+$\epsilon\,\kappa\,\lVert\tilde H\rVert$ is $\approx1.6\times10^{-11}$ Ha on Si and
+$6.5\times10^{-11}$ Ha on h-BN. Three things to carry forward. It is set by the **cutoff,
+not the matrix size** — h-BN's $1402\times1402$ overlap has the same $\kappa$ as Si's
+$161\times161$, while `rgkmax` $7\to8\to9$ takes Si from $5\times10^3$ to
+$2.6\times10^4$ to $2.1\times10^5$. The study's §8b Cholesky-diagonal estimate is worse
+than "a lower bound, 140x low": it is **uninformative**, moving only 8.05→9.25 across a
+74-fold range of $\kappa$, so it must not be used to set a threshold. And the norm in
+that formula should be $\lVert L^{-1}HL^{-\dagger}\rVert$, not $\lVert H\rVert$ — 3x
+larger here. Knock-on: the study's Phase 1 adversarial `soc_scale` sweep 3000→3 stops
+about six orders of magnitude above the gap at which its own refusal criterion is meant
+to fire.
+
 **Two mixers, one caveat about Elk's own.** Unrolling the SCF instead of differentiating
 it implicitly is not merely inaccurate: measured, unrolled *Anderson* reaches a forward
 value good to 1.8e-13 while its gradient is wrong by $10^{17}$–$10^{32}$ relative, across
@@ -1295,9 +1311,10 @@ $A=v^\dagger\,\delta H\,v$ were bitwise Hermitian, and JAX's `_eigh_jvp_rule` fo
 symmetrisation — so $\|A-A^\dagger\|/\delta\lambda\approx0.2$–$0.5$ survives, which is the
 size of the observed failure.
 
-**Stale note in `docs/continue_here.md`**: it says nothing is merged and `master` is at
-`51bab45`. `master` is now at `39de3e4` — `elk-full-coverage` was merged. Everything else in
-that document still holds, including the `ELKPY_F90_LIB` override needed to build Elk here.
+`docs/continue_here.md` is current as of patch 0013: it records `master` at `39de3e4`
+(`elk-full-coverage` merged) with `jax-port` still unmerged, and its §3 marks patch 0013
+and the κ(S) measurement done. The `ELKPY_F90_LIB` override it documents is still what
+builds Elk here.
 
 
 ## Commands

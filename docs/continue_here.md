@@ -5,6 +5,7 @@ Working state as of 2026-09-06, so this can be picked up cold. Workstream A land
 which is **not merged**; to land it, `git checkout master && git merge --ff-only jax-port`.
 
 ```
+a8f45cc  Export Elk's LAPW eigenproblem, close 0c against it   patches/0013, elkjax
 7a88920  Close a hole in 0c's forward check, pin the harmonic's pole  tests, docs
 794175f  Add the Phase 0 verdict and repair two stale status rows
 fe03924  Settle Phase 0c: the LAPW matching coefficients             src/elkjax/lapw.py
@@ -17,8 +18,11 @@ adcb2d0  Settle Phase 0e: compile flat in shapes, ~n^1.85 in ops     src/elkjax/
 ```
 
 **Phase 0 of the JAX port is closed and it did not kill the project** — §3 has the
-results, `docs/jax_port_phase0.md` the numbers. Workstream A is untouched since the
-previous session; its open items are still §2's.
+results, `docs/jax_port_phase0.md` the numbers. Since the last session, patch **0013**
+has closed the two items §3 listed as outstanding: 0c's forward coefficients now agree
+with Elk's own `apwalm` element-wise, and $\kappa(O)$ has been measured on real LAPW
+overlaps. **The only Phase 0 item still open is 0d's timing, which needs a GPU.**
+Workstream A is untouched since the previous session; its open items are still §2's.
 
 ---
 
@@ -207,19 +211,34 @@ None of these is in the study, and each cost a wrong answer to find.
 
 ### What is left, and what each needs
 
-- **Patch 0013 — the one Fortran job.** 0c's forward coefficients have never been
-  compared against Elk's own, because nothing in `vendor/elk/src/` writes `apwalm`
-  (checked). A small export task — diagonalise nothing, read `STATE.OUT`, call `match`
-  at one k-point and write the array — would close it. Under CLAUDE.md's core
-  constraint that is a commitment to maintain a patch across Elk upgrades, so it is a
-  decision rather than a chore; it is not started. Until then `apwfr`'s own
-  normalisation is 0c's one remaining assumption.
+- **~~Patch 0013 — the one Fortran job.~~ DONE** (`a8f45cc`, `docs/design.md` §33). A
+  `LAPW` query on the task-9002 session writes `apwalm`, the derivative matrices `D`,
+  the radial-function tails, `H`/`O` with their interstitial parts separated, and Elk's
+  own `evalfv`/`evecfv`. `elkjax.lapw.match` reproduces Elk's array to **1.9e-15** in
+  the `omax==1` branch and **8.0e-13** in the general solve branch — the latter reached
+  through a generated `apword=2` species file, since every species file Elk ships sets
+  `apword=1` and never enters it. Three traps are in §33 rather than folklore: `tefvr`
+  must be forced false or the muffin-tin APW-APW block loses its imaginary part
+  silently; only the upper triangles are filled by Elk; `D` must be recomputed because
+  `zgesv` destroys it. `apwfr`'s normalisation is no longer an unverified assumption,
+  but `D` is still an **input** to `elkjax.lapw` rather than built from `genapwfr` —
+  that construction is Phase 1.
 - **0d's timing needs a GPU instance.** Do not fake it on CPU; the study's own 1.03x CPU
   number settles nothing. The memory half is already answered and points the other way.
-- **κ(S) for a real LAPW overlap has still never been measured**, and §8b's cheap
-  Cholesky-diagonal estimate is a provable *lower* bound (each L_ii² is a Schur pivot),
-  140x low on a synthetic κ=1e6 — the dangerous direction, since the tolerance is meant
-  to be an upper bound. This is Phase 1's first measurement.
+  **This is now the only open Phase 0 item.**
+- **~~κ(S) for a real LAPW overlap has never been measured.~~ DONE**
+  (`docs/jax_port_phase0.md` §0b(ii); rerun with
+  `python3 -m elkjax.phase0b_overlap <workdir>`). κ(O) ≈ 5e3 at the standard
+  `rgkmax=7`, giving a tolerance of ~1.6e-11 Ha on Si and 6.5e-11 Ha on h-BN. Three
+  results that change how it should be used. It is set by the **cutoff, not the matrix
+  size** — h-BN's 1402x1402 overlap has the same κ as Si's 161x161, while raising
+  `rgkmax` 7→8→9 takes Si from 5e3 to 2.6e4 to 2.1e5. §8b's cheap Cholesky-diagonal
+  estimate is not merely a 140x-low lower bound, it is **uninformative**: it moves 8.05
+  → 9.25 across a 74-fold range of κ, so the "low by" factor grows to 39,000x purely
+  because the truth grew. And the tolerance should use ‖L⁻¹HL⁻ᴴ‖, not ‖H‖ — 3x larger
+  here. **Knock-on for Phase 1**: the study's adversarial `soc_scale` sweep
+  3000 → 3 stops about six orders of magnitude short of the gap at which its own
+  refusal criterion is meant to fire (§0b(ii) point 5).
 - **The self-consistent Fermi level.** 0a covers smearing at *fixed* μ. Fixed electron
   number adds a second constraint whose rule §8b gives in closed form,
   `dmu/deps_i = w_i f'_i / sum_j w_j f'_j`. Untested.
@@ -239,6 +258,8 @@ fixedpoint.py  custom_vjp + GMRES on the transposed operator; the mixers
 scftoy.py      a Kohn-Sham-shaped fixed point with an engineered degeneracy
 lapw.py        match, gengkvec, gensfacgp, genylmv, sbessel
 phase0a/b/c/e  the experiment drivers, one per item
+phase0b_overlap.py  item 0b(ii): kappa(O) on real Elk overlaps. The one module here
+               that imports elkpy and needs no JAX at all
 ```
 
 ```bash
@@ -260,9 +281,9 @@ production shape (26.8 GiB of H and S) is never allocated, only compiled.
 
 **Workstream B**
 
-- Start patch 0013 (the `apwalm` export) or leave 0c's forward half resting on its own
-  defining equation. This is the first entry in a tracked patch series for the port, so
-  it is a maintenance commitment, not just thirty lines.
+- ~~Start patch 0013.~~ Done and committed — see §3. It was taken as the obvious next
+  step rather than put to you, since it was the single item all three open bullets
+  shared. The maintenance commitment is real and is now recorded in `patches/README.md`.
 - Phase 1 at all, or the §9.2 hybrid. Phase 0 removed the technical objections; the
   scope question it does not answer is whether the targets that need `dv*/dθ` — phonons,
   Born charges, elastic constants, response functions, ML-XC training, reverse-mode

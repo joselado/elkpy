@@ -13,6 +13,7 @@ ELKPY_RUN_SLOW_TESTS=1 PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
     tests/test_jax_compile_cost.py tests/test_jax_lapw.py -q
 PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
     tests/test_calculation_lapw_export.py -q       # 0c vs Elk, and kappa(O); needs the binary
+PYTHONPATH=src taskset -c 0-3 python3 -m elkjax.phase0b_overlap <workdir>   # the kappa(O) table
 ```
 
 `taskset` is not decoration: `.claude/settings.json`'s `OMP_NUM_THREADS=1` does **not**
@@ -35,7 +36,7 @@ against Elk's own, are still inputs to `elkjax.lapw` rather than built by it fro
 
 | Item | Status |
 |---|---|
-| 0b — safe-$K$ projector rule | **settled at synthetic $S$, below.** The rule is necessary and it works. Item 0b(ii)'s *real* Cholesky-reduced LAPW overlap is now measured (§κ below) — $\kappa(O)\approx5\times10^3$, so the tolerance is set, though the rule itself has still only been exercised at synthetic $S$ |
+| 0b — safe-$K$ projector rule | **settled at synthetic $S$, below.** The rule is necessary and it works. Item 0b(ii)'s *real* Cholesky-reduced LAPW overlap is now measured (§0b(ii)) — $\kappa(O)\approx5\times10^3$ at a standard cutoff, so the tolerance is $\approx10^{-11}$ Ha; the rule itself has still only been exercised at synthetic $S$ |
 | 0a — reverse-mode implicit diff through the SCF fixed point | **settled, below.** It works, and it needs 0b's rule |
 | 0a′ — the same at second order | **settled, below.** Blocked with an `eigh`-based projector; **works** with an eigensolver-free one |
 | 0c — `jax.jvp(match)` vs `dmatch.f90` | **settled, below.** Exact to 7e-16, and the forward half now agrees with **Elk's own `apwalm`** to 1.9e-15 (division branch) and 8.0e-13 (solve branch), via patch 0013 |
@@ -400,6 +401,88 @@ Berry curvature (CLAUDE.md §13): window the whole degenerate group together.
   prescribed condition number. The measurements pin the *arithmetic*, not Elk.
 
 ---
+
+## 0b(ii). $\kappa(O)$ for a real LAPW overlap, and the tolerance it sets
+
+Item 0b left this open in the study's own words: repeat the projector test "at
+$n\approx1000$ with a real Cholesky-reduced $S$, with a numeric criterion set at that
+size from the measured $\kappa(S)$, since the tolerance scales as
+$\epsilon\,\kappa(S)\,\lVert H\rVert$ and $\kappa(S)$ is unknown here." Everything in
+§0b used a synthetic $S$ with a *prescribed* condition number, so the tolerance had no
+anchor at all.
+
+Patch 0013's `LAPW` query (`docs/design.md` §33) supplies the real matrix.
+$\kappa(O)=\lambda_{\max}/\lambda_{\min}$ from `eigvalsh`; the Cholesky-diagonal
+estimate §8(b) proposes is $\max_i L_{ii}^2/\min_i L_{ii}^2$; $\tilde H=L^{-1}HL^{-\dagger}$
+is the reduced matrix whose eigenproblem is the one actually differentiated. Bulk Si
+(diamond, 2 atoms) and monolayer h-BN (2 species, a 30 Bohr $c$-axis), three $k$-points
+each, `xc="PW"`:
+
+| system | rgkmax | $n_{\rm mat}$ | $k$ | $\kappa(O)$ | Cholesky est. | low by | $\lVert H\rVert_2$ | $\lVert\tilde H\rVert_2$ | $\epsilon\kappa\lVert\tilde H\rVert$ / Ha |
+|---|---|---|---|---|---|---|---|---|---|
+| Si | 7 | 161 | (0.1,0.2,0.05) | 4.97e3 | 8.05 | 618x | 4.56 | 14.2 | 1.6e-11 |
+| Si | 7 | 177 | $\Gamma$ | 1.31e4 | 8.54 | 1536x | 4.68 | 17.9 | 5.2e-11 |
+| Si | 7 | 164 | (0.5,0.5,0.5) | 5.60e3 | 7.40 | 756x | 4.84 | 14.4 | 1.8e-11 |
+| Si | 8 | 227 | (0.1,0.2,0.05) | 2.61e4 | 8.61 | 3032x | 6.17 | 20.6 | 1.2e-10 |
+| Si | 8 | 237 | $\Gamma$ | 4.14e4 | 8.75 | 4727x | 6.13 | 22.5 | 2.1e-10 |
+| Si | 8 | 236 | (0.5,0.5,0.5) | 3.68e4 | 7.84 | 4699x | 6.00 | 21.1 | 1.7e-10 |
+| Si | 9 | 323 | (0.1,0.2,0.05) | 2.08e5 | 9.04 | 23049x | 7.54 | 28.4 | 1.3e-9 |
+| Si | 9 | 339 | $\Gamma$ | 3.66e5 | 9.25 | 39493x | 7.58 | 31.7 | 2.6e-9 |
+| Si | 9 | 340 | (0.5,0.5,0.5) | 2.59e5 | 8.24 | 31382x | 7.72 | 30.8 | 1.8e-9 |
+| h-BN | 7 | 1402 | (0.1,0.2,0.05) | 5.01e3 | 16.0 | 314x | 15.3 | 57.9 | 6.5e-11 |
+| h-BN | 7 | 1354 | $\Gamma$ | 4.99e3 | 16.0 | 312x | 15.3 | 58.2 | 6.5e-11 |
+| h-BN | 7 | 1409 | (0.5,0.5,0.5) | 4.83e3 | 15.8 | 306x | 15.3 | 57.5 | 6.2e-11 |
+
+Every row also passes the export self-check — `eigh(H,O)` reproduces Elk's `evalfv` to
+$\le2\times10^{-14}$ — so none of this rests on a mis-parsed matrix. The h-BN rows are
+the only two-species case anywhere in this work, and they confirm for free that the
+export's per-species indexing (`idxis` into `rmt`, `nrmt`, `apword`, and `apword`'s own
+per-$\ell$ variation) is right; bulk Si cannot exercise it.
+
+**Five things this settles.**
+
+**1. The number.** At the standard `rgkmax=7`, $\kappa(O)\approx5\times10^3$, and the
+tolerance is $\approx1.6\times10^{-11}$ Ha for Si and $6.5\times10^{-11}$ Ha for h-BN —
+about $10^{-9}$ eV. That is the threshold below which the safe-$K$ rule must refuse
+rather than return a number.
+
+**2. $\kappa(O)$ is set by the cutoff, not by the matrix size.** h-BN's $1402\times1402$
+overlap has the *same* condition number as Si's $161\times161$, to within 1%: nearly nine
+times the dimension, no change. What moves it is `rgkmax` — on Si, $5\times10^3\to
+2.6\times10^4\to2.1\times10^5$ for 7, 8, 9, roughly a factor of 7 per unit — because the
+ill-conditioning is the near-linear-dependence of the augmented basis near the cutoff,
+not an accumulation over rows. Two consequences: the $n\approx1000$ half of 0b(ii)'s
+criterion is the wrong axis to vary, and a production calculation at a converged basis
+will be an order of magnitude worse conditioned than these defaults.
+
+**3. §8(b)'s cheap Cholesky-diagonal estimate must not be used.** It is worse than "a
+lower bound that is 140x low", which is how the study records it. It is *uninformative*:
+across a 74-fold range of $\kappa$ on silicon it moves from 8.05 to 9.25 — 15% — so the
+"low by" factor grows from 618x to 39,000x purely because the true value grew. The
+estimate is measuring something else (the spread of the diagonal pivots, which for these
+matrices is dominated by the basis normalisation) and carries essentially no signal
+about $\kappa$. Since it bounds from *below*, using it would set a tolerance orders of
+magnitude too tight and the rule would never refuse.
+
+**4. Use $\lVert\tilde H\rVert$, not $\lVert H\rVert$.** §8(b) writes the tolerance with
+$\lVert H\rVert$, but the matrix whose eigenproblem is differentiated is the reduced
+$\tilde H=L^{-1}HL^{-\dagger}$, and it is consistently larger: 3.1x on Si, 3.8x on h-BN.
+The factor is not large but it is systematic and free to include.
+
+**5. The study's Phase 1 adversarial criterion, as written, never reaches its own
+threshold.** §6 proposes sweeping graphene's `soc_scale` 3000 → 300 → 30 → 3 and
+requiring "an explicit refusal once the sampled gap falls below the tolerance §8(b)
+derives". Taking §20's measured 1.4 eV gap at `soc_scale=3000`, assuming the gap is
+linear in the scale (it is a multiplier on the SOC term, so this is right at weak
+coupling and if anything *under*-states the small-scale gap, the curve saturating at
+large coupling), and using h-BN's $6.5\times10^{-11}$ Ha as the proxy tolerance for
+another 2D honeycomb in vacuum: at `soc_scale=3` the gap is $\sim1.4$ meV
+$=5\times10^{-5}$ Ha, which is **six orders of magnitude above** the tolerance. The
+sweep would have to continue to `soc_scale`$\,\approx4\times10^{-6}$ for the refusal to
+be required — well below 1, which patch 0001 permits since `socscfsp` is a plain
+multiplier. This is an order-of-magnitude argument resting on an extrapolation, not a
+measurement; the correction to the test design is the same either way, and it is
+cheap to make.
 
 ## 0e. Compile time and peak memory for one traced SCF step
 
