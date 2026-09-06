@@ -1183,7 +1183,7 @@ vendored tree:
 `docs/jax_port.md` (1,623 lines) is the design study, `docs/continue_here.md` §3 the cold-start
 summary, `docs/jax_port_phase0.md` the running log of what Phase 0 measured,
 `docs/jax_port_phase1.md` the same for Phase 1 (through §1l), and
-`docs/jax_port_phase2.md` for Phase 2, which has now started (§2a, the LDA
+`docs/jax_port_phase2.md` for Phase 2, which has now started (§§2a-2c). §2a is the LDA
 exchange-correlation functional: `src/elkjax/xc.py` transcribes `xc_pwca.f90`, with
 `jax.grad` reproducing Elk's hand-coded $v_{xc}$ at machine precision against the study's
 stated $10^{-10}$, exchange exact against Dirac and its spin scaling, correlation
@@ -1191,7 +1191,30 @@ anchored on the Gell-Mann–Brueckner high-density limit, Elk's own $v_{xc}$ on 
 at 3e-5 median — limited by a nonlinear functional not commuting with either of Elk's
 representations of a real-space function, not by the transcription — and the study's
 named `NaN` hazard turned into an assertion: Elk's `rho < 1e-20` guard written as one
-`jnp.where` gives the correct value and a `NaN` gradient at exactly zero density). Verdict, in one line: **a research project justified by
+`jnp.where` gives the correct value and a `NaN` gradient at exactly zero density.
+Patch **0016** adds a `GROUNDSTATE` query — the density and potentials on Elk's own
+grids, $k$-independent — which makes that comparison **exact**: Elk evaluates the
+functional pointwise on the FFT grid, so `vxcir` is literally the transcription applied
+to `rhoir`, to 4.4e-16, once `potks`'s own `trimrfg` low-pass at $|G|>2k_{\max}$ is
+reproduced with it (`elkjax.grid.trim`; without it the same comparison stops at 2.5e-5
+and looks like a mediocre transcription). §2b is **PBE**, and it is the port's first
+real demonstration of its own premise: only the ENERGY densities are transcribed —
+exact against Elk's `exir`/`ecir` at 4e-16, which unlike `vxcir` are not trimmed — and
+`jax.grad` of the discretised energy supplies the functional derivative
+$-\nabla\cdot(\partial(\rho\varepsilon)/\partial\nabla\rho)$ that Elk gets from
+Perdew's hand-derived expression needing $\nabla^2\rho$ and
+$(\nabla\rho)\cdot(\nabla|\nabla\rho|)$ as extra inputs. **Nothing here computes a
+Laplacian.** It agrees with Elk to 2.4e-5 median — not machine precision, and the reason
+matters for Phase 3: **Elk discretises the exact continuum functional derivative; AD
+returns the exact derivative of the discretised energy**, and those differ because
+$|\nabla\rho|$ is not band-limited even when $\nabla\rho$ is. The prediction is
+asserted rather than described — the residual tracks the reduced gradient $s$ (5.8e-6 in
+its lowest quarter, 1.25e-5 in its highest) — and for scale the gradient terms are 11% of
+$v_{xc}$, so the disagreement is ~1% of what AD reproduces from nothing. §2c is the cell
+integral and inner product (`rfint`/`rfinp`): $\int\rho$ gives the electron count to
+**1.1e-14** against the study's 1e-8 criterion (note `rhomt` INCLUDES the core density —
+assuming valence misses by 20 electrons, not by a tolerance), and $E_x$/$E_c$ match Elk's
+INFO.OUT to its print width). Verdict, in one line: **a research project justified by
 differentiability, not by the GPU** — SIRIUS already does FP-LAPW on CUDA/ROCm with Elk as its
 reference, and Elk's hot spots are already near-peak BLAS-3. Nothing about the port is a plan of
 record; **Phase 0 (§6 of the study) is designed to kill it, not to start it**, and that is what

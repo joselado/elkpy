@@ -6,7 +6,23 @@ Workstream B's `jax-port` was fast-forwarded in earlier; `origin/master` is now 
 The `elk-full-coverage` and `jax-port` branches still exist and point at older commits;
 deleting both is safe.
 
-**Phase 2 has started** (`docs/jax_port_phase2.md`): §2a transcribes the LDA
+**Phase 2 is under way** (`docs/jax_port_phase2.md`, §§2a-2c), and patch **0016** adds
+the `GROUNDSTATE` query it is built on — the converged density and potentials on Elk's
+own grids, taking no k-point. Three results to carry forward. **§2b is the port's first
+real demonstration of its own premise**: only PBE's ENERGY densities are transcribed
+(exact against Elk's `exir`/`ecir` at 4e-16, which unlike `vxcir` are not trimmed), and
+`jax.grad` supplies the functional derivative Elk gets from Perdew's hand-derived
+expression — which needs $\nabla^2\rho$ and $(\nabla\rho)\cdot(\nabla|\nabla\rho|)$
+as extra inputs that nothing here computes. It agrees to 2.4e-5 median, and the reason it
+is not exact matters for Phase 3: **Elk discretises the exact continuum functional
+derivative; AD returns the exact derivative of the discretised energy.** **§2a's** LDA
+comparison against Elk's own `vxcir` is exact (4.4e-16) but only once `potks`'s
+`trimrfg` low-pass is reproduced — without it, 2.5e-5, which looks like a bad
+transcription and is not one. And **§2c**'s cell integral gives the electron count to
+1.1e-14 against the study's 1e-8 criterion, with the trap that `rhomt` includes the core
+density.
+
+§2a also transcribes the LDA
 exchange-correlation functional (`xc_pwca.f90`, `xctype=3`, Elk's default) into
 `src/elkjax/xc.py`. The study's own criterion — `jax.grad` of $\varepsilon_{xc}$
 against Elk's hand-coded $v_{xc}$ — is met at machine precision rather than the stated
@@ -582,8 +598,12 @@ phase1_smearing.py   item 1i: smeared occupations and the self-consistent Fermi
                kernel's near-degenerate branch is not vacuous
 phase1_secondorder.py  item 1j: second derivatives via sign_projector, where both
                eigh-based routes return NaN at a real multiplet
-xc.py          item 2a: xc_pwca -- the LDA exchange-correlation functional,
-               with the rho -> 0 guard written so the GRADIENT survives
+xc.py          items 2a/2b: xc_pwca and PBE.  Energy densities only for
+               PBE -- the potential is what jax.grad is for.  The rho -> 0
+               guard is written so the GRADIENT survives
+grid.py        the interstitial FFT grid: G-vectors at each slot, spectral
+               gradient and Laplacian, and trimrfg's |G| <= 2 kmax low-pass
+integrate.py   item 2c: rfint/rfinp -- the cell integral and inner product
 radial.py      item 1k: hmlrad/olprad -- the muffin-tin radial integrals, from
                the potential.  The vsmt packing is the load-bearing part
 radial_functions.py  item 1k: rschrodint/genapwfr/genlofr -- the radial
@@ -609,7 +629,9 @@ PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
     tests/test_calculation_lapw_radial.py \
     tests/test_calculation_lapw_radial_functions.py \
     tests/test_calculation_lapw_potential.py \
-    tests/test_calculation_lapw_position.py -q
+    tests/test_calculation_lapw_position.py \
+    tests/test_calculation_xc.py tests/test_calculation_poisson.py \
+    tests/test_calculation_integrate.py -q
 ```
 
 **`taskset` is not decoration.** `.claude/settings.json`'s `OMP_NUM_THREADS=1` does not
