@@ -160,3 +160,76 @@ def test_the_naive_guard_gives_the_right_value_and_a_nan_gradient():
     assert not np.isfinite(naive).all(), naive
     assert np.isnan(naive[0]) and safe[0] == 0.0
     assert np.allclose(safe[1:], naive[1:], rtol=0, atol=0)
+
+
+# ---------------------------------------------------------------------------
+# PBE (xctype = 20)
+# ---------------------------------------------------------------------------
+#
+# Only the ENERGY densities are transcribed; the potential is what `jax.grad`
+# is supposed to supply.  These checks are the closed forms available without
+# an Elk run; the exact comparison against Elk's own `exir`/`ecir`, and the
+# functional derivative against Elk's hand-coded v_xc, are in
+# tests/test_calculation_xc.py.
+
+
+def test_pbe_reduces_to_lda_at_zero_gradient():
+    """F_x(0) = 1 and H(t = 0) = 0, so PBE must return exactly the LDA.
+
+    This is the one check that ties the GGA transcription to the LDA one,
+    which is independently pinned against Dirac and Gell-Mann-Brueckner.
+    """
+    import jax.numpy as jnp
+    from elkjax import xc
+    rho = jnp.asarray(DENSITIES)
+    zero = jnp.zeros_like(rho)
+    ex, ec = xc.pbe(0.5 * rho, 0.5 * rho, zero, zero, zero)
+    ex_lda, ec_lda = xc.pwca(0.5 * rho, 0.5 * rho)[:2]
+    assert np.abs((np.asarray(ex) - np.asarray(ex_lda))
+                  / np.asarray(ex_lda)).max() < 1e-14
+    assert np.abs((np.asarray(ec) - np.asarray(ec_lda))
+                  / np.asarray(ec_lda)).max() < 1e-13
+
+
+def test_the_pbe_exchange_enhancement_obeys_its_two_defining_limits():
+    """F_x -> 1 + mu s^2 as s -> 0 (the gradient expansion), and
+    F_x -> 1 + kappa as s -> infinity (the Lieb-Oxford bound PBE is
+    constructed to respect).
+
+    Both are properties of the FORM, so they catch a mistyped kappa or mu --
+    which the LDA limit above cannot, since it sends both to zero.
+    """
+    import jax.numpy as jnp
+    from elkjax import xc
+    rho = jnp.asarray(np.full(4, 0.1))
+    # s is |grad rho_sigma| / (2 k_F rho_sigma) with k_F from 2 rho_sigma
+    half = 0.5 * rho
+    kf = (2.0 * half * 3.0 * np.pi ** 2) ** (1.0 / 3.0)
+    for s_target, expected in ((1e-3, None), (1e4, 1.0 + xc.KAPPA_PBE)):
+        grad = jnp.asarray(s_target) * 2.0 * kf * half
+        ex, _ = xc.pbe(half, half, grad, grad, 2.0 * grad)
+        lda = xc.dirac_exchange(rho)
+        enhancement = np.asarray(ex) / np.asarray(lda)
+        if expected is None:
+            slope = (enhancement - 1.0) / s_target ** 2
+            assert np.abs(slope - xc.MU_PBE).max() < 1e-6, slope
+        else:
+            assert np.abs(enhancement - expected).max() < 1e-6, enhancement
+
+
+def test_pbe_is_safe_at_zero_density():
+    """The same `rho -> 0` guard as the LDA, with Elk's own 1e-12 cutoff."""
+    import jax
+    import jax.numpy as jnp
+    from elkjax import xc
+    rho = jnp.asarray([0.0, 1e-20, 1e-13, 1e-6, 1.0])
+    grad = 0.3 * rho
+
+    def energy(r):
+        ex, ec = xc.pbe(0.5 * r, 0.5 * r, 0.15 * r, 0.15 * r, 0.3 * r)
+        return jnp.sum(r * (ex + ec))
+
+    del grad
+    value = np.asarray(energy(rho))
+    assert np.isfinite(value).all()
+    assert np.isfinite(np.asarray(jax.grad(energy)(rho))).all()

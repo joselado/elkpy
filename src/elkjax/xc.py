@@ -208,3 +208,100 @@ def dirac_exchange(rho):
     against a closed form rather than against another transcription."""
     rho = jnp.asarray(rho)
     return -0.75 * (3.0 / np.pi) ** _THRD * rho ** _THRD
+
+
+# ---------------------------------------------------------------------------
+# PBE (xctype = 20), energy densities only
+# ---------------------------------------------------------------------------
+#
+# Elk's `xc_pbe.f90` returns the potentials too, from Perdew's own hand-derived
+# expression -- which needs the Laplacian and (grad rho).(grad |grad rho|) as
+# extra inputs.  Only the ENERGY densities are transcribed here, because the
+# potential is what `jax.grad` is supposed to supply: the whole point of the
+# port is that
+#
+#     v_xc = d(rho eps_xc)/d(rho) - div( d(rho eps_xc)/d(grad rho) )
+#
+# is the adjoint of a spectral gradient, so AD produces the divergence term
+# with nothing hand-coded and no second derivative of the density anywhere.
+
+KAPPA_PBE = 0.804
+MU_PBE = 0.2195149727645171
+BETA_PBE = 0.06672455060314922
+_AX = -0.7385587663820224058          # the Dirac exchange coefficient
+_GAM = 0.5198420997897463295          # 2(2^(1/3) - 1)
+_GAMMA_C = 0.0310906908696548950      # (1 - ln 2)/pi^2, again
+
+
+def _pbe_exchange(rho_sigma, grad_sigma, kappa=KAPPA_PBE, mu=MU_PBE):
+    r"""One spin channel's :math:`\varepsilon_x^{\rm PBE}(2\rho_\sigma)`.
+
+    :math:`\varepsilon_x = \varepsilon_x^{\rm LDA}(2\rho_\sigma)\,F_x(s)` with
+    :math:`F_x = 1+\kappa-\kappa/(1+(\mu/\kappa)s^2)` and
+    :math:`s = |\nabla\rho_\sigma|/(2k_F\rho_\sigma)`,
+    :math:`k_F = (3\pi^2\cdot2\rho_\sigma)^{1/3}`.
+    """
+    two = 2.0 * rho_sigma
+    kf = (two * 3.0 * np.pi ** 2) ** _THRD
+    s = grad_sigma / (2.0 * kf * rho_sigma)
+    p0 = 1.0 + (mu / kappa) * s ** 2
+    return _AX * two ** _THRD * (1.0 + kappa - kappa / p0)
+
+
+def pbe(rhoup, rhodn, gradup, graddn, gradtot, beta=BETA_PBE,
+        kappa=KAPPA_PBE, mu=MU_PBE):
+    r"""`xc_pbe.f90`'s energy densities: returns `(ex, ec)`.
+
+    `gradup`, `graddn`, `gradtot` are :math:`|\nabla\rho_\uparrow|`,
+    :math:`|\nabla\rho_\downarrow|` and :math:`|\nabla\rho|`.  Note the last
+    is NOT the sum of the first two -- Elk computes each as the modulus of its
+    own gradient vector -- and for an unpolarised density all three are
+    related by :math:`|\nabla\rho_\sigma| = |\nabla\rho|/2`.
+
+    Safe at :math:`\rho\to0` in value and gradient, on the same double-`where`
+    pattern as `pwca`; Elk's own cutoff here is :math:`10^{-12}`, not
+    :math:`10^{-20}`.
+    """
+    rup, rdn = jnp.asarray(rhoup), jnp.asarray(rhodn)
+    gup, gdn = jnp.asarray(gradup), jnp.asarray(graddn)
+    gtot = jnp.asarray(gradtot)
+    r = rup + rdn
+    live = (rup >= 0.0) & (rdn >= 0.0) & (r > 1.0e-12)
+    safe = jnp.where(live, r, 1.0)
+    half = 0.5 * safe
+    rup_s = jnp.where(live, jnp.maximum(rup, 1.0e-300), half)
+    rdn_s = jnp.where(live, jnp.maximum(rdn, 1.0e-300), half)
+    exup = _pbe_exchange(rup_s, gup, kappa, mu)
+    exdn = _pbe_exchange(rdn_s, gdn, kappa, mu)
+    ex = (exup * rup_s + exdn * rdn_s) / safe
+    # ---- correlation: PW92 locally, plus the PBE gradient correction H
+    rs = (3.0 / (4.0 * np.pi * safe)) ** _THRD
+    rs12 = jnp.sqrt(rs)
+    eu, _ = _g(0, rs, rs12, rs12 * rs, rs ** 2, 1.0 / rs12)
+    ep, _ = _g(1, rs, rs12, rs12 * rs, rs ** 2, 1.0 / rs12)
+    alfm, _ = _g(2, rs, rs12, rs12 * rs, rs ** 2, 1.0 / rs12)
+    z = (rup_s - rdn_s) / safe
+    z4 = z ** 4
+    fzz = 8.0 / (9.0 * _GAM)
+    f = ((1.0 + z) ** (4.0 / 3.0) + (1.0 - z) ** (4.0 / 3.0) - 2.0) / _GAM
+    ec_local = eu * (1.0 - f * z4) + ep * f * z4 - alfm * f * (1.0 - z4) / fzz
+    g = ((1.0 + z) ** (2.0 / 3.0) + (1.0 - z) ** (2.0 / 3.0)) / 2.0
+    g3 = g ** 3
+    kf = (safe * 3.0 * np.pi ** 2) ** _THRD
+    ks = jnp.sqrt(4.0 * kf / np.pi)
+    ksg = 2.0 * ks * g
+    t = gtot / (ksg * safe)
+    delt = beta / _GAMMA_C
+    b = delt / (jnp.exp(-ec_local / (g3 * _GAMMA_C)) - 1.0)
+    t2 = t ** 2
+    q4 = 1.0 + b * t2
+    q5 = 1.0 + b * t2 + (b ** 2) * (t2 ** 2)
+    h = g3 * (beta / delt) * jnp.log(1.0 + delt * q4 * t2 / q5)
+    ec = ec_local + h
+    return jnp.where(live, ex, 0.0), jnp.where(live, ec, 0.0)
+
+
+def pbe_energy_density(rho, gradrho):
+    """:math:`\\varepsilon_{xc}^{\\rm PBE}` for an unpolarised density."""
+    ex, ec = pbe(0.5 * rho, 0.5 * rho, 0.5 * gradrho, 0.5 * gradrho, gradrho)
+    return ex + ec

@@ -1,6 +1,6 @@
 --- a/src/elkpy_eigenstates.f90
 +++ b/src/elkpy_eigenstates.f90
-@@ -1595,6 +1595,112 @@
+@@ -1595,6 +1595,125 @@
  !EOC
  
  !BOP
@@ -90,10 +90,23 @@
 +  is=idxis(ias)
 +  write(*,'(4ES25.16E3)') vxcmt(1:npmt(is),ias)
 +end do
++do ias=1,natmtot
++  is=idxis(ias)
++  write(*,'(4ES25.16E3)') exmt(1:npmt(is),ias)
++end do
++do ias=1,natmtot
++  is=idxis(ias)
++  write(*,'(4ES25.16E3)') ecmt(1:npmt(is),ias)
++end do
 +! interstitial functions, on the real-space FFT grid
 +write(*,'(4ES25.16E3)') rhoir(1:ngtot)
 +write(*,'(4ES25.16E3)') vclir(1:ngtot)
 +write(*,'(4ES25.16E3)') vxcir(1:ngtot)
++! the exchange and correlation ENERGY densities, which -- unlike vxcir -- are
++! NOT passed through trimrfg, so they are the raw pointwise output of the
++! functional and the exact reference for a transcription of it
++write(*,'(4ES25.16E3)') exir(1:ngtot)
++write(*,'(4ES25.16E3)') ecir(1:ngtot)
 +write(*,'(4ES25.16E3)') vsir(1:ngtot)
 +write(*,'(4ES25.16E3)') cfunir(1:ngtot)
 +! and the G-space quantities olpistl/hmlistl actually consume
@@ -113,7 +126,7 @@
  ! !ROUTINE: elkpy_eigenstate_session
  ! !INTERFACE:
  subroutine elkpy_eigenstate_session
-@@ -1672,6 +1778,14 @@
+@@ -1672,6 +1791,14 @@
  !    JAX port (docs/jax\_port.md), not a physical observable: nothing
  !    upstream writes {\tt apwalm} at all. $H$ and $O$ carry only the upper
  !    triangle Elk fills.
@@ -128,7 +141,7 @@
  !   \item {\tt PARITY k1 k2 k3 ist0 ist1} -- the inversion (parity) operator
  !    $\langle\psi_m|\hat I|\psi_n\rangle$ over the band window
  !    $[ist0,ist1]$, plus all {\tt nstsv} eigenvalues of the same
-@@ -1743,6 +1857,11 @@
+@@ -1743,6 +1870,11 @@
    if (ios /= 0) cycle
    select case(trim(cmd))
  

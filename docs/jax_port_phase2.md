@@ -24,7 +24,7 @@ $V_s$ itself, which is what this phase is for.
 | **2a′** the `GROUNDSTATE` export (patch 0016) | **done** — density and potentials on Elk's own grids, $k$-independent; the reference for everything below |
 | **2b** the density `rhomag` | not started |
 | **2c** the Weinert Poisson solver | not started |
-| **2d** a GGA functional | not started |
+| **2d** a GGA functional | **done for PBE (`xctype=20`)** (§2b): energy densities exact against Elk's own `exir`/`ecir` (4e-16), and `jax.grad` of the discretised energy reproduces Elk's hand-coded potential to 2.4e-5 median — with the gap identified as discretise-then-differentiate versus differentiate-then-discretise, not as an error in either |
 | **2e** symmetrisation | not started |
 | **2f** total energy at fixed input potential | not started |
 
@@ -194,3 +194,90 @@ pointwise one. And the study's second Phase 2 gradient criterion — `isfinite`
 on the *full* gradient for the Cr monolayer and for a gapped insulator — is
 only half addressed: the density-side guard is fixed here, and the
 occupation-side one (occupations exactly 0 and 1) belongs with `rhomag`.
+
+
+---
+
+## 2b. PBE, and the functional derivative that costs nothing
+
+### What was at stake
+
+The LDA case (§2a) is a pointwise map, so `jax.grad` reproducing Elk's
+hand-coded $v_{xc}$ there is a check on one chain rule. A GGA is the case that
+actually tests the study's premise. Its energy density depends on
+$\nabla\rho$, so the potential is a **functional** derivative,
+
+$$v_{xc}(\mathbf r) = \frac{\partial(\rho\varepsilon_{xc})}{\partial\rho}
+ - \nabla\cdot\frac{\partial(\rho\varepsilon_{xc})}{\partial\nabla\rho},$$
+
+and Elk gets it from Perdew's own hand-derived expression — which needs
+$\nabla^2\rho$ and $(\nabla\rho)\cdot(\nabla|\nabla\rho|)$ as *extra inputs*,
+computed by `ggair_1.f90` with three more FFT round trips. If AD supplies that
+divergence for free, the port's central claim has its first real demonstration
+on a real quantity; if it does not, the claim is in trouble.
+
+### What was built
+
+`elkjax.xc.pbe` transcribes **only the energy densities** of `xc_pbe.f90`
+(Perdew, Burke & Ernzerhof, *Phys. Rev. Lett.* **77**, 3865 (1996)) —
+$\varepsilon_x = \varepsilon_x^{\rm LDA}(2\rho_\sigma)F_x(s)$ with
+$F_x = 1+\kappa-\kappa/(1+(\mu/\kappa)s^2)$, and
+$\varepsilon_c = \varepsilon_c^{\rm PW92} + H$ with $H$ the usual
+$g^3(\beta/\delta)\ln[1+\delta q_4t^2/q_5]$. `elkjax.grid.gradient` supplies
+$\nabla\rho$ spectrally. **Nothing computes a Laplacian.**
+
+Patch 0016 was extended with `exir`/`ecir` (and their muffin-tin partners) for
+this: unlike `vxcir`, they are **not** passed through `trimrfg`, so they are the
+raw pointwise output of the functional and an exact reference.
+
+| quantity | agreement with Elk |
+|---|---|
+| $\varepsilon_x$ on the interstitial grid | **4.2e-16** |
+| $\varepsilon_c$ on the interstitial grid | **3.4e-16** |
+| $v_{xc}$ from `jax.grad`, against Elk's hand-coded one | 2.4e-5 median, 5.2e-4 max |
+
+One convention is load-bearing and invisible in the formula: `ggair_1` zeroes
+every Fourier component above `ngvc` before transforming the gradient back, so
+`grid.gradient` truncates by default. (On this density it happens to matter
+only at $10^{-15}$ — the density is already smooth — but on a density that is
+not, it would not be optional.)
+
+### The potential agrees to 2.4e-5, and that is not an error in either
+
+The gradient terms are **11% of $v_{xc}$** here, so AD is reproducing from
+nothing a correction whose own size is $5.5\times10^{-2}$, and disagreeing with
+Elk by $5.2\times10^{-4}$ — about 1% of the thing being reproduced.
+
+The gap has a cause, and it is worth stating precisely because it will recur
+everywhere in Phase 3: **Elk discretises the exact continuum functional
+derivative; AD returns the exact derivative of the discretised energy.** Those
+are the same object only when the discretisation is exact, and it is not —
+$|\nabla\rho|$ is not band-limited even when $\nabla\rho$ is, so the grid
+representation of $\varepsilon_{xc}$ is aliased and its exact derivative is not
+the sampled continuum derivative.
+
+The prediction that follows is testable and is asserted: the residual should
+track the reduced gradient $s$. Measured, median $|{\rm AD}-{\rm Elk}|$ is
+5.8e-6 in the lowest quarter of $s$ and 1.25e-5 in the highest.
+
+**Which one is "right" depends on what it is for.** For a variational or
+force calculation the derivative of the energy *actually evaluated* is the one
+that makes the energy stationary and the forces consistent — that is AD's. For
+reproducing Elk's own numbers, Elk's is. This is the same distinction §1l met
+from the other side, where the frozen assembly satisfied a gradient null that
+the finite-shift comparison rejected.
+
+### What this settles, and what it does not
+
+Item 2d is done for PBE. The premise the port is justified by — that AD
+supplies hand-coded derivative chains — is demonstrated on a real functional
+against a real reference, with the residual explained rather than absorbed into
+a tolerance.
+
+**Not done**: the muffin-tin GGA, which needs the angular-grid transform
+(`rbsht`/`rfsht`) and the muffin-tin gradient (`gradrfmt`), and the
+spin-polarised GGA potential (the energy densities here are already
+spin-resolved, but no spin-polarised fixture has been run). And the exchange
+enhancement's own limits are checked ($F_x\to1+\mu s^2$ and $F_x\to1+\kappa$)
+but the correlation's $H$ has no comparable closed-form limit checked beyond
+$H(0)=0$.

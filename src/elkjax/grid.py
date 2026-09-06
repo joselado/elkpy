@@ -54,8 +54,21 @@ def laplacian(values, groundstate):
     return to_real(-g2 * to_reciprocal(values, ngridg), ngridg)
 
 
-def gradient(values, groundstate):
+def _keep_mask(groundstate):
+    keep = np.zeros(int(groundstate["ngtot"]), dtype=bool)
+    keep[np.asarray(groundstate["igfft"])[:int(groundstate["ngvc"])] - 1] = True
+    return keep
+
+
+def gradient(values, groundstate, truncate=True):
     r""":math:`\nabla f` on the interstitial grid, spectrally: `(3, ngtot)`.
+
+    `truncate` reproduces `ggair_1.f90`, which **zeroes every component with
+    index above `ngvc`** before transforming back -- the same
+    :math:`|\mathbf G|\le 2k_{\max}` cutoff `trimrfg` applies to the
+    potential.  It is on by default because anything compared against Elk's
+    own GGA output has to see the same gradient Elk saw; a spectral gradient
+    without it is a different function.
 
     The adjoint of this operation is the divergence, which is what makes a
     GGA's :math:`-\nabla\cdot(\partial(\rho\varepsilon)/\partial\nabla\rho)`
@@ -64,6 +77,9 @@ def gradient(values, groundstate):
     gvec = jnp.asarray(reciprocal_vectors(groundstate))
     ngridg = groundstate["ngridg"]
     spectrum = to_reciprocal(values, ngridg)
+    if truncate:
+        spectrum = jnp.where(jnp.asarray(_keep_mask(groundstate)), spectrum,
+                             0.0)
     return jnp.stack([to_real(1j * gvec[a] * spectrum, ngridg)
                       for a in range(3)])
 
@@ -92,7 +108,6 @@ def trim(values, groundstate):
     relative to machine precision.
     """
     ngridg = groundstate["ngridg"]
-    keep = np.zeros(int(groundstate["ngtot"]), dtype=bool)
-    keep[np.asarray(groundstate["igfft"])[:int(groundstate["ngvc"])] - 1] = True
     spectrum = to_reciprocal(values, ngridg)
-    return to_real(jnp.where(jnp.asarray(keep), spectrum, 0.0), ngridg)
+    return to_real(
+        jnp.where(jnp.asarray(_keep_mask(groundstate)), spectrum, 0.0), ngridg)

@@ -685,14 +685,21 @@ def parse_groundstate_response(tokens):
                                    index to the FFT array position
       gc                        -- (ngvec,) |G|
       vgc                       -- (3, ngvec) G in Cartesian a.u.
-      rhomt, vclmt, vxcmt       -- (natmtot, npmtmax) muffin-tin density,
+      rhomt, vclmt, vxcmt,
+      exmt, ecmt                -- (natmtot, npmtmax) muffin-tin density,
                                    Coulomb and exchange-correlation
-                                   potentials, in ELK'S OWN PACKING (see
-                                   `unpack_muffin_tin`)
+                                   potentials and the exchange and
+                                   correlation ENERGY densities, in ELK'S OWN
+                                   PACKING (see `unpack_muffin_tin`)
       rhoir, vclir, vxcir,
-      vsir, cfunir              -- (ngtot,) the same functions plus the
+      exir, ecir, vsir, cfunir  -- (ngtot,) the same functions plus the
                                    Kohn-Sham potential and the characteristic
-                                   function, on the real-space FFT grid
+                                   function, on the real-space FFT grid.
+                                   `exir`/`ecir` are NOT passed through
+                                   `trimrfg` (only `vxcir` is), so they are
+                                   the raw pointwise output of the functional
+                                   and the exact reference for a
+                                   transcription of it
       cfunig                    -- (ngvec,) complex, in G-space
       vsig                      -- (NGVC,) complex, not (ngvec,): `genvsig`
                                    builds it on the COARSE grid, so it only
@@ -740,14 +747,14 @@ def parse_groundstate_response(tokens):
     flat, pos = _take(tokens, pos, 3 * ngvec, float)
     out["vgc"] = np.array(flat).reshape(3, ngvec, order="F")
     idxis = out["idxis"]
-    for key in ("rhomt", "vclmt", "vxcmt"):
+    for key in ("rhomt", "vclmt", "vxcmt", "exmt", "ecmt"):
         arr = np.zeros((natmtot, npmtmax))
         for ias in range(natmtot):
             n = int(npmt[int(idxis[ias]) - 1])
             flat, pos = _take(tokens, pos, n, float)
             arr[ias, :n] = flat
         out[key] = arr
-    for key in ("rhoir", "vclir", "vxcir", "vsir", "cfunir"):
+    for key in ("rhoir", "vclir", "vxcir", "exir", "ecir", "vsir", "cfunir"):
         flat, pos = _take(tokens, pos, ngtot, float)
         out[key] = np.array(flat)
     for key, count in (("cfunig", ngvec), ("vsig", int(out["ngvc"]))):

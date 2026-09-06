@@ -185,3 +185,106 @@ def test_the_ground_state_export_is_self_consistent(groundstate):
     fraction = float(groundstate["cfunig"][0].real)
     assert 0.1 < fraction < 0.95
     assert abs(groundstate["cfunir"].mean() - fraction) < 1e-10
+
+
+# ---------------------------------------------------------------------------
+# PBE: the energy densities exactly, and the potential from `jax.grad`
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def pbe_groundstate(tmp_path_factory):
+    """The same cell, converged with `xctype = 20` instead of 3."""
+    workdir = tmp_path_factory.mktemp("xc_pbe") / "si"
+    calculation = Structure(
+        avec=SI_AVEC,
+        species={"Si": [(0.0, 0.0, 0.0), (0.25, 0.25, 0.25)]},
+    ).get_calculation(workdir, xc="PBE", ngridk=(2, 2, 2), rgkmax=7.0)
+    calculation.ensure_ground_state()
+    with calculation.eigenstate_session() as session:
+        return session.ground_state()
+
+
+def _pbe_gradient(groundstate):
+    from elkjax import grid
+    vectors = np.asarray(grid.gradient(groundstate["rhoir"], groundstate))
+    return np.sqrt((vectors ** 2).sum(axis=0))
+
+
+def test_pbe_energy_densities_are_exact(pbe_groundstate):
+    """`exir` and `ecir` are the raw pointwise output of the functional --
+    `trimrfg` touches only `vxcir` -- so this comparison has nothing in it but
+    the transcription and the gradient.
+
+    The gradient has to be Elk's: `ggair_1.f90` zeroes every Fourier component
+    above `ngvc` before transforming back, which `elkjax.grid.gradient` does
+    by default.
+    """
+    from elkjax import xc
+    rho = pbe_groundstate["rhoir"]
+    gmod = _pbe_gradient(pbe_groundstate)
+    ex, ec = xc.pbe(0.5 * rho, 0.5 * rho, 0.5 * gmod, 0.5 * gmod, gmod)
+    for got, reference in ((ex, pbe_groundstate["exir"]),
+                           (ec, pbe_groundstate["ecir"])):
+        assert np.abs(reference).max() > 1e-3
+        assert np.abs(np.asarray(got) - reference).max() < 1e-14
+
+
+def test_the_functional_derivative_from_autodiff_matches_elks_hand_coded_one(
+        pbe_groundstate):
+    """The demonstration, and the reason the port exists.
+
+    Elk's PBE potential comes from Perdew's own hand-derived expression, which
+    needs the Laplacian of the density and (grad rho).(grad |grad rho|) as
+    extra inputs -- `ggair_1` computes both.  Nothing here computes either:
+    `jax.grad` of the discretised energy produces
+    -div(d(rho eps)/d(grad rho)) as the adjoint of a spectral gradient.
+
+    They agree to 2.4e-5 median relative, NOT to machine precision, and the
+    difference is not an error in either.  Elk discretises the exact continuum
+    functional derivative; AD returns the exact derivative of the discretised
+    energy.  Those are different objects whenever the discretisation is not
+    exact -- and it is not, because |grad rho| is not band-limited even when
+    grad rho is.  Asserted with the residual growing with the reduced gradient
+    s, which is what that explanation predicts and a transcription error would
+    not do.
+
+    For scale: the gradient terms are 11% of v_xc here (asserted), so the
+    disagreement is about 1% of the correction AD is reproducing from nothing.
+    """
+    import jax
+    import jax.numpy as jnp
+    from elkjax import grid, xc
+    rho = jnp.asarray(pbe_groundstate["rhoir"])
+    reference = pbe_groundstate["vxcir"]
+
+    def energy(density):
+        vectors = grid.gradient(density, pbe_groundstate)
+        gmod = jnp.sqrt(jnp.sum(vectors * vectors, axis=0))
+        ex, ec = xc.pbe(0.5 * density, 0.5 * density, 0.5 * gmod, 0.5 * gmod,
+                        gmod)
+        return jnp.sum(density * (ex + ec))
+
+    potential = np.asarray(grid.trim(
+        np.asarray(jax.grad(energy)(rho)), pbe_groundstate))
+    residual = np.abs(potential - reference)
+    scale = np.abs(reference).max()
+    assert np.median(residual) / scale < 1e-3
+    assert residual.max() / scale < 1e-2
+
+    # the gradient terms are a large part of what is being reproduced
+    lda = xc.pwca(0.5 * np.asarray(rho), 0.5 * np.asarray(rho))
+    v_lda = np.asarray(lda[2]) + np.asarray(lda[4])
+    correction = np.abs(reference - v_lda).max()
+    assert correction / scale > 0.05, correction / scale
+    assert residual.max() < 0.05 * correction
+
+    # and the residual tracks the reduced gradient, as the explanation says
+    gmod = _pbe_gradient(pbe_groundstate)
+    reduced = gmod / (2.0 * (3.0 * np.pi ** 2 * np.asarray(rho)) ** (1 / 3)
+                      * np.asarray(rho))
+    order = np.argsort(reduced)
+    quarter = len(order) // 4
+    low = np.median(residual[order[:quarter]])
+    high = np.median(residual[order[-quarter:]])
+    assert high > 1.5 * low, (low, high)
