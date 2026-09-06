@@ -4342,9 +4342,10 @@ generates with `apword = 2`, since every species file Elk ships sets
 $\epsilon\,\kappa(S)\,\lVert H\rVert$ depends on and which had only ever been
 measured on synthetic matrices. The numbers are in `docs/jax_port_phase0.md`;
 the finding that matters is that the cheap Cholesky-diagonal estimate §8(b)
-proposes is low by a factor of order $10^2$–$10^3$ on real data, against 140x
-on the synthetic case — and it is a *lower* bound, which is the dangerous
-direction for a tolerance meant to bound from above.
+proposes is low by between 300x and 40,000x on real data, against 140x on the
+synthetic case — and worse, it is nearly *constant* while the truth varies by
+two orders, so it carries no signal at all. It is a *lower* bound, which is the
+dangerous direction for a tolerance meant to bound from above.
 
 The response is plain text over the session's pipe and is $O(n_{\rm mat}^2)$
 tokens, so its cost tracks the matrix rather than the physics: 0.2 s at

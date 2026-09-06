@@ -1261,8 +1261,9 @@ than "a lower bound, 140x low": it is **uninformative**, moving only 8.05→9.25
 74-fold range of $\kappa$, so it must not be used to set a threshold. And the norm in
 that formula should be $\lVert L^{-1}HL^{-\dagger}\rVert$, not $\lVert H\rVert$ — 3x
 larger here. Knock-on: the study's Phase 1 adversarial `soc_scale` sweep 3000→3 stops
-about six orders of magnitude above the gap at which its own refusal criterion is meant
-to fire.
+three to six orders of magnitude above the gap at which its own refusal criterion is
+meant to fire (the spread is the unknown curvature of the gap in the scale), so it has to
+be extended below `soc_scale=1`.
 
 **Two mixers, one caveat about Elk's own.** Unrolling the SCF instead of differentiating
 it implicitly is not merely inaccurate: measured, unrolled *Anderson* reaches a forward

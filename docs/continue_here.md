@@ -239,8 +239,9 @@ None of these is in the study, and each cost a wrong answer to find.
   → 9.25 across a 74-fold range of κ, so the "low by" factor grows to 39,000x purely
   because the truth grew. And the tolerance should use ‖L⁻¹HL⁻ᴴ‖, not ‖H‖ — 3x larger
   here. **Knock-on for Phase 1**: the study's adversarial `soc_scale` sweep
-  3000 → 3 stops about six orders of magnitude short of the gap at which its own
-  refusal criterion is meant to fire (§0b(ii) point 5).
+  3000 → 3 stops three to six orders of magnitude short of the gap at which its own
+  refusal criterion is meant to fire, so it has to be extended below `soc_scale=1`
+  (§0b(ii) point 5 — the spread is the unknown curvature of the gap in the scale).
 - **The self-consistent Fermi level.** 0a covers smearing at *fixed* μ. Fixed electron
   number adds a second constraint whose rule §8b gives in closed form,
   `dmu/deps_i = w_i f'_i / sum_j w_j f'_j`. Untested.

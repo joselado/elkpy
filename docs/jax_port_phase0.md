@@ -488,17 +488,25 @@ with the cutoff alongside $\kappa$ itself, and it is free to include.
 **5. The study's Phase 1 adversarial criterion, as written, never reaches its own
 threshold.** §6 proposes sweeping graphene's `soc_scale` 3000 → 300 → 30 → 3 and
 requiring "an explicit refusal once the sampled gap falls below the tolerance §8(b)
-derives". Taking §20's measured 1.4 eV gap at `soc_scale=3000`, assuming the gap is
-linear in the scale (it is a multiplier on the SOC term, so this is right at weak
-coupling and if anything *under*-states the small-scale gap, the curve saturating at
-large coupling), and using h-BN's $6.5\times10^{-11}$ Ha as the proxy tolerance for
-another 2D honeycomb in vacuum: at `soc_scale=3` the gap is $\sim1.4$ meV
-$=5\times10^{-5}$ Ha, which is **six orders of magnitude above** the tolerance. The
-sweep would have to continue to `soc_scale`$\,\approx4\times10^{-6}$ for the refusal to
-be required — well below 1, which patch 0001 permits since `socscfsp` is a plain
-multiplier. This is an order-of-magnitude argument resting on an extrapolation, not a
-measurement; the correction to the test design is the same either way, and it is
-cheap to make.
+derives". Extrapolate §20's measured 1.4 eV gap at `soc_scale=3000` down, and use h-BN's
+$6\times10^{-11}$ Ha as the proxy tolerance for another 2D honeycomb in vacuum:
+
+| assumed scaling | gap at `soc_scale=3` | above the tolerance by | refusal needs `soc_scale` |
+|---|---|---|---|
+| linear | 1.4 meV = 5.1e-5 Ha | 8.5e5 | $\approx4\times10^{-6}$ |
+| quadratic | 1.4 µeV = 5.1e-8 Ha | 8.5e2 | $\approx0.1$ |
+
+**The curvature is genuinely unknown and the range is stated rather than guessed.**
+Neither extrapolation reproduces graphene's real intrinsic gap ($\sim$24 µeV, Gmitra
+*et al.* 2009): linear overshoots it by ~20x at `soc_scale=1`, quadratic undershoots by
+~150x. That is not surprising — at `soc_scale=3000` the SOC term rivals the bandwidth,
+so the gap at $K$ need not be the Kane-Mele gap at all — but it does mean the shortfall
+is somewhere between **three and six orders of magnitude**, not a single number. Either
+way the conclusion is the same and is the only thing that matters here: the sweep has to
+continue **below `soc_scale=1`**, which patch 0001 permits since `socscfsp` is a plain
+multiplier, and the criterion as written is unfalsifiable because it stops before its own
+threshold. This is an extrapolation, not a measurement; measuring the gap at two small
+scales would settle the curvature cheaply and is the natural first step of that test.
 
 ## 0e. Compile time and peak memory for one traced SCF step
 
