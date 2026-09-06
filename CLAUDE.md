@@ -1238,8 +1238,8 @@ Phase 0e asks for production shapes that this machine cannot hold.
 | 0a | reverse-mode implicit diff (`custom_vjp` + GMRES) through an SCF fixed point whose matvec passes through `eigh` at a multiplet | **done — it works**, ≤1e-14 against a dense IFT reference on four spectra including an exactly degenerate one; the naive rule fails on the same machinery |
 | 0a′ | the same at second order — decides the full port over §9.2's hybrid | **done — it works**, via `projector.sign_projector` (matrix sign by Newton-Schulz: no eigensolve, so differentiable to any order); `grad(grad)` through the fixed point agrees with central FD to 1.2e-9 where the `eigh`-based rule gives `NaN`. Use `grad(grad)`, never `jax.hessian` — a `custom_vjp` cannot be forward-differentiated |
 | 0c | `jax.jvp(match)` against `dmatch.f90`'s analytic $d(\texttt{apwalm})/dr$ | not started |
-| 0d | `vmap(eigh)` vs `lax.map` at $n=1000$ on a real GPU | **deferred: no GPU** |
-| 0e | `jit` compile time and peak memory for one traced SCF step at production shapes | AOT-only, per the rules above |
+| 0d | `vmap(eigh)` vs `lax.map` at $n=1000$ on a real GPU | **timing deferred (no GPU); memory settled by 0e** — at production shapes a `lax.scan` accumulator holds 0.411 GiB of temporaries and `vmap` holds 40.2 GiB, so `vmap` over the k-axis does not fit on a 40 GB device whatever the timing says |
+| 0e | `jit` compile time and peak memory for one traced SCF step at production shapes | **done — `docs/jax_port_phase0.md`.** Compile time is FLAT in the shapes (0.46 s at both $(200,4)$ and $(3000,100)$) and roughly **quadratic in unrolled op count** (0.44 s → 32.4 s for Gram-Schmidt over 8 → 128 columns), while a `lax.scan` over 4x more radial points costs nothing. Design rule: `scan` repeated structure, unroll only what must be |
 
 **Two mixers, one caveat about Elk's own.** Unrolling the SCF instead of differentiating
 it implicitly is not merely inaccurate: measured, unrolled *Anderson* reaches a forward

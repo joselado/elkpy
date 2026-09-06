@@ -6,8 +6,10 @@ what was run, the numbers it produced, and what it settles. Reproduce with
 ```bash
 PYTHONPATH=src taskset -c 0-3 python3 -m elkjax.phase0b     # the projector rule
 PYTHONPATH=src taskset -c 0-3 python3 -m elkjax.phase0a     # the SCF fixed point
+PYTHONPATH=src taskset -c 0-3 python3 -m elkjax.phase0e     # compile cost, AOT only
 ELKPY_RUN_SLOW_TESTS=1 PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
-    tests/test_jax_projector.py tests/test_jax_fixedpoint.py -q
+    tests/test_jax_projector.py tests/test_jax_fixedpoint.py \
+    tests/test_jax_compile_cost.py -q
 ```
 
 `taskset` is not decoration: `.claude/settings.json`'s `OMP_NUM_THREADS=1` does **not**
@@ -380,3 +382,78 @@ Berry curvature (CLAUDE.md §13): window the whole degenerate group together.
   belongs to Phase 0a, where the electron-number constraint enters.
 - **No LAPW matrix has been near this.** Every $S$ here is a synthetic SPD matrix with a
   prescribed condition number. The measurements pin the *arithmetic*, not Elk.
+
+---
+
+## 0e. Compile time and peak memory for one traced SCF step
+
+Study §6 item 0e wants both numbers at production shapes ($n_{\rm mat}\approx3000$,
+$n_{\bf k}\approx100$), and warns that §8(d)'s reassuring toy-scale figures
+($n\le400$, 4 k-points) must not be extrapolated, because §3 proposes unrolled
+constructs — an 8-pass corrector, unrolled Gram-Schmidt, a scan over ~700 radial
+points — inside a step that also contains per-k eigensolves.
+
+**Nothing was executed.** `jax.jit(f).lower(*avals).compile()` builds the executable from
+abstract shapes, so the 26.8 GiB this machine cannot hold was never allocated; peak RSS
+for the whole sweep is 1.4 GB. The shapes, dtype, loop structure and op-count-inflating
+constructs are the real ones; the *arithmetic* inside them is a stand-in, since `match`,
+Weinert and XC are Phase 1 and 2 work. These are therefore a lower bound on the real
+step's cost — the useful direction for a "is this a wall?" question.
+
+### Compile time is flat in the shapes
+
+| $n_{\rm mat}$ | $n_{\bf k}$ | k axis | compile (s) | arguments (GiB) | temporaries (GiB) |
+|---|---|---|---|---|---|
+| 200 | 4 | scan | 0.49 | 0.005 | 0.002 |
+| 3000 | 4 | scan | 0.46 | 1.073 | 0.411 |
+| 3000 | 25 | scan | 0.46 | 6.706 | 0.411 |
+| 3000 | 100 | scan | 0.46 | 26.822 | 0.411 |
+| 3000 | 100 | `lax.map` | 0.50 | 26.822 | 0.413 |
+| 3000 | 100 | `vmap` | 0.51 | 26.822 | **40.233** |
+
+A 15,000-fold increase in problem size changes compile time by less than 30%, which is
+within the run-to-run scatter. **Hazard K is not a wall from problem size**: XLA compiles
+an HLO graph whose op count is independent of the tensor extents.
+
+The `arguments` column is an independent confirmation of the figure CLAUDE.md quotes:
+$H$ and $S$ over 100 k-points at $n=3000$ really are 26.8 GiB, against ~28 GiB available.
+
+### The k-axis, which settles the memory half of item 0d
+
+Item 0d's *timing* question needs a GPU this machine does not have. Its memory question
+does not, and the answer is not close: at the production shape a `lax.scan` accumulator
+holds **0.411 GiB** of temporaries and `vmap` holds **40.2 GiB** — 98x, and above this
+machine's entire RAM. The `scan` figure is *exactly* independent of $n_{\bf k}$;
+`lax.map` sits between the two, at 0.413 GiB, because it still stacks the per-k
+**outputs** ($n_{\bf k}\times n_{\rm mat}$, not $n_{\bf k}\times n_{\rm mat}^2$) — small,
+but not nothing, and avoidable by carrying an accumulator instead.
+
+So `vmap` over the k-axis is not a style preference to be settled by a benchmark. On a
+40 GB device it does not fit, whatever the GPU timing turns out to be.
+
+### Where the cost actually is: unrolled op count
+
+At one fixed shape ($n_{\rm mat}=800$, $n_{\bf k}=4$), varying only how much is unrolled:
+
+| construct | compile (s) | temporaries (GiB) |
+|---|---|---|
+| no unrolled Gram-Schmidt | 0.19 | 0.029 |
+| baseline (8 local orbitals, 8-pass corrector) | 0.44 | 0.029 |
+| 32 local orbitals | 1.84 | 0.029 |
+| 64 local orbitals | 6.65 | 0.029 |
+| 128 local orbitals | 32.38 | 0.029 |
+| 64-pass corrector | 1.28 | 0.029 |
+| 256-pass corrector | 16.47 | 0.029 |
+| `lax.scan` over 2800 radial points instead of 700 | 0.37 | 0.029 |
+
+The growth is roughly **quadratic in the unrolled op count** — a 4x longer Gram-Schmidt
+costs 17.6x (exponent 2.07), a 4x longer corrector 12.9x (exponent 1.85) — and it is
+invisible in the memory column, so it cannot be traded against buffers. Meanwhile
+quadrupling a `lax.scan`'s trip count costs **nothing**, because a scan is a loop in the
+HLO rather than a tape.
+
+The design rule follows directly, and it is the useful output of this item: **`scan`
+every repeated structure and unroll only what genuinely must be**. Elk's `nlotot` runs to
+the low hundreds for a heavy cell, so §3.2's unrolled Gram-Schmidt over the local-orbital
+block is precisely the construct that would put a step into the tens of seconds per
+compile — per shape, and a different `ngridk` or `rgkmax` is a different shape.
