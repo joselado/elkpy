@@ -103,6 +103,8 @@ __all__ = [
     "projector_tolerance",
     "occupied_window",
     "occupied_projector",
+    "smeared_occupied_projector",
+    "fixed_number_occupied_projector",
     "elk_occupied_projector",
     "occupied_band_count",
 ]
@@ -637,6 +639,35 @@ def occupied_projector(export, kc, nocc, tol, vsig=None):
 
     reduced, _ = cholesky_reduce(*eigenproblem_at(export, kc, vsig=vsig))
     return hard_window_projector(reduced, nocc, tol)
+
+
+def smeared_occupied_projector(export, kc, mu, width, tol, vsig=None):
+    r""":math:`\tilde P=\sum_i f(\varepsilon_i-\mu)\,|y_i\rangle\langle y_i|` at fixed :math:`\mu`.
+
+    The smeared sibling of :func:`occupied_projector`, and the configuration in which
+    the divided-difference kernel's near-degenerate branch is not vacuous: for a hard
+    window both branches of a same-side pair are identically zero, so ``tol`` cannot
+    matter, while here the branch value is :math:`f'=-1/4w` at a half-filled level.
+    Fermi-Dirac is Elk's own ``stype=3`` and ``width`` is its ``swidth``.
+    """
+    from .projector import smeared_projector
+
+    reduced, _ = cholesky_reduce(*eigenproblem_at(export, kc, vsig=vsig))
+    return smeared_projector(reduced, mu, width, tol)
+
+
+def fixed_number_occupied_projector(export, kc, nelec, width, tol, vsig=None):
+    r"""The same at fixed **electron number**, with :math:`\mu` solved for.
+
+    ``nelec`` counts states, not electrons: Elk's ``occmax`` is 2 without spin-orbit,
+    so a cell with 8 valence electrons has ``nelec=4`` here.  The self-consistent Fermi
+    level's derivative is :func:`elkjax.projector.fermi_level`'s ``custom_jvp``; this is
+    the composition, so the chain rule supplies the extra term.
+    """
+    from .projector import fixed_number_projector
+
+    reduced, _ = cholesky_reduce(*eigenproblem_at(export, kc, vsig=vsig))
+    return fixed_number_projector(reduced, nelec, width, tol)
 
 
 def elk_occupied_projector(export, nocc):

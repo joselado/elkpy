@@ -222,3 +222,77 @@ def multiplet_sum_derivative(h, dh, occ, s=None):
     evals, evecs = np.linalg.eigh(h)
     p = (evecs * np.asarray(occ, dtype=float)) @ evecs.conj().T
     return float(np.real(np.trace(p @ dh)))
+
+
+def fermi_divided_difference_kernel(evals, mu, width, crossover=1.0):
+    r"""The Fermi-Dirac kernel :math:`K_{ij}`, computed **without cancellation**.
+
+    :func:`divided_difference_kernel` forms :math:`(f_i-f_j)/(\\lambda_i-\\lambda_j)`
+    literally, so at a close pair it subtracts two nearly equal occupations and loses
+    :math:`\\sim\\epsilon\\,w/\\Delta\\lambda` of relative accuracy; the ``tol`` branch
+    replaces it by :math:`f'(\\bar\\lambda)`, which is right only in the limit.  Neither
+    is an oracle.  This is, because for the logistic function the difference quotient
+    has a closed form with no subtraction in it at all:
+
+    .. math::
+
+        K_{ij} = -\\frac{1}{4w}\\,
+                 \\frac{\\mathrm{sinh}(z_{ij})/z_{ij}}
+                       {\\cosh u_i \\, \\cosh u_j},
+        \\qquad u_i=\\frac{\\lambda_i-\\mu}{2w},\\quad z_{ij}=u_i-u_j ,
+
+    obtained from :math:`f_a-f_b=-2e^{(a+b)/2w}\\sinh(z)\\,f_af_b` and
+    :math:`f_ie^{u_i}=1/(2\\cosh u_i)`.  It reduces to :math:`f'=-f(1-f)/w` on the
+    diagonal exactly, and is the SAME analytic function of the matrix either way -- so
+    it decides, rather than assumes, which branch of the kernel a given pair wants.
+
+    Used above ``crossover`` in :math:`|z|` the direct quotient is already accurate (the
+    two occupations differ by an :math:`O(1)` fraction) and is numerically the safer of
+    the two once :math:`\\cosh` starts to overflow, so it is taken there.
+    """
+    evals = np.asarray(evals, dtype=float)
+    u = np.clip(0.5 * (evals - mu) / width, -350.0, 350.0)
+    z = u[:, None] - u[None, :]
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        sinhc = np.where(np.abs(z) < 1e-12, 1.0, np.sinh(np.clip(z, -300, 300))
+                         / np.where(z == 0.0, 1.0, z))
+        stable = -0.25 / width * sinhc / np.outer(np.cosh(u), np.cosh(u))
+        f = 1.0 / (1.0 + np.exp(np.clip(2.0 * u, -600, 600)))
+        dl = evals[:, None] - evals[None, :]
+        direct = (f[:, None] - f[None, :]) / np.where(dl == 0.0, 1.0, dl)
+    return np.where(np.abs(z) <= crossover, stable, direct)
+
+
+def dprojector_fermi(h, dh, mu, width, s=None, dmu=None):
+    r""":math:`dP` for Fermi-Dirac occupations, from the cancellation-free kernel.
+
+    The oracle for Phase 1i.  ``dmu`` adds the fixed-electron-number term
+    :math:`-V\\,\\mathrm{diag}(f')\\,V^\\dagger\\,d\\mu`; pass ``dmu="selfconsistent"``
+    to have it supplied by study §8(b)'s closed form
+    :math:`d\\mu=\\sum_j f'_jA_{jj}/\\sum_j f'_j` at equal k-point weights.
+    """
+    if s is not None:
+        h, _ = cholesky_reduce(h, s)
+    evals, evecs = np.linalg.eigh(h)
+    kernel = fermi_divided_difference_kernel(evals, mu, width)
+    a = evecs.conj().T @ dh @ evecs
+    dp = evecs @ (kernel * a) @ evecs.conj().T
+    if dmu is None:
+        return dp
+    _, docc = fermi_dirac(evals, mu, width)
+    if isinstance(dmu, str):
+        dmu = float(np.sum(docc * np.real(np.diag(a))) / np.sum(docc))
+    return dp - (evecs * docc) @ evecs.conj().T * dmu
+
+
+def fermi_level(evals, nelec, width):
+    """:math:`\\mu` with :math:`\\sum_i f(\\lambda_i-\\mu)=N`, by bisection in NumPy."""
+    evals = np.asarray(evals, dtype=float)
+    lo, hi = evals.min() - 50.0 * width, evals.max() + 50.0 * width
+    for _ in range(200):
+        mid = 0.5 * (lo + hi)
+        if fermi_dirac(evals, mid, width)[0].sum() < nelec:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)

@@ -62,6 +62,10 @@ __all__ = [
     "naive_hard_window_projector",
     "smeared_projector",
     "naive_smeared_projector",
+    "direct_quotient_projector",
+    "fermi_level",
+    "fixed_number_projector",
+    "check_fermi_level_determined",
     "fermi_dirac",
     "window_gap",
 ]
@@ -133,13 +137,18 @@ def naive_hard_window_projector(h, nocc):
 # ------------------------------------------------------------ smeared occupations
 
 
-@functools.partial(jax.custom_jvp, nondiff_argnums=(1, 2, 3))
+@functools.partial(jax.custom_jvp, nondiff_argnums=(2, 3))
 def smeared_projector(h, mu, width, tol=0.0):
-    r""":math:`P=\sum_i f(\lambda_i)|i\rangle\langle i|` with Fermi-Dirac occupations.
+    r""":math:`P=\sum_i f(\lambda_i-\mu)|i\rangle\langle i|`, Fermi-Dirac occupations.
 
-    ``mu`` is held fixed.  The self-consistent Fermi level is a separate custom rule —
-    study §8(b) gives it in closed form, :math:`d\mu/d\varepsilon_i = w_if'_i/\sum_j
-    w_jf'_j` — and belongs to Phase 0a, where the electron-number constraint enters.
+    ``mu`` is a **differentiable** primal, not a constant.  That is what lets the
+    fixed-electron-number Fermi level of :func:`fermi_level` be composed here and get
+    the right chain rule for free: study §8(b)'s
+    :math:`d\mu/d\varepsilon_i = w_if'_i/\sum_j w_jf'_j` is that function's own JVP,
+    and :func:`fixed_number_projector` is nothing but the composition of the two.
+
+    The :math:`\mu` tangent enters as :math:`-V\,\mathrm{diag}(f')\,V^\dagger\,d\mu`,
+    since :math:`\partial f(\lambda-\mu)/\partial\mu = -f'(\lambda)`.
     """
     evals, evecs = jnp.linalg.eigh(h)
     occ, _ = fermi_dirac(evals, mu, width)
@@ -147,13 +156,14 @@ def smeared_projector(h, mu, width, tol=0.0):
 
 
 @smeared_projector.defjvp
-def _smeared_projector_jvp(mu, width, tol, primals, tangents):
-    (h,), (dh,) = primals, tangents
+def _smeared_projector_jvp(width, tol, primals, tangents):
+    (h, mu), (dh, dmu) = primals, tangents
     evals, evecs = jnp.linalg.eigh(h)
     occ, docc = fermi_dirac(evals, mu, width)
     kernel = divided_difference_kernel(evals, occ, docc, tol)
     a = evecs.conj().T @ dh @ evecs
-    return _projector(evecs, occ), evecs @ (kernel * a) @ evecs.conj().T
+    dp = evecs @ (kernel * a) @ evecs.conj().T
+    return _projector(evecs, occ), dp - _projector(evecs, docc) * dmu
 
 
 def naive_smeared_projector(h, mu, width):
@@ -161,6 +171,121 @@ def naive_smeared_projector(h, mu, width):
     evals, evecs = jnp.linalg.eigh(h)
     occ, _ = fermi_dirac(evals, mu, width)
     return _projector(evecs, occ)
+
+
+def direct_quotient_projector(h, mu, width):
+    r"""The safe-:math:`K` rule with the near-degenerate branch **switched off**.
+
+    ``smeared_projector(h, mu, width, tol=0.0)``, given a name because it is the
+    third route Phase 1i needs and it is not the same thing as
+    :func:`naive_smeared_projector`.  Both avoid the eigenvector derivative; this one
+    still forms :math:`(f_i-f_j)/(\lambda_i-\lambda_j)` literally, so it is exposed to
+    the *numerator's* cancellation but not to the eigenvector rule's :math:`1/\delta\lambda`
+    amplification.  Separating the two is what shows which of them a real LAPW multiplet
+    actually trips (`docs/jax_port_phase1.md` §1i).
+    """
+    return smeared_projector(h, mu, width, 0.0)
+
+
+# ------------------------------------------------ the self-consistent Fermi level
+
+
+@functools.partial(jax.custom_jvp, nondiff_argnums=(1, 2, 3))
+def fermi_level(h, nelec, width, steps=100):
+    r""":math:`\mu` fixed by the electron count, :math:`\sum_i f(\lambda_i-\mu)=N`.
+
+    Study §8(b) gives the derivative in closed form and
+    ``docs/continue_here.md`` §3 records it as untested:
+
+    .. math::
+
+        \frac{d\mu}{d\varepsilon_i} = \frac{w_i f'_i}{\sum_j w_j f'_j}
+        \qquad\Longrightarrow\qquad
+        d\mu = \frac{\sum_j f'_j\,(V^\dagger\,\delta H\,V)_{jj}}{\sum_j f'_j},
+
+    which follows from differentiating the constraint: :math:`dN=\sum_j f'_j(d\lambda_j
+    - d\mu)=0`.  The weights :math:`w_j` are the k-point weights of a full Brillouin-zone
+    sum; at the single k-point of Phase 1 they are equal and cancel, so what is tested
+    here is the *shape* of the rule and not the zone integration.
+
+    **It is gauge-invariant at a multiplet even though it uses** :math:`A_{jj}`.  Inside a
+    degenerate group :math:`f'_j` is constant, so :math:`\sum_j f'_j A_{jj}` over that
+    group is :math:`f'\,\mathrm{Tr}_{\rm group}A` — a trace, invariant under the arbitrary
+    unitary ``eigh`` picks there.  That is the same reason study §8(b) lists
+    :math:`\sum_i f_i\lambda_i` as the one eigenvalue quantity safe *at* a degeneracy, and
+    it is why no :math:`1/(\lambda_i-\lambda_j)` appears in this rule at all.
+
+    **The denominator is a physical singularity, not a numerical one.**  :math:`\sum_j
+    f'_j\to0` for a gapped system at small ``width``: no state responds, the constraint
+    stops determining :math:`\mu`, and :math:`d\mu` is genuinely :math:`0/0`.
+    :func:`check_fermi_level_determined` is the host-side refusal.
+
+    The primal is a bisection, which is never differentiated -- that is the whole point of
+    a ``custom_jvp`` here, since unrolling a root find is the Phase 0a lesson about
+    unrolled solvers repeated in miniature.
+    """
+    evals = jnp.linalg.eigvalsh(h)
+    lo = evals[0] - 50.0 * width
+    hi = evals[-1] + 50.0 * width
+
+    def body(_, bounds):
+        lo, hi = bounds
+        mid = 0.5 * (lo + hi)
+        count = jnp.sum(fermi_dirac(evals, mid, width)[0])
+        return jnp.where(count < nelec, mid, lo), jnp.where(count < nelec, hi, mid)
+
+    lo, hi = jax.lax.fori_loop(0, steps, body, (lo, hi))
+    return 0.5 * (lo + hi)
+
+
+@fermi_level.defjvp
+def _fermi_level_jvp(nelec, width, steps, primals, tangents):
+    (h,), (dh,) = primals, tangents
+    mu = fermi_level(h, nelec, width, steps)
+    evals, evecs = jnp.linalg.eigh(h)
+    _, docc = fermi_dirac(evals, mu, width)
+    a = jnp.real(jnp.einsum("ji,jk,ki->i", evecs.conj(), dh, evecs))
+    return mu, jnp.sum(docc * a) / jnp.sum(docc)
+
+
+def fixed_number_projector(h, nelec, width, tol=0.0, steps=100):
+    r""":math:`P` at **fixed electron number** rather than fixed :math:`\mu`.
+
+    Nothing but :func:`smeared_projector` composed with :func:`fermi_level`; the chain
+    rule then supplies the extra term the fixed-:math:`\mu` derivative is missing,
+
+    .. math::
+
+        dP\big|_N = dP\big|_\mu - V\,\mathrm{diag}(f')\,V^\dagger\,d\mu ,
+
+    which is not a correction of the same order as the rest -- at a half-filled level it
+    is comparable to the whole fixed-:math:`\mu` derivative.
+    """
+    return smeared_projector(h, fermi_level(h, nelec, width, steps), width, tol)
+
+
+def check_fermi_level_determined(h, nelec, width, steps=100, tol=1e-8):
+    r"""Refuse a Fermi level the electron count does not actually determine.
+
+    Returns :math:`(\mu, \sum_j |f'_j|)`; raises ``ValueError`` when the sum is below
+    ``tol``, i.e. when every state is more than a few ``width`` from :math:`\mu` and
+    :math:`d\mu` is :math:`0/0`.  This is the gapped-insulator case, where the Fermi
+    level may be placed anywhere in the gap and its derivative is not a number --
+    the same host-side shape as :func:`check_sign_window` and
+    ``elkjax.hamiltonian.occupied_window``.
+    """
+    mu = float(fermi_level(h, nelec, width, steps))
+    evals = np.asarray(jnp.linalg.eigvalsh(h))
+    x = np.clip((evals - mu) / width, -600.0, 600.0)
+    f = 1.0 / (1.0 + np.exp(x))
+    response = float(np.sum(f * (1.0 - f)) / width)
+    if response < tol:
+        raise ValueError(
+            f"sum |f'| = {response:.3e} is below {tol:.3e}: no state lies within a few "
+            f"smearing widths of mu = {mu:.6f}, so the electron-number constraint does "
+            f"not determine the Fermi level and dmu/dtheta is 0/0. This is a gapped "
+            f"system at this width; use a fixed mu, or a hard window.")
+    return mu, response
 
 
 # ------------------------------------------------------- the eigensolver-free route

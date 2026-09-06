@@ -299,3 +299,146 @@ def test_failure_mode_depends_on_the_eigensolver():
         rel = abs(r["naive_rev"] - r["exact"]) / abs(r["exact"])
         assert np.isnan(r["naive_rev"]) or rel > 1e-3
         assert abs(r["safe_rev"] - r["exact"]) < 1e-9 * abs(r["exact"])
+
+
+# ---------------------------------------------------------------------------
+# Phase 1i: the smeared kernel's exact oracle, and the self-consistent Fermi level.
+# The real-matrix half of this is `tests/test_calculation_lapw_smearing.py`.
+# ---------------------------------------------------------------------------
+
+
+def test_the_exact_fermi_kernel_is_f_prime_on_the_diagonal():
+    """The closed form must reduce to f' exactly, or it is not the same function.
+
+    This is the whole claim of `fermi_divided_difference_kernel`: one analytic
+    expression covering both branches, so it can arbitrate between them rather than
+    being a third opinion.
+    """
+    evals = np.array([-0.5, -1e-9, 1e-9, 0.3, 5.0])
+    for width in (1e-3, 1e-2, 1e-1):
+        kernel = ref.fermi_divided_difference_kernel(evals, 0.0, width)
+        _, docc = ref.fermi_dirac(evals, 0.0, width)
+        assert np.abs(np.diag(kernel) - docc).max() < 1e-14 * max(np.abs(docc).max(), 1.0)
+
+
+def test_the_direct_quotient_loses_accuracy_as_the_smearing_widens():
+    """Cancellation in `(f_i - f_j)` costs ~eps*w/dlambda, so BROADER smearing is worse.
+
+    That is the opposite of the intuition that a smoother occupation is safer, and it
+    is why `tol` cannot be a fixed number: what it has to beat is set by the width as
+    well as by the splitting.  Asserted as a growth rate, not a threshold.
+    """
+    split = 1e-15
+    evals = np.array([-1.0, -0.5, -0.5 * split, 0.5 * split, 0.5, 1.0])
+    errors = []
+    for width in (1e-3, 1e-2, 1e-1):
+        exact = ref.fermi_divided_difference_kernel(evals, 0.0, width)[2, 3]
+        f, _ = ref.fermi_dirac(evals, 0.0, width)
+        quotient = (f[2] - f[3]) / (evals[2] - evals[3])
+        errors.append(abs(quotient - exact) / abs(exact))
+    assert errors[2] > 30 * errors[0], errors        # measured 8.9e-5, 8.0e-4, 2.1e-2
+    assert errors[0] < 1e-3 and errors[2] > 1e-2, errors
+
+
+def test_the_fermi_level_rule_matches_finite_differences():
+    """Study §8(b)'s dmu/deps_i = w_i f'_i / sum_j w_j f'_j, tested for the first time.
+
+    `docs/continue_here.md` §3 lists the closed form as untested.  The primal is a
+    bisection and is never differentiated -- unrolling a root find is the Phase 0a
+    lesson about unrolled solvers in miniature -- so the JVP is the whole content.
+    """
+    n = 12
+    h = ref.hermitian_from_spectrum(np.linspace(-1.0, 1.0, n), 3)
+    hj = jnp.asarray(h)
+    for j in range(3):
+        d = ref.random_hermitian_direction(n, 700 + j)
+        dj = jnp.asarray(d)
+        ad = float(jax.jvp(lambda t: pj.fermi_level(hj + t * dj, 6.0, 0.1),
+                           (0.0,), (1.0,))[1])
+        step = 1e-5
+        fd = (ref.fermi_level(np.linalg.eigvalsh(h + step * d), 6.0, 0.1)
+              - ref.fermi_level(np.linalg.eigvalsh(h - step * d), 6.0, 0.1)) / (2 * step)
+        assert abs(ad - fd) < 1e-7 * max(abs(fd), 1e-3), (ad, fd)
+
+
+def test_a_multiplet_at_the_fermi_level_does_not_break_the_mu_rule():
+    """The rule uses A_jj, which is gauge-dependent -- but only its f'-weighted SUM.
+
+    Inside a degenerate group f' is constant, so that sum is f' Tr[A] over the group,
+    invariant under the arbitrary unitary `eigh` picks there.  Tested by rotating the
+    degenerate block explicitly and requiring dmu to be unchanged; a per-state
+    quantity, which is what the naive eigenvalue derivative would need, is NOT
+    invariant under the same rotation, and that is asserted alongside so the check
+    cannot pass on a rotation that happens to do nothing.
+    """
+    evals = np.array([-1.0, 0.0, 0.0, 0.0, 1.0, 2.0])
+    h = ref.hermitian_from_spectrum(evals, 4)
+    d = ref.random_hermitian_direction(6, 77)
+    lam, v = np.linalg.eigh(h)
+    mu = ref.fermi_level(lam, 3.0, 0.05)          # NOT 0: the multiplet is only half in
+    _, docc = ref.fermi_dirac(lam, mu, 0.05)
+
+    def dmu(vecs):
+        a = np.real(np.diag(vecs.conj().T @ d @ vecs))
+        return float(np.sum(docc * a) / np.sum(docc)), a
+
+    plain, a_plain = dmu(v)
+    block = np.eye(6, dtype=complex)
+    block[1:4, 1:4] = np.linalg.qr(ref.random_hermitian_direction(3, 78) + 3j * np.eye(3))[0]
+    rotated, a_rotated = dmu(v @ block)
+    assert abs(plain) > 1e-6, plain
+    assert abs(rotated - plain) < 1e-12 * abs(plain)
+    assert np.abs(a_rotated[1:4] - a_plain[1:4]).max() > 1e-3, "the rotation did nothing"
+    # and the AD rule reproduces it on the same matrix
+    ad = float(jax.jvp(lambda t: pj.fermi_level(jnp.asarray(h) + t * jnp.asarray(d),
+                                                3.0, 0.05), (0.0,), (1.0,))[1])
+    assert abs(ad - plain) < 1e-10 * abs(plain), (ad, plain)
+
+
+def test_fixed_number_adds_a_term_fixed_mu_omits():
+    """`fixed_number_projector` is the composition, and the extra term is not small.
+
+    At a level pinned to the Fermi energy the chemical-potential response is of the
+    same order as the whole fixed-mu derivative, so a test that only checked "AD agrees
+    with the closed form" could pass with the term dropped from BOTH.  The reference
+    here re-solves mu at each displaced matrix, which the closed form does not.
+    """
+    n = 12
+    h = ref.hermitian_from_spectrum(np.linspace(-1.0, 1.0, n), 5)
+    hj, mj = jnp.asarray(h), jnp.asarray(np.diag(np.linspace(-1, 1, n)).astype(complex))
+    m = np.asarray(mj)
+    nelec, width, step = 6.0, 0.1, 1e-5
+    separated = False
+    for j in range(3):
+        d = ref.random_hermitian_direction(n, 900 + j)
+        dj = jnp.asarray(d)
+        loss = lambda t: jnp.real(jnp.trace(
+            pj.fixed_number_projector(hj + t * dj, nelec, width) @ mj))
+        ad = float(jax.grad(loss)(0.0))
+        exact = float(np.real(np.trace(
+            ref.dprojector_fermi(h, d, ref.fermi_level(np.linalg.eigvalsh(h),
+                                                       nelec, width),
+                                width, dmu="selfconsistent") @ m)))
+        fixed_mu = float(np.real(np.trace(
+            ref.dprojector_fermi(h, d, ref.fermi_level(np.linalg.eigvalsh(h),
+                                                       nelec, width), width) @ m)))
+        assert abs(ad - exact) < 1e-10 * max(abs(exact), 1.0), (ad, exact)
+        assert abs(float(jax.jvp(loss, (0.0,), (1.0,))[1]) - ad) < 1e-12 * max(abs(ad), 1.0)
+        if abs(fixed_mu - exact) > 0.05 * abs(exact):
+            separated = True
+    assert separated, "the mu term is negligible here, so this fixture proves nothing"
+
+
+def test_a_gapped_spectrum_refuses_a_self_consistent_fermi_level():
+    """sum f' -> 0 in a gap: the constraint stops determining mu and dmu is 0/0.
+
+    A physical singularity, not a numerical one, so the honest answer is a refusal --
+    the same host-side shape as `check_sign_window` and `occupied_window`.
+    """
+    gapped = jnp.asarray(ref.hermitian_from_spectrum(
+        np.array([-2.0, -1.9, -1.8, 1.8, 1.9, 2.0]), 11))
+    with pytest.raises(ValueError, match="does not determine the Fermi level"):
+        pj.check_fermi_level_determined(gapped, 3.0, 1e-3)
+    # the same spectrum at a width comparable to the gap is determined again
+    mu, response = pj.check_fermi_level_determined(gapped, 3.0, 1.0)
+    assert response > 1e-2 and -1.9 < mu < 1.9

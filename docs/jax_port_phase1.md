@@ -709,3 +709,187 @@ code path, the projector's derivative is well defined where the individual eigen
 not. And the fixture correction is worth carrying: *degeneracy is not enough* — the
 disagreement needs branches that cross, so a TRI point cannot show it however degenerate it
 is.
+
+## 1i. Smeared occupations, and the self-consistent Fermi level
+
+`docs/continue_here.md` §3 ranked this next, and gave the reason §1f leaves it open:
+**for a hard integer window the near-degenerate branch of the divided-difference kernel
+is inert.** Both branches of a same-side pair are identically zero — $f_i-f_j=0$
+exactly and $f'=0$ — so §1f's plateau in `tol` measures nothing about the branch, only
+that switching it on does no harm. With Fermi-Dirac occupations (Elk's own `stype=3`,
+`stheta_fd.f90`) the branch value is $f'(\bar\lambda)$, which at a half-filled level is
+$-1/4w$ — large, not zero — so the threshold is load-bearing for the first time. The
+same step makes the fixed-electron-number Fermi level reachable, whose rule study §8(b)
+gives in closed form and which `continue_here.md` lists as untested.
+
+Driver: `PYTHONPATH=src taskset -c 0-3 python3 -m elkjax.phase1_smearing`. Tests:
+`tests/test_calculation_lapw_smearing.py` (real matrices) and the Phase 1i block of
+`tests/test_jax_projector.py` (synthetic, where the splitting can be dialled).
+
+### The oracle: a difference quotient with no subtraction in it
+
+Neither candidate is a reference for the other, so both were checked against a third
+thing that is exact. For the logistic function the difference quotient has a closed
+form containing no cancellation at all:
+
+$$
+K_{ij}=\frac{f_i-f_j}{\lambda_i-\lambda_j}
+      =-\frac{1}{4w}\,\frac{\sinh(z_{ij})/z_{ij}}{\cosh u_i\,\cosh u_j},
+\qquad u_i=\frac{\lambda_i-\mu}{2w},\quad z_{ij}=u_i-u_j,
+$$
+
+from $f_a-f_b=-2e^{(a+b)/2w}\sinh(z)f_af_b$ together with $f_ie^{u_i}=1/(2\cosh u_i)$.
+It reduces to $f'=-f(1-f)/w$ on the diagonal exactly (checked to $10^{-14}$), and is the
+*same analytic function* as the quotient — so it arbitrates between the two branches
+instead of being a third opinion. `elkjax.reference.fermi_divided_difference_kernel`,
+which uses this form for $|z|\le1$ and the plain quotient above it, where the two
+occupations differ by an $O(1)$ fraction and $\cosh$ would overflow.
+
+Note also that FD is a **legitimate** second check here, unlike §1h: $P=f(H)$ is a smooth
+matrix function when $f$ is smooth, so the derivative exists at every degeneracy and
+there is no branch exchange for a central difference to average over.
+
+### Two fixtures, chosen for opposite reasons
+
+**Graphene at $K$ is the physical one.** The two $\pi$ bands are degenerate there *and*
+the Fermi level sits on them, so $f=\tfrac12$ exactly and $f'$ is at its maximum. That
+is not an assumption: requiring $\sum_if_i=4$ at $K$ **alone** gives
+$\mu=-0.0471925804$ Ha against Elk's own zone-integrated `EFERMI.OUT` of
+$-0.0471925770$ Ha — agreement to $3.4\times10^{-9}$ Ha, because particle-hole symmetry
+at the Dirac point puts the local answer on the global one. At Elk's default `swidth`
+the occupancy is $4.0000017$ against an electron count of exactly 4.
+
+**Silicon at $\Gamma$ is the numerical one**, the same matrix §1f used. Its
+$\Gamma_{25'}$ triplet carries a pair split by $1.08\times10^{-15}$ Ha, which is
+$2\times10^{-5}$ of that run's tolerance — the branch fires. (§1f measured
+$5.1\times10^{-15}$ and $3.53\times10^{-9}$ on the same triplet; this run gets
+$1.1\times10^{-15}$ and $3.5\times10^{-9}$. That the tighter of the two is not
+reproducible to a factor of five *is* the point below.) The two fixtures together
+say something worth stating on its own:
+
+> A real LAPW multiplet's splitting is a property of the **assembly's roundoff**, not of
+> the symmetry that requires it, and it spans at least eight decades: $1.1\times10^{-15}$
+> and $3.5\times10^{-9}$ Ha inside Si's $\Gamma_{25'}$ triplet, $3.4\times10^{-7}$ Ha at
+> graphene's Dirac point. Whether the tolerance branch fires is therefore not predictable from the physics
+> and must be measured per run.
+
+### What fails, and where
+
+Three routes, all avoiding or not avoiding a different thing: **naive** is JAX's own
+`eigh` rule; **quotient** is the safe-$K$ rule with the branch switched off (`tol=0`),
+which avoids the eigenvector derivative but still forms the numerator's difference; and
+**safe** is the rule at `tol` = `projector_tolerance`. Worst relative error over five
+random Hermitian directions, against the exact kernel:
+
+| fixture | $w$ (Ha) | naive fwd | naive rev | quotient | safe | central FD |
+|---|---|---|---|---|---|---|
+| graphene $K$ (split $3.4\times10^{-7}$) | $10^{-3}$ | 3.9e-9 | 6.1e-10 | 1.0e-13 | 1.0e-13 | 6.9e-7 |
+| | $10^{-2}$ | 3.9e-8 | 6.1e-9 | 7.7e-14 | 7.7e-14 | 6.9e-7 |
+| | $10^{-1}$ | 2.8e-7 | 5.6e-8 | 2.0e-10 | 2.0e-10 | 8.1e-7 |
+| Si $\Gamma$ (split $1.1\times10^{-15}$) | $10^{-3}$ | **NaN** | **NaN** | 3.7e-3 | 2.0e-9 | 4.6e-7 |
+| | $10^{-2}$ | **NaN** | **NaN** | 1.6e-5 | 4.4e-11 | 9.3e-8 |
+| | $10^{-1}$ | **NaN** | **NaN** | 3.4e-4 | 8.9e-10 | 9.9e-7 |
+
+**Three separate results are in that table.**
+
+1. **The two failure modes are distinct, and each fixture shows only one.** On graphene
+   the branch never fires and the quotient is exact to $10^{-13}$; what fails is the
+   eigenvector rule. On Si the eigenvector rule fails *completely* — `NaN`, because the
+   pair is split at the level where JAX's own $1/\delta\lambda$ is a ratio of rounding
+   errors — while the quotient survives but is wrong by up to $3.7\times10^{-3}$. Only
+   the safe rule is right on both. A single fixture would have credited the wrong
+   mechanism.
+2. **The naive rule's relative error grows LINEARLY in the smearing width** — 3.9e-9,
+   3.9e-8, 2.8e-7 over two decades of $w$. Its absolute error is
+   $\sim\epsilon\lVert A-A^\dagger\rVert/\delta\lambda$, set by the splitting; the
+   quantity it is measured against is of order $f'=1/4w$, which *shrinks* as $w$ grows.
+   Broader smearing is not gentler. The same holds for the quotient's own cancellation,
+   $\sim\epsilon\,w/\delta\lambda$, which is why `tol` cannot be a fixed number: what it
+   has to beat depends on the width as well as on the splitting. Pinned on synthetic
+   spectra at a $10^{-15}$ splitting, where the quotient's error goes 8.9e-5, 8.0e-4,
+   2.1e-2 across the same three widths.
+3. **At Elk's default `swidth` the quotient on Si's pair is not merely inaccurate, it is
+   zero.** $f_i$ and $f_j$ are bitwise equal at $10^{-15}$ splitting and $w=10^{-3}$, so
+   the numerator is exactly $0$ where the true kernel is $-3.21\times10^{-2}$: a 100%
+   error, and one that no plausibility check on the result would catch, since $0$ is a
+   perfectly ordinary kernel entry.
+
+The `NaN` deserves a note. §1f's hard-window naive route returned `NaN` at Si's
+$\Gamma$ too, but for a different reason — there the window boundary cut nothing and the
+`NaN` came from the enclosed multiplet's $0/0$. Here the multiplet is at the *same*
+place but the occupations are smooth, so the derivative genuinely exists and a correct
+rule returns it; the `NaN` is purely JAX's own.
+
+There is one more thing in the table that is not a success. **The safe rule on Si is
+$2\times10^{-9}$, not $10^{-13}$**, and the reason is the *other* pair: $3.5\times10^{-9}$
+Ha, which is $67\times$ the tolerance, so it takes the quotient branch and contributes its
+own cancellation. The tolerance is a cliff and a pair just above it gets the
+cancellation-prone route — the same "necessary but not sufficient" shape §1f found for
+the refusal. Anything wanting better than $10^{-9}$ on a matrix like this needs the
+stable form of the kernel in the JVP itself, not a threshold.
+
+### The $k$-derivative, and the self-consistent Fermi level
+
+The whole pipeline differentiated in $k$ with smeared occupations agrees with the exact
+kernel fed by a matrix-valued `jvp` of $d\tilde H/dk$: $6\times10^{-16}$ to
+$3\times10^{-10}$ on graphene, $4\times10^{-15}$ to $4\times10^{-12}$ on Si, against
+`NaN` for the naive route on Si and $10^{-10}$ to $10^{-7}$ on graphene, with central FD as the
+control at $10^{-7}$–$10^{-8}$ (its own step-truncation floor: the step must satisfy
+$v_Fh\ll w$). Unlike §1f's hard window, where an enclosed multiplet contributes exactly
+nothing, here the states at the Fermi level carry the **largest** kernel entries in the
+matrix, so the $k$-tangent passes straight through them.
+
+`fermi_level` is a `custom_jvp` whose primal is a bisection — never differentiated,
+which is the Phase 0a lesson about unrolled solvers in miniature — and whose tangent is
+study §8(b)'s closed form
+$d\mu=\sum_jf'_jA_{jj}\big/\sum_jf'_j$, $A=V^\dagger\,\delta H\,V$. Two things about it:
+
+* **It is gauge-invariant at a multiplet even though it uses $A_{jj}$.** Inside a
+  degenerate group $f'$ is constant, so the sum over that group is $f'\,\mathrm{Tr}\,A$
+  — invariant under the arbitrary unitary `eigh` picks. Tested by rotating the
+  degenerate block explicitly and requiring $d\mu$ unchanged while the individual
+  $A_{jj}$ move by $O(1)$.
+* **Its denominator is a physical singularity.** $\sum_jf'_j\to0$ for a gapped system at
+  small width: no state responds, the constraint stops determining $\mu$, and $d\mu$ is
+  genuinely $0/0$. `check_fermi_level_determined` refuses there, and does so on Si at
+  $w=10^{-3}$ (measured $\sum|f'|=4.4\times10^{-13}$) while accepting graphene
+  ($5.0\times10^{2}$) — a real distinction between a metal and an insulator falling out
+  of the derivative's existence, not a numerical guard.
+
+`fixed_number_projector` is then nothing but the composition, and the chain rule supplies
+$dP|_N=dP|_\mu-V\,\mathrm{diag}(f')\,V^\dagger d\mu$. **That term is not a correction.**
+Against a reference that re-solves $\mu$ at every displaced matrix:
+
+| fixture | $w$ (Ha) | AD fwd | AD rev | central FD | fixed-$\mu$, i.e. the term dropped |
+|---|---|---|---|---|---|
+| graphene $K$ | $10^{-3}$ | 1.8e-13 | 7.1e-14 | 2.5e-7 | **69** |
+| graphene $K$ | $10^{-2}$ | 1.1e-12 | 1.1e-12 | 4.2e-7 | **78** |
+| Si $\Gamma$ | $10^{-2}$ | 7.6e-10 | 7.6e-10 | 1.8e-7 | **10** |
+| Si $\Gamma$ | $10^{-1}$ | 2.0e-9 | 2.0e-9 | 6.9e-7 | **132** |
+
+At a level pinned to the Fermi energy, holding $\mu$ fixed while $H$ moves is wrong by
+one to two orders of magnitude, not by a percent. And $d\mu$ itself agrees with a
+finite difference of a re-solved $\mu$ to $5\times10^{-10}$ (Si, $w=10^{-1}$).
+
+**The test is along Hermitian directions and deliberately not along $k$.** At $K$ the
+$\pi$ pair's trace is stationary by symmetry, so $d\mu/dk=0$ and a $k$-direction test
+would pass with the correction identically zero — Phase 0a's "a perturbation that
+respects the symmetry protecting the degeneracy hides the bug" trap, in a new place.
+
+### What this settles, and what it does not
+
+Settled: the safe-$K$ rule works with smeared occupations on Elk's own matrices, in both
+modes and at the end of the $k$-pipeline; the near-degenerate branch is load-bearing for
+the first time and its value is right; and study §8(b)'s Fermi-level rule is correct,
+gauge-invariant at a multiplet, and dominant rather than corrective at a half-filled
+level. `continue_here.md` §3's framing — that "a metal is the only place the threshold is
+actually load-bearing" — is **half right**: smearing is what makes the branch's *value*
+nonzero, but whether it *fires* is set by the assembly's roundoff, and graphene, the
+metal, does not fire while gapped silicon does.
+
+Not settled: the $k$-point weights $w_j$ in §8(b)'s formula are untested, since a
+single-$k$ constraint makes them cancel — a zone-summed Fermi level is Phase 2 work. The
+kernel's own JVP still forms the quotient rather than the stable closed form, which is
+what puts the floor at $2\times10^{-9}$ on Si. And second derivatives are untouched here:
+`smeared_projector`'s JVP calls `eigh`, so a second derivative falls back on JAX's rule
+exactly as §0a′ describes, and `sign_projector` covers hard windows only.
