@@ -6,7 +6,21 @@ Workstream B's `jax-port` was fast-forwarded in earlier; `origin/master` is now 
 The `elk-full-coverage` and `jax-port` branches still exist and point at older commits;
 deleting both is safe.
 
-**§1k is the newest work, and it moved the Phase 1/Phase 2 boundary.** Patch **0015**
+**Phase 2 has started** (`docs/jax_port_phase2.md`): §2a transcribes the LDA
+exchange-correlation functional (`xc_pwca.f90`, `xctype=3`, Elk's default) into
+`src/elkjax/xc.py`. The study's own criterion — `jax.grad` of $\varepsilon_{xc}$
+against Elk's hand-coded $v_{xc}$ — is met at machine precision rather than the stated
+$10^{-10}$, but that is an INTERNAL check, so the functional is also pinned against
+Dirac exchange (1e-15), the exact exchange spin scaling (1e-14, the only check that
+exercises the $\zeta$ machinery), the Gell-Mann–Brueckner high-density limit of the
+correlation, and Elk's own $v_{xc}$ along a line through bulk Si (3e-5 median, limited
+by a commutation rather than by the transcription). And the study's named `NaN` hazard
+is now an assertion: Elk's `rho < 1e-20` guard written as one `jnp.where` gives the
+correct value and a `NaN` gradient, at exactly zero density — which is what a
+zero-initialised or padded array carries.
+
+**§§1k-1l are the Phase 1 work that preceded it, and §1k moved the Phase 1/Phase 2
+boundary.** Patch **0015**
 exports the muffin-tin Kohn-Sham potential, the radial mesh and its quadrature weights,
 the linearisation energies and the radial functions in full, so `hmlrad`/`olprad` (
 `src/elkjax/radial.py`) and `rschrodint`/`genapwfr`/`genlofr` (
@@ -212,8 +226,10 @@ why it was left alone during a parallel merge.
 
 ## 3. Workstream B — the JAX port
 
-`docs/jax_port.md` (1,623 lines) is the design study; `docs/jax_port_phase0.md` is the
-running log of what Phase 0 actually measured, and is the file to read first.
+`docs/jax_port.md` (1,623 lines) is the design study; `docs/jax_port_phase0.md`,
+`docs/jax_port_phase1.md` and `docs/jax_port_phase2.md` are the running logs of what
+each phase actually measured. Phase 0's is the file to read first for the verdict;
+Phase 1's is where most of the work is.
 
 Study verdict: **a research project justified by differentiability, not by the GPU** —
 SIRIUS already does FP-LAPW on CUDA/ROCm and was built with Elk as its reference, Elk's
@@ -556,6 +572,8 @@ phase1_smearing.py   item 1i: smeared occupations and the self-consistent Fermi
                kernel's near-degenerate branch is not vacuous
 phase1_secondorder.py  item 1j: second derivatives via sign_projector, where both
                eigh-based routes return NaN at a real multiplet
+xc.py          item 2a: xc_pwca -- the LDA exchange-correlation functional,
+               with the rho -> 0 guard written so the GRADIENT survives
 radial.py      item 1k: hmlrad/olprad -- the muffin-tin radial integrals, from
                the potential.  The vsmt packing is the load-bearing part
 radial_functions.py  item 1k: rschrodint/genapwfr/genlofr -- the radial

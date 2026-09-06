@@ -1181,8 +1181,17 @@ vendored tree:
 ## JAX port (Workstream B): status, and the memory discipline it runs under
 
 `docs/jax_port.md` (1,623 lines) is the design study, `docs/continue_here.md` §3 the cold-start
-summary, `docs/jax_port_phase0.md` the running log of what Phase 0 measured, and
-`docs/jax_port_phase1.md` the same for Phase 1, which is now under way (through §1l). Verdict, in one line: **a research project justified by
+summary, `docs/jax_port_phase0.md` the running log of what Phase 0 measured,
+`docs/jax_port_phase1.md` the same for Phase 1 (through §1l), and
+`docs/jax_port_phase2.md` for Phase 2, which has now started (§2a, the LDA
+exchange-correlation functional: `src/elkjax/xc.py` transcribes `xc_pwca.f90`, with
+`jax.grad` reproducing Elk's hand-coded $v_{xc}$ at machine precision against the study's
+stated $10^{-10}$, exchange exact against Dirac and its spin scaling, correlation
+anchored on the Gell-Mann–Brueckner high-density limit, Elk's own $v_{xc}$ on a real grid
+at 3e-5 median — limited by a nonlinear functional not commuting with either of Elk's
+representations of a real-space function, not by the transcription — and the study's
+named `NaN` hazard turned into an assertion: Elk's `rho < 1e-20` guard written as one
+`jnp.where` gives the correct value and a `NaN` gradient at exactly zero density). Verdict, in one line: **a research project justified by
 differentiability, not by the GPU** — SIRIUS already does FP-LAPW on CUDA/ROCm with Elk as its
 reference, and Elk's hot spots are already near-peak BLAS-3. Nothing about the port is a plan of
 record; **Phase 0 (§6 of the study) is designed to kill it, not to start it**, and that is what
