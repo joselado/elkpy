@@ -1,6 +1,6 @@
 # Continue here
 
-Working state as of 2026-09-07, written to be picked up cold.
+Working state as of 2026-09-07, written to be picked up cold. Last verified: fast suite 440 passed, the Phase 1+2 integration suites 158 passed / 9 skipped, and the patch series reproduces `build/elk/src/elkpy_eigenstates.f90` byte for byte with no fuzz.
 
 **Status in one paragraph.** Both workstreams are on `master` and `master` is pushed.
 *Workstream A* — the full-coverage Elk wrapper — is complete and untouched since the
@@ -68,39 +68,21 @@ over the k-axis is the memory default; `vmap(eigh)` materialises every k-point a
 Recent commits, newest first:
 
 ```
-e2a70f6  Differentiate the spectrum in the potential          elkjax/phase1_potential.py
-00e7216  Integrate the radial Schrodinger equation in JAX     elkjax/radial_functions.py
-eef2a57  Build the radial integrals from Elk's potential      patches/0015, elkjax/radial.py
-bd4ee3e  Remove the smeared tolerance, differentiate twice   elkjax/phase1_secondorder.py
-8e4e04f  Make the fixed-N tests use the reference they claim
-0b2cbe2  Record what the smeared kernel measured
-d2eb839  Differentiate a smeared occupation on Elk's own matrices  elkjax/phase1_smearing.py
-2306e08  Close the negative test, correct the study's own fixture
-4a4090f  Remove the two poles that made the k-tangent NaN at Gamma  elkjax/lapw.py
-bcc21f8  Write up the projector rule at a real multiplet
-60980ab  Wire the eigensolve to the safe-K projector rule      elkjax/phase1_projector.py
-8bf83b5  Give the continuation document a single ranked entry point
-7b2c157  Write up the k-derivative and the Hellmann-Feynman gap it measured
-a37a726  Differentiate the LAPW spectrum in k                  elkjax/hamiltonian.py
-a3a6906  Document the LAPW assembly
-6118322  Assemble the LAPW Hamiltonian and overlap in JAX      patches/0014
-2ae2528  Record the merge in the continuation document
-4be2933  Correct the soc_scale shortfall to a range
-096d2eb  Close the kappa table with h-BN at the higher cutoff
-e559ac7  Record what a LAPW query costs, and what apword=2 pins
-81c8021  Check the exported eigenvectors against the exported eigenproblem
-35aec88  Measure kappa(O) on real overlaps, retire 8(b)'s estimate   elkjax/phase0b_overlap.py
-a8f45cc  Export Elk's LAPW eigenproblem, close 0c against it         patches/0013
-c299c14  Bring the continuation document up to date
-7a88920  Close a hole in 0c's forward check, pin the harmonic's pole
-794175f  Add the Phase 0 verdict and repair two stale status rows
-fe03924  Settle Phase 0c: the LAPW matching coefficients             src/elkjax/lapw.py
-01bf937  Correct two mechanism attributions, guard sign_projector
-adcb2d0  Settle Phase 0e: compile flat in shapes, ~n^1.85 in ops     src/elkjax/phase0e.py
-410be6a  Unblock Phase 0a-prime with an eigensolver-free projector
-14782ad  Settle Phase 0a: reverse mode survives the eigensolve       src/elkjax/fixedpoint.py
-15d910d  Settle Phase 0b: the safe-K projector rule is needed        src/elkjax/projector.py
-39de3e4  Add a continuation document                                 docs/continue_here.md
+8a8044e  Export symrfmt's operator, closing 2d's remaining consequence  patches/0018, elkjax/symmetry.py
+be38b85  Carry the total energy into the two index documents
+6b837bd  Assemble the total energy, and correct a prediction 2d got wrong
+         (elkjax/energy.py)
+9f31ccb  Write up the Poisson solve across the four documents
+1389745  Transcribe Elk's Weinert Poisson solve                         patches/0017, elkjax/poisson.py
+19de80c  Retire the scan item from the three places that still list it as open
+264c1ec  Scan the Newton-Schulz tape instead of unrolling it            elkjax/phase1_scan.py
+6a6f06b  Give the continuation document a cold-start entry point again
+46da9c6  Explain the muffin-tin vxc gap: Elk symmetrises the potential  docs/jax_port_phase2.md 2d
+61520eb  Transcribe the muffin-tin angular transform, and pin what it does not explain
+f38c71e  Bring the index documents up to date with Phase 2
+1b4fe39  Integrate over the unit cell, and check it three ways
+84c26e1  Transcribe PBE, and get its functional derivative from autodiff
+53489cc  Check Poisson's equation on the exported grid
 ```
 
 ---
