@@ -820,8 +820,10 @@ random Hermitian directions, against the exact kernel:
 3. **At Elk's default `swidth` the quotient on Si's pair is not merely inaccurate, it is
    zero.** $f_i$ and $f_j$ are bitwise equal at $10^{-15}$ splitting and $w=10^{-3}$, so
    the numerator is exactly $0$ where the true kernel is $-3.21\times10^{-2}$: a 100%
-   error, and one that no plausibility check on the result would catch, since $0$ is a
-   perfectly ordinary kernel entry.
+   error **in that entry**, and one that no plausibility check would catch, since $0$ is
+   a perfectly ordinary kernel entry. The derivative it feeds is off by $3.7\times10^{-3}$
+   rather than by 100%, because that entry is small beside the gap-straddling pair's
+   $-10.8$ — which is exactly why the failure is easy to miss.
 
 The `NaN` deserves a note. §1f's hard-window naive route returned `NaN` at Si's
 $\Gamma$ too, but for a different reason — there the window boundary cut nothing and the

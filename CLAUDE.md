@@ -1502,10 +1502,11 @@ $A=v^\dagger\,\delta H\,v$ were bitwise Hermitian, and JAX's `_eigh_jvp_rule` fo
 symmetrisation — so $\|A-A^\dagger\|/\delta\lambda\approx0.2$–$0.5$ survives, which is the
 size of the observed failure.
 
-`docs/continue_here.md` is current as of patch 0013: it records `master` at `39de3e4`
-(`elk-full-coverage` merged) with `jax-port` still unmerged, and its §3 marks patch 0013
-and the κ(S) measurement done. The `ELKPY_F90_LIB` override it documents is still what
-builds Elk here.
+`docs/continue_here.md` is current as of §1i: both workstreams are on `master`, `master`
+is pushed, and its §3 marks patches 0013/0014, the κ(S) measurement, the projector rule
+at a real multiplet, the `match` pole removal, the negative test, and the smeared
+occupations all done. The `ELKPY_F90_LIB` override it documents is still what builds Elk
+here.
 
 
 ## Commands

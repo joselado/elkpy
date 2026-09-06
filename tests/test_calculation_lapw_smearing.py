@@ -77,6 +77,13 @@ def _directions(n, count, seed=2100):
     return [ref.random_hermitian_direction(n, seed + j) for j in range(count)]
 
 
+def _loss_fixed_n(matrix, width, observable):
+    """Tr[P M] with mu RE-SOLVED for this matrix -- the constraint, not the formula."""
+    evals, evecs = np.linalg.eigh(np.asarray(matrix))
+    f, _ = ref.fermi_dirac(evals, ref.fermi_level(evals, NELEC, width), width)
+    return float(np.real(np.trace(((evecs * f) @ evecs.conj().T) @ observable)))
+
+
 def _routes(reduced, direction, mu, width, tol, observable):
     """The three JAX routes and the exact kernel, on one Hermitian direction."""
     hj, dj, mj = (jnp.asarray(reduced), jnp.asarray(direction),
@@ -190,8 +197,10 @@ def test_the_chemical_potential_term_dominates_at_a_half_filled_level(graphene):
 
     At a level pinned to the Fermi energy, holding mu fixed while H moves is not a
     small error -- measured here, the fixed-mu derivative is wrong by ~70x.  The
-    reference re-solves mu at each displaced matrix, so it carries the constraint
-    rather than the formula being tested.
+    Two references, deliberately: the closed form with the extra term, and a central
+    difference of a loss whose mu is RE-SOLVED at each displaced matrix -- the second
+    carries the constraint rather than the formula being tested, so the pair cannot
+    agree by sharing an assumption.
 
     Tested along Hermitian directions and deliberately NOT along k: at K the pi pair's
     trace is stationary by symmetry, so dmu/dk vanishes and a k-direction test would
@@ -202,7 +211,7 @@ def test_the_chemical_potential_term_dominates_at_a_half_filled_level(graphene):
     n = reduced.shape[0]
     observable = np.diag(np.linspace(-1.0, 1.0, n)).astype(complex)
     hj, mj = jnp.asarray(reduced), jnp.asarray(observable)
-    width = 1e-3
+    width, step = 1e-3, 1e-6
     mu, response = pj.check_fermi_level_determined(hj, NELEC, width)
     assert response > 1e2, response          # a half-filled level responds strongly
     dominated = False
@@ -214,8 +223,12 @@ def test_the_chemical_potential_term_dominates_at_a_half_filled_level(graphene):
             reduced, direction, mu, width, dmu="selfconsistent") @ observable)))
         fixed_mu = float(np.real(np.trace(
             ref.dprojector_fermi(reduced, direction, mu, width) @ observable)))
-        assert _rel(float(jax.grad(loss)(0.0)), exact) < 1e-10
+        ad = float(jax.grad(loss)(0.0))
+        assert _rel(ad, exact) < 1e-10
         assert _rel(float(jax.jvp(loss, (0.0,), (1.0,))[1]), exact) < 1e-10
+        fd = (_loss_fixed_n(reduced + step * direction, width, observable)
+              - _loss_fixed_n(reduced - step * direction, width, observable)) / (2 * step)
+        assert _rel(fd, ad) < 1e-5, (fd, ad)
         if _rel(fixed_mu, exact) > 1.0:
             dominated = True
     assert dominated, "the mu term is negligible here, so this fixture proves nothing"

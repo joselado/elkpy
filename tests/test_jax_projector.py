@@ -395,13 +395,21 @@ def test_a_multiplet_at_the_fermi_level_does_not_break_the_mu_rule():
     assert abs(ad - plain) < 1e-10 * abs(plain), (ad, plain)
 
 
+def _loss_fixed_n(h, nelec, width, m):
+    """Tr[P M] with mu RE-SOLVED for this matrix -- the constraint, not the formula."""
+    evals, evecs = np.linalg.eigh(np.asarray(h))
+    f, _ = ref.fermi_dirac(evals, ref.fermi_level(evals, nelec, width), width)
+    return float(np.real(np.trace(((evecs * f) @ evecs.conj().T) @ m)))
+
+
 def test_fixed_number_adds_a_term_fixed_mu_omits():
     """`fixed_number_projector` is the composition, and the extra term is not small.
 
     At a level pinned to the Fermi energy the chemical-potential response is of the
     same order as the whole fixed-mu derivative, so a test that only checked "AD agrees
-    with the closed form" could pass with the term dropped from BOTH.  The reference
-    here re-solves mu at each displaced matrix, which the closed form does not.
+    with the closed form" could pass with the term dropped from BOTH.  Hence the second
+    reference: a central difference of a loss whose mu is RE-SOLVED at each displaced
+    matrix, which carries the constraint rather than the formula being tested.
     """
     n = 12
     h = ref.hermitian_from_spectrum(np.linspace(-1.0, 1.0, n), 5)
@@ -422,8 +430,11 @@ def test_fixed_number_adds_a_term_fixed_mu_omits():
         fixed_mu = float(np.real(np.trace(
             ref.dprojector_fermi(h, d, ref.fermi_level(np.linalg.eigvalsh(h),
                                                        nelec, width), width) @ m)))
+        fd = (_loss_fixed_n(h + step * d, nelec, width, m)
+              - _loss_fixed_n(h - step * d, nelec, width, m)) / (2 * step)
         assert abs(ad - exact) < 1e-10 * max(abs(exact), 1.0), (ad, exact)
         assert abs(float(jax.jvp(loss, (0.0,), (1.0,))[1]) - ad) < 1e-12 * max(abs(ad), 1.0)
+        assert abs(fd - ad) < 1e-5 * max(abs(ad), 1.0), (fd, ad)
         if abs(fixed_mu - exact) > 0.05 * abs(exact):
             separated = True
     assert separated, "the mu term is negligible here, so this fixture proves nothing"

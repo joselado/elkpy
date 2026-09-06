@@ -437,6 +437,9 @@ hamiltonian.py Phase 1a: olpfv/hmlfv, the muffin-tin half of H and O; the
                k-dependent assembly; the Cholesky reduction, the per-run
                tolerance, the occupied projector and its refusal
 phase1_projector.py  item 1f: the rule wired to the eigensolve, on real matrices
+phase1_smearing.py   item 1i: smeared occupations and the self-consistent Fermi
+               level, on real matrices -- the first configuration in which the
+               kernel's near-degenerate branch is not vacuous
 ```
 
 ```bash
@@ -447,7 +450,8 @@ ELKPY_RUN_SLOW_TESTS=1 PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
 # needs the elk binary too -- the Phase 1 pair, ~2 min with ground states cached
 PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
     tests/test_calculation_lapw_assembly.py \
-    tests/test_calculation_lapw_projector.py -q
+    tests/test_calculation_lapw_projector.py \
+    tests/test_calculation_lapw_smearing.py -q
 ```
 
 **`taskset` is not decoration.** `.claude/settings.json`'s `OMP_NUM_THREADS=1` does not
@@ -465,8 +469,8 @@ production shape (26.8 GiB of H and S) is never allocated, only compiled.
 - ~~Start patch 0013.~~ Done and committed — see §3. It was taken as the obvious next
   step rather than put to you, since it was the single item all three open bullets
   shared. The maintenance commitment is real and is now recorded in `patches/README.md`.
-- ~~Merge `jax-port` into `master`.~~ Done, fast-forward, at your instruction. **Not
-  pushed** — that is still open.
+- ~~Merge `jax-port` into `master`.~~ Done, fast-forward, at your instruction, and
+  **pushed**: `origin/master` is current. Both feature branches can be deleted.
 - Phase 1 at all, or the §9.2 hybrid. **Started** — 1a is done, at the user's
   instruction to continue the port, which settled this for that session but not in
   general. The scope question below is unchanged. Phase 1 does
