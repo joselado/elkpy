@@ -18,14 +18,21 @@ govern XLA's CPU backend (measured — one 1200x1200 `jnp` matmul spawns 40 thre
 it, and `XLA_FLAGS=--xla_cpu_multi_thread_eigen=false` changes nothing). Peak RSS is
 1.7 GB for either driver; nothing here goes near the memory rules in CLAUDE.md.
 
+**Phase 0 was designed to kill the project. It did not.** Every item reachable on this
+machine is settled; what is left is 0d's timing (needs a GPU) and one Fortran export
+(patch 0013) that would let 0c's forward coefficients be compared against Elk's own. The
+honest qualification is that **nothing here has touched an LAPW Hamiltonian**: 0a and 0a′
+pass on a toy with an exactly degenerate spectrum, and 0c's radial derivative matrices
+are inputs rather than Elk's `apwfr`.
+
 | Item | Status |
 |---|---|
 | 0b — safe-$K$ projector rule | **settled at synthetic $S$, below.** The rule is necessary and it works; item 0b(ii)'s *real* Cholesky-reduced LAPW overlap is still Phase 1's first measurement |
 | 0a — reverse-mode implicit diff through the SCF fixed point | **settled, below.** It works, and it needs 0b's rule |
 | 0a′ — the same at second order | **settled, below.** Blocked with an `eigh`-based projector; **works** with an eigensolver-free one |
 | 0c — `jax.jvp(match)` vs `dmatch.f90` | **settled, below.** Exact to 7e-16; forward half checked against SciPy and against the matching condition, but **not yet against Elk's own `apwalm`** |
-| 0d — `vmap(eigh)` vs `lax.map` on a GPU | deferred: no GPU on this machine |
-| 0e — compile time and peak memory at production shapes | AOT-only (`elkjax.memory.compiled_cost`) |
+| 0d — `vmap(eigh)` vs `lax.map` on a GPU | timing still deferred (no GPU); its **memory** half is settled in §0e — 0.411 GiB under `lax.scan` against 40.2 GiB under `vmap` |
+| 0e — compile time and peak memory at production shapes | **settled, below.** Flat in the shapes; superlinear (≈1.85) in HLO op count |
 
 ---
 
