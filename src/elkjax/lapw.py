@@ -95,6 +95,17 @@ def spherical_harmonics(lmax, v, t4pil=True):
     Y^*_{lm}(\hat{\bf r})`.  Forgetting it is the trap study §6 names by
     name: the result stays smooth, correctly shaped and wrong by an :math:`l`-dependent
     complex factor, which cancels out of many ratios and out of every modulus.
+
+    **Differentiable in** :math:`v` **away from the z-axis, and loudly not on it.**
+    For :math:`m\neq0` the azimuthal factor :math:`e^{im\phi}` has no derivative where
+    :math:`\phi` is undefined, and :math:`\sin\theta=\sqrt{1-\cos^2\theta}` has an
+    infinite one at the pole.  Measured: ``jax.grad`` of :math:`\mathrm{Re}\,Y_{11}` at
+    :math:`v=(0,0,1)` returns ``NaN`` — the *good* outcome, the failure being audible
+    rather than a plausible finite number, unlike the padding-block case of §0b.  It
+    does not affect item 0c, whose derivative is with respect to the atomic position and
+    never touches :math:`\hat v`; it would affect Phase 4's stress, which moves
+    :math:`{\bf G+p}` itself, and a G-vector lying exactly along z is not exotic.
+    Pinned by a test rather than left to be discovered.
     """
     ct, st, phase = _safe_direction(v)
     size = (lmax + 1) ** 2
@@ -212,7 +223,8 @@ def structure_factor(vgkc, atposc):
     return jnp.exp(1j * (vgkc @ atposc))
 
 
-def match(lmax, vgkc, gkc, atposc, derivative_matrices, rmt, omega):
+def match(lmax, vgkc, gkc, atposc, derivative_matrices, rmt, omega,
+          t4pil=True):
     r"""Elk's ``match``, for one atom: the APW matching coefficients.
 
     ``derivative_matrices`` is a list indexed by :math:`l`, entry :math:`l` being the
@@ -222,14 +234,16 @@ def match(lmax, vgkc, gkc, atposc, derivative_matrices, rmt, omega):
     order axis exactly as Elk's array is.
 
     Follows ``match.f90`` including its two branches: the :math:`M_l=1` shortcut is a
-    plain division rather than a 1x1 solve.
+    plain division rather than a 1x1 solve.  ``t4pil=False`` drops ``genylmv``'s
+    :math:`4\pi(-i)^l` and is there so the trap can be *measured*, never as an option to
+    use.
     """
     ngk = gkc.shape[0]
     orders = [d.shape[0] for d in derivative_matrices]
     ordmax = max(orders)
     scale = 1.0 / jnp.sqrt(omega)
 
-    ylm = jax.vmap(lambda v: spherical_harmonics(lmax, v))(vgkc)   # (ngk, lmmax)
+    ylm = jax.vmap(lambda v: spherical_harmonics(lmax, v, t4pil))(vgkc)  # (ngk, lmmax)
     sfac = structure_factor(vgkc, atposc)                          # (ngk,)
     argument = gkc * rmt
 

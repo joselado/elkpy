@@ -524,17 +524,30 @@ Elk:
 | $j_l(x)$ vs SciPy, $x=10^{-10}\ldots40$ | 4.3e-14 | both recurrence branches and the switch |
 | $dj_l/dx$ from `jax.jacfwd` vs SciPy | 1.3e-14 | that the recurrence is differentiable |
 | $Y_{lm}$ vs SciPy, in Elk's packed layout | 9.7e-16 | values, Condon-Shortley, $lm=l(l+1)+m$ |
-| $DA=b$ with $b$ rebuilt from SciPy | 1.0e-11 | the **assembly** |
+| continuity: $\phi(R),\phi'(R)$ vs the plane wave | 1.0e-11 | the **assembly**, and $D$'s index convention |
 
-The last is the one with teeth. SciPy validates the special functions but sees nothing
-of $1/\sqrt\Omega$, the conjugation, the `t4pil` prefactor, the packing or the linear
-solve. The matching condition does, because it *is* the definition: the coefficients
-exist precisely so that the muffin-tin function and the interstitial plane wave agree in
-value and in the first $M_l-1$ derivatives at $R_\alpha$. Rebuilding
-$b_i=(4\pi i^l/\sqrt\Omega)|{\bf G+p}|^{i-1}j^{(i-1)}_l(|{\bf G+p}|R_\alpha)
-e^{i({\bf G+p})\cdot{\bf r}_\alpha}Y^*_{lm}$ from SciPy — with the $4\pi i^l$
-written out rather than hidden inside `genylmv` — makes a prefactor or conjugation slip
-unable to cancel between the two sides.
+The last is the one with teeth, and it is deliberately **not** written as $DA=b$.
+That form is self-consistent — it solves with a matrix and then multiplies by the same
+matrix — so it verifies the linear solve and the $b$ side while being blind to whether
+$D$'s *rows* are the derivative order or the APW index $j$, which is exactly the kind of
+convention a transcription gets wrong. Instead the radial family is taken to be
+$u_{jl}(r)=r^{\,l+j-1}$, whose derivatives are known in closed form, and the
+reconstruction
+
+$$
+\phi^{(i)}_{lm}(R)=\sum_j A_{jlm}\frac{d^{\,i}}{dr^{\,i}}r^{\,l+j-1}\bigg|_R
+\quad\overset{!}{=}\quad
+\frac{4\pi i^l}{\sqrt\Omega}|{\bf G+p}|^{i}j^{(i)}_l(|{\bf G+p}|R)
+e^{i({\bf G+p})\cdot{\bf r}_\alpha}Y^*_{lm}(\widehat{{\bf G+p}})
+$$
+
+is evaluated from the power rule directly, never by reusing the matrix `match` was
+handed. That turns $DA=b$ from a statement about a matrix into the statement continuity
+actually makes about a *function*, and it bites: handing `match` the transpose of $D$
+takes the error from **4.0e-13 to 4.0e+00**, while the `dmatch` identity on those same
+wrong coefficients still holds at **3.0e-16**. SciPy alone sees none of
+$1/\sqrt\Omega$, the conjugation, the `t4pil` prefactor, the packing or the solve;
+this sees all of them, because it *is* the definition.
 
 Two branch details worth recording, both measured rather than assumed. **Miller's
 downward Bessel recurrence alone is not enough**: at $l_{\max}=8$ it is good to 2e-15
@@ -560,9 +573,18 @@ those still lives inside this package.
 the tracked series, which under CLAUDE.md's core constraint is a commitment to
 maintaining it across Elk upgrades. The matching condition is a strong substitute, being
 the definition rather than a comparison, but it cannot catch a misreading shared between
-this transcription and the check: the layout of $D$ (rows = derivative order, columns =
-APW order $j$), and `apwfr`'s own normalisation, are assumed rather than verified. Both
-are Phase 1's `apwfr` work.
+this transcription and the check. `apwfr`'s own normalisation is one such: assumed
+rather than verified, and Phase 1's work since $D$ is an input here. ($D$'s index layout
+is no longer among them — the continuity check above pins it.)
+
+One hazard is recorded rather than fixed: `spherical_harmonics` is differentiable in
+$\hat v$ away from the z-axis and returns **`NaN`** on it, since for $m\neq0$ the phase
+$e^{im\phi}$ has no derivative where $\phi$ is undefined and
+$\sin\theta=\sqrt{1-\cos^2\theta}$ has an infinite one at the pole. That is the good
+outcome — audible rather than a plausible finite number, unlike §0b's padding block —
+and it is pinned by a test. It cannot affect item 0c, whose derivative never touches
+$\hat v$, but a G-vector lying exactly along z is not exotic and Phase 4's stress does
+move ${\bf G+p}$.
 
 Also deliberately out of scope: differentiating with respect to the **lattice** rather
 than the position. That moves ${\bf G+p}$ itself and so does need the Bessel derivatives

@@ -89,13 +89,49 @@ def test_the_t4pil_prefactor_is_four_pi_minus_i_to_the_l():
         assert np.allclose(ratio, 4 * np.pi * (-1j) ** l, rtol=1e-12), l
 
 
-def test_the_matching_condition_holds(setup):
-    """D A = b, with b rebuilt from SciPy and the 4 pi i^l written out explicitly.
+def test_the_muffin_tin_function_meets_the_plane_wave_at_the_sphere(setup):
+    """Continuity itself: the only forward check that sees the ASSEMBLY.
 
-    This is the only forward check that sees the assembly rather than the pieces --
-    1/sqrt(Omega), the conjugation, the prefactor, the packing and the solve.
+    SciPy validates the special functions but nothing of 1/sqrt(Omega), the conjugation,
+    the t4pil prefactor, the packing or the solve.  This does, because it IS the
+    definition -- and it is deliberately not written as `D A = b`, which is
+    self-consistent (solve with a matrix, multiply by the same matrix) and therefore
+    blind to whether D's rows are the derivative order or the APW index.  The radial
+    family u_jl(r) = r^(l+j-1) is known in closed form, so the reconstruction is
+    evaluated from the power rule directly.
     """
     assert phase0c.experiment_matching_condition(setup) < 1e-10
+
+
+def test_the_continuity_check_catches_a_transposed_derivative_matrix(setup):
+    """... and here is the convention it exists to pin.
+
+    Handing `match` the transpose of D is exactly the kind of misreading a transcription
+    makes, and the dmatch identity cannot see it -- measured 3e-16 on the wrong
+    coefficients.  The continuity check fails by O(1).
+    """
+    flipped = dict(setup)
+    flipped["matrices"] = [m.T for m in setup["matrices"]]
+    assert phase0c.experiment_matching_condition(flipped) > 1e-2
+    for row in phase0c.experiment_dmatch(flipped, directions=(0,)):
+        assert row["error"] < 1e-13            # exact, and exactly as wrong
+
+
+def test_the_harmonic_gradient_is_nan_on_the_z_axis_and_finite_off_it(setup):
+    """Pinned so the behaviour is known rather than discovered in Phase 4.
+
+    For m != 0 the phase e^{i m phi} has no derivative where phi is undefined, and
+    sin(theta) = sqrt(1 - cos^2 theta) has an infinite one at the pole.  The result is
+    NaN, which is the GOOD outcome -- audible rather than a plausible finite number.
+    Item 0c never differentiates with respect to the direction of G+p, so this bites
+    Phase 4's stress and not this item, but a G-vector along z is not exotic.
+    """
+    harmonic = lambda v: jnp.real(lapw.spherical_harmonics(2, v, t4pil=False)[
+        lapw.lm_index(1, 1)])
+    on_axis = np.asarray(jax.grad(harmonic)(jnp.asarray([0.0, 0.0, 1.0])))
+    assert np.all(np.isnan(on_axis))
+    off_axis = np.asarray(jax.grad(harmonic)(jnp.asarray([0.3, -0.7, 1.1])))
+    assert np.all(np.isfinite(off_axis)) and np.linalg.norm(off_axis) > 1e-3
 
 
 def test_the_dmatch_identity_in_forward_mode(setup):
@@ -121,13 +157,11 @@ def test_forgetting_the_prefactor_still_passes_the_dmatch_identity(setup):
     ratios = phase0c.experiment_t4pil(setup)
     assert abs(ratios[0] - 4 * np.pi) < 1e-8            # l=0 is unaffected
     assert abs(ratios[1] - 4 * np.pi * 1j) < 1e-8       # ... l=1 is off by 4 pi i
-    original = lapw.spherical_harmonics
-    try:
-        lapw.spherical_harmonics = lambda lmax, v, t4pil=True: original(lmax, v, False)
-        for row in phase0c.experiment_dmatch(setup, directions=(0,)):
-            assert row["error"] < 1e-13                 # still exact, still wrong
-    finally:
-        lapw.spherical_harmonics = original
+    tangent = jnp.zeros(3).at[0].set(1.0)
+    primal, jvp = jax.jvp(lambda r: phase0c.apwalm(setup, r, t4pil=False),
+                          (setup["atposc"],), (tangent,))
+    exact = lapw.dmatch(setup["vgkc"], primal, 0)
+    assert float(jnp.max(jnp.abs(jvp - exact)) / jnp.max(jnp.abs(exact))) < 1e-13
 
 
 def test_the_gkvector_cutoff_is_a_mask_not_a_compaction(setup):

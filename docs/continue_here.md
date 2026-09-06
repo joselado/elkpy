@@ -224,12 +224,16 @@ of the mixer's internal ridge; unrolled linear mixing converges normally. Elk's 
   `gensfacgp`, `genylmv` and `sbessel`; `jax.jvp` against `dmatch`'s
   `i(G+p) apwalm` is exact to 7e-16, and so is reverse mode. The forward half is
   checked against SciPy (Bessel 4.3e-14, Ylm 9.7e-16) and against the matching
-  condition `D A = b` rebuilt independently (1.0e-11) — but **never against Elk's own
-  apwalm**, because nothing in `vendor/elk/src/` exports it. That is the next Fortran
+  physical continuity condition (1.0e-11): the muffin-tin function and the plane wave
+  agree in value and slope at R, with the radial family taken analytic so the check pins
+  D's index convention rather than merely inverting the matrix it was handed —
+  transposing D takes it from 4.0e-13 to 4.0e+00 while the dmatch identity stays at
+  3.0e-16. But **never against Elk's own apwalm**, because nothing in
+  `vendor/elk/src/` exports it. That is the next Fortran
   job: a small export as **patch 0013**, which under CLAUDE.md's core constraint is a
   commitment to maintain it across Elk upgrades, so it is a decision rather than a
-  chore. Two conventions are assumed rather than verified until then: the layout of the
-  derivative matrix D, and `apwfr`'s normalisation. Both are Phase 1 `apwfr` work.
+  chore. One convention is assumed rather than verified until then: `apwfr`'s own
+  normalisation, which is Phase 1 work since D is an input here.
   Note also the lesson: dropping `genylmv`'s `t4pil` prefactor still passes the
   `dmatch` identity exactly, since a constant factor commutes with d/dr.
 - **κ(S) for a real LAPW overlap has still never been measured**, and §8b's cheap

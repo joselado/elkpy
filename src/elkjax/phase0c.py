@@ -19,6 +19,8 @@ checked against SciPy — an independent implementation that knows nothing about
 the ``t4pil`` prefactor is checked by the one test that can see it.
 """
 
+import math
+
 import numpy as np
 
 import jax
@@ -50,21 +52,50 @@ def build(lmax=LMAX, ncell=4, gkmax=7.0, rmt=2.0, alat=10.26, seed=0,
 
     if orders is None:                       # Elk's usual APW+lo pattern: mostly 1
         orders = [2 if l <= 2 else 1 for l in range(lmax + 1)]
-    matrices = []
-    for order in orders:
-        a = rng.normal(size=(order, order))
-        matrices.append(jnp.asarray(a + order * np.eye(order)))   # kept well-conditioned
+    matrices = [jnp.asarray(radial_derivative_matrix(l, order, rmt))
+                for l, order in enumerate(orders)]
     atposc = jnp.asarray(rng.normal(scale=2.0, size=3))
     omega = alat ** 3 / 4.0
     return dict(lmax=lmax, vgkc=vgkc, gkc=gkc, atposc=atposc, matrices=matrices,
                 rmt=rmt, omega=omega, orders=orders)
 
 
-def apwalm(setup, atposc=None):
+def radial_basis(l, order):
+    r"""A stand-in APW radial family with derivatives known in closed form.
+
+    :math:`u_{jl}(r)=r^{\,l+j-1}`, :math:`j=1\ldots M_l`.  Not a real APW radial
+    function — those solve the radial Schrödinger equation at the linearisation energy
+    and are Phase 1 — but it has the two properties this item needs: the right
+    :math:`r^l` behaviour at the origin, and derivatives that can be written down.
+    Writing them down is the whole point: it is what turns :math:`DA=b` from a statement
+    about a matrix into a statement about a **function**.
+    """
+    return [l + j for j in range(order)]          # the exponents p_j = l + j - 1
+
+
+def radial_derivative_matrix(l, order, rmt):
+    r""":math:`D_{ij}=d^{\,i-1}u_{jl}/dr^{\,i-1}|_{R}`, in ``match.f90``'s own layout.
+
+    Rows are the derivative order, columns the APW order :math:`j` — read off
+    ``match.f90``'s ``a(1,jo)=apwfr(nr,1,jo,l,ias)`` and
+    ``a(io,jo)=polynm(io-1,...)``.  Getting this transposed is the one convention a
+    self-consistent :math:`DA=b` check cannot see, which is why :func:`radial_basis`
+    exists.
+    """
+    exponents = radial_basis(l, order)
+    matrix = np.zeros((order, order))
+    for i in range(order):
+        for j, p in enumerate(exponents):
+            if p >= i:
+                matrix[i, j] = math.prod(range(p - i + 1, p + 1)) * rmt ** (p - i)
+    return matrix
+
+
+def apwalm(setup, atposc=None, t4pil=True):
     """``match`` at this setup, optionally at a displaced atomic position."""
     return lapw.match(setup["lmax"], setup["vgkc"], setup["gkc"],
                       setup["atposc"] if atposc is None else atposc,
-                      setup["matrices"], setup["rmt"], setup["omega"])
+                      setup["matrices"], setup["rmt"], setup["omega"], t4pil)
 
 
 def experiment_dmatch(setup, directions=(0, 1, 2)):
@@ -132,25 +163,27 @@ def experiment_scipy(lmax=LMAX):
 
 
 def experiment_matching_condition(setup):
-    r"""The forward half again, and this time it tests the ASSEMBLY, not the pieces.
+    r"""Continuity itself: does the muffin-tin function meet the plane wave at :math:`R`?
 
-    SciPy validates :math:`j_l` and :math:`Y_{lm}` but says nothing about
-    :math:`1/\sqrt\Omega`, the conjugation, the ``t4pil`` prefactor, the packed
-    :math:`lm` layout or the linear solve.  The defining property does: the matching
-    coefficients exist precisely so that the muffin-tin function and the interstitial
-    plane wave agree in value and in the first :math:`M_l-1` derivatives at
-    :math:`r=R_\alpha`, i.e. :math:`D\,A=b` with
+    This is the forward check with teeth, and it is deliberately not written as
+    :math:`DA=b`.  That form is self-consistent — it solves with a matrix and then
+    multiplies by the same matrix — so it cannot see whether :math:`D`'s **rows** are
+    the derivative order or the APW index.  Here the radial family
+    :math:`u_{jl}(r)=r^{\,l+j-1}` is known in closed form, so the reconstruction
 
     .. math::
 
-        b_i=\frac{4\pi i^l}{\sqrt\Omega}|{\bf G+p}|^{i-1}
-            j^{(i-1)}_l(|{\bf G+p}|R_\alpha)\,
-            e^{i({\bf G+p})\cdot{\bf r}_\alpha}Y^*_{lm}(\widehat{{\bf G+p}}).
+        \phi^{(i)}_{lm}(R)=\sum_j A_{jlm}\,\frac{d^{\,i}}{dr^{\,i}}r^{\,l+j-1}
+        \bigg|_{R}
+        \overset{!}{=}
+        \frac{4\pi i^l}{\sqrt\Omega}|{\bf G+p}|^{i}j^{(i)}_l(|{\bf G+p}|R)
+        e^{i({\bf G+p})\cdot{\bf r}_\alpha}Y^*_{lm}(\widehat{{\bf G+p}})
 
-    Here :math:`b` is rebuilt from SciPy and NumPy alone, with the :math:`4\pi i^l`
-    written out explicitly rather than hidden in ``genylmv`` — so a sign or conjugation
-    slip in the prefactor cannot cancel between the two sides.  Orders up to 2 only,
-    which is what the fixture uses.
+    is evaluated from the power rule directly, never by reusing the matrix ``match`` was
+    handed.  A transposed convention anywhere then fails.  The right-hand side is the
+    Rayleigh expansion of :math:`e^{i({\bf G+p})\cdot{\bf r}}/\sqrt\Omega` about the
+    atom, rebuilt from SciPy with the :math:`4\pi i^l` written out rather than hidden in
+    ``genylmv``.  Orders up to 2, which is what the fixture uses.
     """
     from scipy.special import spherical_jn, sph_harm_y
 
@@ -169,17 +202,23 @@ def experiment_matching_condition(setup):
             raise ValueError("this check is written for APW orders 1 and 2")
         bessel = [spherical_jn(l, argument),
                   spherical_jn(l, argument, derivative=True)][:order]
-        radial = np.stack([bessel[i] * gkc ** i for i in range(order)])
-        matrix = np.asarray(setup["matrices"][l])
+        plane_wave = np.stack([bessel[i] * gkc ** i for i in range(order)])
+        exponents = radial_basis(l, order)
         for m in range(-l, l + 1):
             harmonics = np.array([
                 sph_harm_y(l, m, np.arccos(np.clip(v[2] / g, -1.0, 1.0)),
                            np.arctan2(v[1], v[0]))
                 for v, g in zip(vgkc, gkc)])
-            target = (4.0 * np.pi * (1j) ** l * scale) * radial * (
+            target = (4.0 * np.pi * (1j) ** l * scale) * plane_wave * (
                 phase * np.conj(harmonics))[None, :]
-            got = matrix @ coefficients[:, :order, lapw.lm_index(l, m)].T
-            worst = max(worst, np.max(np.abs(got - target))
+            amplitudes = coefficients[:, :order, lapw.lm_index(l, m)]     # (ngk, order)
+            reconstructed = np.zeros_like(target)
+            for i in range(order):
+                for j, p in enumerate(exponents):
+                    if p >= i:
+                        factor = math.prod(range(p - i + 1, p + 1)) * rmt ** (p - i)
+                        reconstructed[i] += factor * amplitudes[:, j]
+            worst = max(worst, np.max(np.abs(reconstructed - target))
                         / max(np.max(np.abs(target)), 1e-30))
     return worst
 
@@ -198,12 +237,7 @@ def experiment_t4pil(setup):
     exactly where ``match.f90``'s own documented :math:`b_i\propto4\pi i^l` comes from.
     """
     with_prefactor = apwalm(setup)
-    original = lapw.spherical_harmonics
-    try:
-        lapw.spherical_harmonics = lambda lmax, v, t4pil=True: original(lmax, v, False)
-        without = apwalm(setup)
-    finally:
-        lapw.spherical_harmonics = original
+    without = apwalm(setup, t4pil=False)
     ratios = []
     for l in range(setup["lmax"] + 1):
         block = slice(l * l, (l + 1) ** 2)
@@ -228,8 +262,8 @@ def main():
     print(f"  j_l(x)      worst relative {s['bessel']:.2e}")
     print(f"  dj_l/dx     worst relative {s['derivative']:.2e}   (from jax.jacfwd)")
     print(f"  Y_lm        worst absolute {s['harmonic']:.2e}")
-    print(f"  D A = b     worst relative {experiment_matching_condition(setup):.2e}   "
-          f"(the assembly, rebuilt from SciPy)")
+    print(f"  continuity  worst relative {experiment_matching_condition(setup):.2e}   "
+          f"(phi(R), phi'(R) vs the plane wave, from SciPy)")
 
     print("\n== 0c: jax.jvp(match) vs dmatch's i(G+p)_p A ==")
     for row in experiment_dmatch(setup):
