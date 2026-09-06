@@ -916,6 +916,16 @@ in the arithmetic.**
 Build `match` → `hmlfv`/`olpfv` → Cholesky-reduced `eigh`, reading a converged `STATE.OUT` from
 the real binary as a fixed input.
 
+**`hmlfv`/`olpfv` are done, forward** (`src/elkjax/hamiltonian.py`,
+`docs/jax_port_phase1.md`). Patch 0014 extends 0013's export with the muffin-tin radial
+integrals and the Gaunt array, and each of the six muffin-tin blocks is compared
+separately against Elk's own — machine precision on bulk Si at `apword` 1 and 2 and on
+monolayer h-BN, with the assembled pair reproducing `evalfv` to 9e-15 Ha. The
+interstitial blocks are taken from the export rather than built, because $H^{\rm I}$
+needs $V_s$, which is Phase 2. What remains of the forward half is therefore the radial
+integrals themselves and the Cholesky-reduced `eigh`; every gradient criterion below is
+still open.
+
 **The reference for every forward criterion below now exists.** Patch 0013
 (`docs/design.md` §33) adds a `LAPW` query to the task-9002 session that writes, at any
 $k$-point, the $\mathbf{G+k}$ set, `apwalm`, the derivative matrices $D$, the radial-function

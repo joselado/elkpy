@@ -2,12 +2,19 @@
 
 Working state as of 2026-09-06, so this can be picked up cold. **Both workstreams are
 now on `master`**: Workstream A landed via `elk-full-coverage`, and Workstream B's
-`jax-port` was fast-forwarded in at the end of this session. Nothing is pushed — `origin`
-is still at the pre-merge `master`. The `jax-port` branch still exists and points at the
-same commit; deleting it is safe.
+`jax-port` was fast-forwarded in earlier. Nothing is pushed — `origin` is still at the
+pre-merge `master`, and is now several commits behind. The `jax-port` branch still
+exists and points at an older commit; deleting it is safe.
+
+**Phase 0 is closed and Phase 1 has started.** `hmlfv`/`olpfv` are transcribed and
+checked against Elk element-wise (`docs/jax_port_phase1.md`, patch 0014); the only open
+Phase 0 item is still 0d's timing, which needs a GPU.
 
 ```
-4be2933  (master, jax-port) Correct the soc_scale shortfall to a range
+NEW      Assemble the LAPW Hamiltonian and overlap in JAX      src/elkjax/hamiltonian.py
+NEW      (docs)                                                patches/0014, docs/jax_port_phase1.md
+2ae2528  Record the merge in the continuation document
+4be2933  Correct the soc_scale shortfall to a range
 096d2eb  Close the kappa table with h-BN at the higher cutoff
 e559ac7  Record what a LAPW query costs, and what apword=2 pins
 81c8021  Check the exported eigenvectors against the exported eigenproblem
@@ -231,6 +238,24 @@ None of these is in the study, and each cost a wrong answer to find.
   `zgesv` destroys it. `apwfr`'s normalisation is no longer an unverified assumption,
   but `D` is still an **input** to `elkjax.lapw` rather than built from `genapwfr` —
   that construction is Phase 1.
+- **~~Phase 1's first build step, `hmlfv`/`olpfv`.~~ DONE.** `src/elkjax/hamiltonian.py`
+  builds the muffin-tin half of $H$ and $O$; all six blocks agree with Elk's own to
+  machine precision on bulk Si (`apword` 1 and 2) and monolayer h-BN, and the assembled
+  pair reproduces `evalfv` to 9e-15 Ha. Patch **0014** appends the radial integrals and
+  the Gaunt array to 0013's export. Numbers, fixtures and what each one alone catches:
+  `docs/jax_port_phase1.md`. Three things to carry forward from it. The
+  **interstitial blocks are taken from the export, not built** — $H^{\rm I}$ needs
+  $V_s$, which is Phase 2 — so the next forward step is the radial integrals
+  (`genapwfr`/`genlofr`/`hmlrad`/`olprad`), which also need Phase 2's muffin-tin
+  potential; that makes the **Cholesky-reduced `eigh`** the only Phase 1 forward item
+  reachable without Phase 2. `hlolo` is **not symmetric** under exchanging its two
+  local orbitals, so only the half Elk evaluates may be used — invisible on silicon,
+  1.3e-2 Ha on h-BN's nitrogen. And any element-wise comparison against Elk's $H$ has a
+  ~1e-12 floor from `hmlaa`/`hmlalo`'s own `zaxpy` guard, measured, not assumed.
+- **Every Phase 1 gradient criterion is open.** Nothing assembled has been
+  differentiated. `apwalm` differentiates exactly (0c) and $Z$ is a fixed contraction,
+  so the position-derivative path is short — but Phase 0's standing finding cuts both
+  ways, and a green forward check validates no gradient.
 - **0d's timing needs a GPU instance.** Do not fake it on CPU; the study's own 1.03x CPU
   number settles nothing. The memory half is already answered and points the other way.
   **This is now the only open Phase 0 item.**
@@ -271,6 +296,7 @@ lapw.py        match, gengkvec, gensfacgp, genylmv, sbessel
 phase0a/b/c/e  the experiment drivers, one per item
 phase0b_overlap.py  item 0b(ii): kappa(O) on real Elk overlaps. The one module here
                that imports elkpy and needs no JAX at all
+hamiltonian.py Phase 1a: olpfv/hmlfv, the muffin-tin half of H and O
 ```
 
 ```bash
@@ -297,20 +323,25 @@ production shape (26.8 GiB of H and S) is never allocated, only compiled.
   shared. The maintenance commitment is real and is now recorded in `patches/README.md`.
 - ~~Merge `jax-port` into `master`.~~ Done, fast-forward, at your instruction. **Not
   pushed** — that is still open.
-- Phase 1 at all, or the §9.2 hybrid. Phase 0 removed the technical objections; the
+- Phase 1 at all, or the §9.2 hybrid. **Started** — 1a is done, at the user's
+  instruction to continue the port, which settled this for that session but not in
+  general. The scope question below is unchanged. Phase 1 does
+  not commit to Phase 3: everything built so far reads a converged `STATE.OUT`.
+- Phase 0 removed the technical objections; the
   scope question it does not answer is whether the targets that need `dv*/dθ` — phonons,
   Born charges, elastic constants, response functions, ML-XC training, reverse-mode
   inverse design — are the goal. §9.2 puts the hybrid at 13-15 weeks and it delivers
   everything that needs no SCF derivative. **This is the one open Workstream B decision.**
 
-If Phase 1 does go ahead, three things it should start from rather than rediscover:
-`match` is already written and already checked against Elk element-wise, so the first
-build step is `hmlfv`/`olpfv`, not `match`; the G+k set, `atposc` and `rmt` must be taken
-from the export rather than regenerated (`gengkvec`'s ordering, `tshift`'s origin shift
-and `checkmt`'s radius shrink are three separate ways to get a correct-looking
-transcription that cannot be compared element-wise); and the projector tolerance must be
+Three things Phase 1 should not rediscover — the first two are now done, the third is
+still ahead. `match` was already checked against Elk element-wise, so the first build
+step was `hmlfv`/`olpfv`, and that is done too. The G+k set, `atposc` and `rmt` must be
+taken from the export rather than regenerated (`gengkvec`'s ordering, `tshift`'s origin
+shift and `checkmt`'s radius shrink are three separate ways to get a correct-looking
+transcription that cannot be compared element-wise) — `hamiltonian.py` takes every one
+of them from the export and never regenerates any. And the projector tolerance must be
 computed per run from a real κ, since it is a cutoff property and §8(b)'s cheap estimate
-is useless.
+is useless; that bites at the Cholesky-reduced `eigh`, which is the next forward step.
 
 **Workstream A** (unchanged from the previous session)
 

@@ -23,7 +23,8 @@ to make it a quick diff-checklist instead of a re-read of the raw patches.
 | [0010](0010-symmetry-operators.patch) | — | `src/elkpy_eigenstates.f90` (elkpy's own file, added by 0003) | New `elkpy_symop` subroutine (generalises 0008's `elkpy_parity` from inversion to any space-group element; reuses `rotzflm`/`genwfsv`/`genolpq` unmodified) + `SYMLIST` and `SYMMETRY` arms in the query loop | `SYMLIST` (Elk's crystal symmetries) and `SYMMETRY` (the operator $\langle\psi_m|\hat O|\psi_n\rangle$ at a fixed k-point), for rotation-eigenvalue symmetry indicators |
 | [0011](0011-spin-polarized-stm.patch) | `src/elkpy_stm.f90` | `src/elk.f90` (task dispatch `case` + docs), `src/modmain.f90` (new module vars), `src/readinput.f90` (`elkpy_stmdir`/`elkpy_stmpol`/`elkpy_stmbias`/`elkpy_stmint` block parsers), `src/Makefile` (`SRC_ELKPY` var) | `elk.f90`: one new `case` arm (9003, 9004) | Tasks 9003/9004 — spin-polarised STM images (Tersoff-Hamann): upstream task 162's own occupation-replacement + `rhomagv` route, but keeping the magnetisation it discards, and plotting $n$, $\mathbf m\cdot\hat{\mathbf e}_T$ and $n+P_T\,\mathbf m\cdot\hat{\mathbf e}_T$ |
 | [0012](0012-vertical-transport.patch) | `src/elkpy_transport.f90` | `src/elk.f90` (task dispatch `case` + docs), `src/modmain.f90` (new module vars), `src/readinput.f90` (`elkpy_transport_exit`/`_window`/`_kgrid`/`_koffset`/`_sdir`/`_spol` block parsers), `src/Makefile` (`SRC_ELKPY` var) | `elk.f90`: one new `case` arm (9005) | Task 9005 — vertical tunnelling transport through a 2D material: the exit-plane Gram matrices $S_{\bf k}[n,n']=\int_{\rm plane}\psi^*_{n\bf k}\hat P_{\rm s}\psi_{n'\bf k}$ (closed form, via the in-plane G-vector orthogonality collapse) and the tip amplitudes $\psi_{n\bf k}({\bf r}_p)$, on a k-mesh the task generates and diagonalises itself |
-| [0013](0013-lapw-export.patch) | — | `src/elkpy_eigenstates.f90` (elkpy's own file, added by 0003) | New `elkpy_lapwexport` subroutine (reuses upstream `gengkvec`/`gensfacgp`/`match`/`eveqnfv`/`hmlfv`/`olpfv`/`hmlistl`/`olpistl` unmodified; copies `match.f90`'s own four-line construction of the derivative matrix $D$, which `zgesv` destroys in place) + a `LAPW` arm in `elkpy_eigenstate_session`'s query loop | `LAPW` query on the task-9002 session — every ingredient of the first-variational LAPW eigenvalue problem at one k-point: the $\bf G+k$ set, `apwalm` (which nothing upstream writes at all), the derivative matrices $D$, the radial-function tails behind them, $H$ and $O$ with their interstitial parts written separately, and Elk's own `evalfv`/`evecfv`. An export for the JAX port (`docs/jax_port.md`, `docs/design.md` §33), not a physical observable |
+| [0013](0013-lapw-export.patch) | — | `src/elkpy_eigenstates.f90` (elkpy's own file, added by 0003) | New `elkpy_lapwexport` subroutine (reuses upstream `gengkvec`/`gensfacgp`/`match`/`eveqnfv`/`hmlfv`/`olpfv`/`hmlistl`/`olpistl` unmodified; copies `match.f90`'s own four-line construction of the derivative matrix $D$, which `zgesv` destroys in place) + a `LAPW` arm in `elkpy_eigenstate_session`'s query loop | `LAPW` query on the task-9002 session — every ingredient of the first-variational LAPW eigenvalue problem at one k-point: the $\bf G+k$ set, `apwalm` (which nothing upstream writes at all), the derivative matrices $D$, the radial-function tails behind them, $H$ and $O$ with their interstitial parts written separately, and Elk's own `evalfv`/`evecfv`. An export for the JAX port (`docs/jax_port.md`, `docs/design.md` §33), not a physical observable || [0014](0014-lapw-export-radial-integrals.patch) | — | `src/elkpy_eigenstates.f90` (elkpy's own file, added by 0003) | Extra `write` statements at the end of 0013's `elkpy_lapwexport`, behind a header of their own; no new subroutine and no new call site | The `LAPW` query also returns the muffin-tin radial integrals `oalo`, `ololo`, `haa`, `hloa`, `hlolo`, the local-orbital bookkeeping (`nlorb`, `lorbl`, `idxlo`) and the complex Gaunt array `gntyry` — together, every remaining input of `olpfv`/`hmlfv` beyond `apwalm` and the interstitial blocks 0013 already writes. This is what lets the port assemble each muffin-tin block itself and compare it against Elk's, one upstream routine at a time (`src/elkjax/hamiltonian.py`, `docs/jax_port_phase1.md`) |
+
 
 ## Notes
 
@@ -84,6 +85,18 @@ to make it a quick diff-checklist instead of a re-read of the raw patches.
   which cannot be captured because `zgesv` overwrites it in place — so that
   copy is the second place in the series where a silent divergence from
   upstream is possible. `docs/design.md` §33 states all three.
+- 0014 appends to 0013's own subroutine and so inherits every one of its
+  hazards; it adds one of its own. `hmlrad.f90` builds `hlolo`'s
+  $\ell_2=0$ element as the UNSYMMETRISED $\int u^{\rm lo}_i(\hat H
+  u^{\rm lo}_j)r^2dr$ — no averaging over the two orderings and no kinetic
+  surface term, unlike `haa`, whose counterpart is explicitly averaged and
+  whose transpose is explicitly assigned. `hmllolo` therefore evaluates each
+  local-orbital pair in one order only and Hermitises the rest, and a
+  consumer of the exported array must do the same. The export writes the
+  array as Elk holds it, asymmetry included; `src/elkjax/hamiltonian.py`'s
+  `_hermitise_evaluated_half` is where the restriction lives. Only a species
+  with two local orbitals sharing an $\ell$ can see this at all (nitrogen
+  has two $\ell=0$; silicon has one s and one p and cannot).
 - Task numbers 9000-9005 and the `elkpy_`-prefixed block/variable names are
   deliberately in an unused-by-upstream range (`docs/design.md` §8) to
   minimize collision risk on a version bump.

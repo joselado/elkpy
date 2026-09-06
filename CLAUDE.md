@@ -1181,7 +1181,8 @@ vendored tree:
 ## JAX port (Workstream B): status, and the memory discipline it runs under
 
 `docs/jax_port.md` (1,623 lines) is the design study, `docs/continue_here.md` §3 the cold-start
-summary, and `docs/jax_port_phase0.md` the running log of what Phase 0 has actually measured. Verdict, in one line: **a research project justified by
+summary, `docs/jax_port_phase0.md` the running log of what Phase 0 measured, and
+`docs/jax_port_phase1.md` the same for Phase 1, which is now under way. Verdict, in one line: **a research project justified by
 differentiability, not by the GPU** — SIRIUS already does FP-LAPW on CUDA/ROCm with Elk as its
 reference, and Elk's hot spots are already near-peak BLAS-3. Nothing about the port is a plan of
 record; **Phase 0 (§6 of the study) is designed to kill it, not to start it**, and that is what
@@ -1194,8 +1195,10 @@ pool on the first array operation — see below). Install with
 `python3 -m pip install -e .[jax]`. Tests are `tests/test_jax_*.py` and self-skip when `jax` is
 unimportable, the same pattern `tests/test_structure.py` uses for ASE. They add ~22 s to the
 default suite (each Phase 0a test converges a real fixed point), so
-`-k "not calculation_ and not jax"` still gets elkpy's own 438 in ~1 s; the heavier sweeps are
-behind `ELKPY_RUN_SLOW_TESTS=1` and take ~3 min.
+`-k "not calculation_ and not jax"` still gets elkpy's own 440 in ~1 s; the heavier sweeps are
+behind `ELKPY_RUN_SLOW_TESTS=1` and take ~3 min. The one test needing BOTH jax and the Elk
+binary is `tests/test_calculation_lapw_assembly.py` — named `calculation_`, not `jax_`, so
+the fast-suite filter above already excludes it; it converges three ground states, ~30 s.
 
 ### Memory and CPU discipline — read before running any JAX in this repository
 
@@ -1245,6 +1248,49 @@ Phase 0e asks for production shapes that this machine cannot hold.
 | 0c | `jax.jvp(match)` against `dmatch.f90`'s analytic $d(\texttt{apwalm})/dr$ | **done — exact to 7e-16** in both modes (`src/elkjax/lapw.py` transcribes `match`, `gengkvec`, `gensfacgp`, `genylmv`, `sbessel`), **and the forward half is now closed against Elk's own `apwalm`** by patch 0013 (§33): 1.9e-15 in `match`'s `omax==1` division branch and 8.0e-13 in its general linear-solve branch, the latter reachable only through a generated `apword=2` species file since every species file Elk ships sets `apword=1` |
 | 0d | `vmap(eigh)` vs `lax.map` at $n=1000$ on a real GPU | **timing deferred (no GPU); memory settled by 0e** — at production shapes a `lax.scan` accumulator holds 0.411 GiB of temporaries and `vmap` holds 40.2 GiB, so `vmap` over the k-axis does not fit on a 40 GB device whatever the timing says |
 | 0e | `jit` compile time and peak memory for one traced SCF step at production shapes | **done — `docs/jax_port_phase0.md`.** Compile time is FLAT in the shapes (0.46 s at both $(200,4)$ and $(3000,100)$) and **superlinear (exponent ≈1.85) in HLO op count** — isolated with the corrector, which is linear in its pass count, since Gram-Schmidt's own op count is quadratic in `n_lo` — while a `lax.scan` over 4x more radial points costs nothing. Design rule: `scan` repeated structure, unroll only what must be. Differentiating the step adds only ~1.2x |
+
+### Phase 1 — one k-point, one species, no SCF (study §6)
+
+**`hmlfv`/`olpfv` are done, forward.** `src/elkjax/hamiltonian.py` transcribes the
+muffin-tin half of the first-variational LAPW eigenproblem —
+$O^{\rm MT}=A^\dagger A$ and $H^{\rm MT}=A^\dagger ZA$ with
+$Z=\sum_{\ell_2m_2}\langle Y_{\ell_1m_1}|R_{\ell_2m_2}|Y_{\ell_3m_3}\rangle\,
+h_{\ell_2m_2}$ — and each of its **six blocks is compared separately** against Elk's
+own (`tests/test_calculation_lapw_assembly.py`), so a failure names one upstream
+routine rather than "$H$ is wrong". Machine precision on bulk Si at `apword` 1 and 2 and
+on monolayer h-BN; the assembled pair reproduces Elk's `evalfv` to 9e-15 Ha. Patch
+**0014** supplies what 0013 did not: the radial integrals `oalo`/`ololo`/`haa`/`hloa`/
+`hlolo`, the local-orbital bookkeeping and the complex Gaunt array `gntyry`. The
+**interstitial blocks are taken from the export, not built** — $H^{\rm I}$ needs the
+interstitial Kohn-Sham potential $V_s$, which is Phase 2 — so `cfunig`/`vsig` are
+deliberately not exported.
+
+**The trap, and only one of the three fixtures can see it.** `hmlrad.f90` builds
+`hlolo`'s $\ell_2=0$ element as the unsymmetrised
+$\int u^{\rm lo}_i(\hat H u^{\rm lo}_j)r^2dr$ — no averaging over the two orderings and
+no kinetic surface term, unlike `haa`, whose counterpart is explicitly averaged and whose
+transpose is explicitly assigned. `hmllolo` therefore evaluates each local-orbital pair
+in ONE order and Hermitises the rest, and a consumer must do the same. Using both halves
+gives a Hermitian, positive-definite, plausible, **wrong** matrix: measured on h-BN's
+nitrogen (two $\ell=0$ local orbitals), the orderings differ by 1.3e-2 Ha, reaching $H$
+as 3.7e-3 Ha and `evalfv` as 4.3e-7 Ha. Silicon cannot see it — one s and one p, no
+repeated $\ell$ — so the h-BN premise is **asserted** by its own test rather than
+assumed. `apword=2` is equally load-bearing: at `apword=1` the APW-order axes of `haa`
+and `hloa` are length 1, so an $i_o\leftrightarrow\ell$ swap is a no-op rather than a
+detected error. Mutation-tested one error at a time.
+
+**The residual is Elk's own guard, measured not assumed.** `hmlaa`/`hmlalo` skip any
+Gaunt-contracted $z_1$ below 1e-12 (the `zaxpy` guard); reproducing it takes h-BN's
+`hmlalo` from 3.3e-14 to 3.0e-17. The dense version here is the more accurate of the
+two, so the guard is documented rather than copied — and any element-wise comparison
+against Elk has a ~1e-12 floor because of it.
+
+**Still open in Phase 1**: the radial integrals are inputs, not outputs (building them
+needs `genapwfr`/`genlofr`/`hmlrad`/`olprad` and through `vsmt` the muffin-tin potential
+— Phase 2); the Cholesky-reduced `eigh` the port is meant to own; and **every** gradient
+criterion (displaced h-BN against central FD at three step sizes, the adversarial
+`soc_scale` sweep with a *required* refusal, the negative test at an exact degeneracy).
+Nothing here has been differentiated.
 
 **$\kappa(O)$ for a real LAPW overlap is measured, and the cheap estimate is
 useless.** Patch 0013 (§33) supplies real $H$ and $O$; `python3 -m elkjax.phase0b_overlap`
