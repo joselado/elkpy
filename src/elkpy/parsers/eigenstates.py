@@ -824,6 +824,15 @@ def _parse_poisson(tokens, pos, out, nspecies, natmtot, nrmt, nrmtmax):
                       transcription that omits it gets every qlm wrong
       atposc       -- (3, natmtot) Cartesian atomic positions, for the
                       structure factors.  No other query carries them
+      spzn         -- (nspecies,) the nuclear charge, NEGATIVE in Elk's
+                      convention, for `energy.f90`'s Madelung term
+      evalsum ...  -- `energy.f90`'s own converged decomposition, thirteen
+      engytot         scalars, so a transcription can be checked TERM BY TERM
+                      at full precision instead of against INFO.OUT's print
+                      width.  `evalsum` and `engyts` need the
+                      second-variational step and the zone sum, so they are
+                      what a Phase 2 total energy imports rather than
+                      reproduces
     """
     pair, pos = _take(tokens, pos, 2, int)
     out["npsd"], out["lnpsd"] = pair
@@ -838,6 +847,13 @@ def _parse_poisson(tokens, pos, out, nspecies, natmtot, nrmt, nrmtmax):
     out.update(wprmt=wprmt, vcln=vcln)
     flat, pos = _take(tokens, pos, 3 * natmtot, float)
     out["atposc"] = np.array(flat).reshape(3, natmtot, order="F")
+    flat, pos = _take(tokens, pos, nspecies, float)
+    out["spzn"] = np.array(flat)
+    names = ("evalsum", "engykn", "engyvcl", "engyvxc", "engymad", "engyen",
+             "engyhar", "engycl", "engynn", "engyx", "engyc", "engyts",
+             "engytot")
+    flat, pos = _take(tokens, pos, len(names), float)
+    out.update(zip(names, flat))
     return pos
 
 

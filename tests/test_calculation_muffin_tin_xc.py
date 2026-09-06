@@ -34,10 +34,16 @@ Two consequences for the port, both real:
     nucleus (where the density is spherical and there is nothing to project)
     to 5.3e-3 at R_MT.  Any transcription of Elk's SCF must apply it, which
     means exporting `symlatc`/`lsplsymc`/`ieqatom`, or must run `symtype=0`.
-  * inside a symmetric muffin tin Elk's own v_xc is not the functional
-    derivative of its own E_xc.  The discrepancy is variational noise of the
-    SHT truncation, but it is there, and a total-energy or force check at
-    better than ~1e-4 relative will see it.
+  * inside a symmetric muffin tin Elk's own v_xc is not the pointwise
+    functional derivative of its own E_xc.  **But this costs nothing in any
+    integral against rho**, which was NOT obvious and is measured in
+    test_calculation_energy.py: S is a group average, hence an orthogonal
+    projection, and rho is already in its range, so <rho, S v> = <S rho, v> =
+    <rho, v> identically.  The 5.3e-3 leak lives entirely in the harmonics rho
+    does not have.  Measured: E_vxc from the pointwise potential matches Elk's
+    to 3e-16 while the potentials differ by 5.3e-3 pointwise.  An earlier
+    version of this file predicted a 1e-4 error in the total energy; that
+    prediction was wrong.
 
 Skipped without the elk binary, and without jax.
 """

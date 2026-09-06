@@ -4535,7 +4535,14 @@ transcribed in `elkjax.lapw` and already pinned against Elk element-wise by
 patch 0013's own checks. Exporting `ylmg` alone would be about 38 MB of text
 to avoid reusing code that is verified.
 
-What is left is the four that cannot be rebuilt: `wprmt` (`wsplint`'s
+Patch 0017 also carries `spzn` and `energy.f90`'s own thirteen converged
+scalars — `evalsum` through `engytot`. Those are a *reference*, not an
+ingredient, and they are exported for a specific reason: a total-energy
+transcription checked against `INFO.OUT` is limited to its print width, and a
+total that agrees to $10^{-8}$ says nothing about which convention is right.
+Term by term at full precision, it does (`docs/jax_port_phase2.md` §2f).
+
+What is left of the ingredients is the four that cannot be rebuilt: `wprmt` (`wsplint`'s
 cumulative spline weights — **not** `wr2mt`, and no closed form worth
 retyping), `vcln` (the nuclear potential, which `potcoul` adds to the $l=0$
 channel *before* `zpotcoul` reads the sphere-boundary multipoles, so a

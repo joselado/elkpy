@@ -28,7 +28,7 @@ $V_s$ itself, which is what this phase is for.
 | **2e** symmetrisation | not started |
 | **2d′** the muffin-tin angular transform | **done** (§2d): `rbsht`/`rfsht` are mutual inverses to 2.7e-12 and give `exmt`/`ecmt` exactly. `vxcmt` misses by 1.2e-4 relative **because `potxc.f90:55-58` symmetrises the potential and not the energy density** — on a `symtype=0` ground state the same code gives 1.4e-14 |
 | **2c′** the Weinert Poisson solve | **done** (§2e, patch 0017): `vclir` to 1.6e-15 relative and `vclmt` to 4e-20 (l=0) / 7e-14 (l>0) on two structures. The monopole identity recovers Z = 14, 5, 7 exactly from a separate code path, and two mutation tests pin the step order and the region split — both mutants are smooth, of the right order and wrong |
-| **2f** total energy at fixed input potential | **partly** (§2c): the cell integral and inner product are built (`rfint`/`rfinp`), so the charge integrates to the electron count within 1.1e-14 — the study's forward criterion asks 1e-8 — and $E_x$/$E_c$ match Elk's own INFO.OUT to 1e-9. The total energy needs the density and the Poisson solve |
+| **2f** total energy at fixed input potential | **done** (§2f, `elkjax/energy.py`): every density-functional term of `energy.f90` matches Elk's own exported scalars to <1e-13 relative on two structures, asserted term by term. `evalsum`, `engyts` and `engynn` are imported — they need the second-variational step, a zone sum, and the lattice. **§2d's prediction of a 1e-4 error here was wrong**: symmetrisation is an orthogonal projection and rho is in its range, so the leak is orthogonal to the density (1e-16 relative, measured) |
 
 ---
 
@@ -418,15 +418,26 @@ unsymmetrised density. The second is the cheaper route for Phase 2 and is what
 `tests/test_calculation_muffin_tin_xc.py` uses; the first will be needed
 eventually, and it is one more patch, not a research problem.
 
-**Inside a symmetric muffin tin, Elk's own $v_{xc}$ is not the functional
-derivative of its own $E_{xc}$.** $\varepsilon_{xc}$ keeps the leak and
-$v_{xc}$ does not, so the two are inconsistent at the $10^{-4}$ relative level
-— variational noise of the SHT truncation rather than an error, but present,
-and a total-energy or force check at better than that will see it. This is
-worth remembering when the total energy (item 2f) is assembled: agreement
-better than $\sim10^{-4}$ relative between an AD force and Elk's own is not to
-be expected on a symmetric cell, and getting it would be evidence of a mistake
-rather than of success.
+**Inside a symmetric muffin tin, Elk's own $v_{xc}$ is not the pointwise
+functional derivative of its own $E_{xc}$** — and §2f measured that this costs
+**nothing** in any integral against $\rho$, which is not what this section
+originally predicted.
+
+The prediction here was that a total-energy or force check better than
+$\sim10^{-4}$ relative "would be evidence of a mistake rather than of success."
+That is wrong. $\hat S$ is a group average, hence an *orthogonal projection*,
+and $\rho$ is already in its range, so
+$\langle\rho,\hat Sv\rangle=\langle\hat S\rho,v\rangle=\langle\rho,v\rangle$
+identically. The $5.3\times10^{-3}$ leak lives entirely in the harmonics $\rho$
+does not have, so every integral against $\rho$ is blind to it. Measured (§2f,
+both structures): the potentials differ by $5.3\times10^{-3}$ pointwise while
+$E_{v_{xc}}$ agrees with Elk to $3\times10^{-16}$, and
+$\langle\rho,v_{\rm mine}-v_{\rm Elk}\rangle$ is $10^{-16}$ *relative*.
+
+So the asymmetry is real, it is why the pointwise comparison fails, and it is
+invisible to the energy — which is presumably why Elk can carry it. What still
+holds is the first consequence: a transcription that must match Elk's `vxcmt`
+*pointwise*, as any SCF iteration does, needs $\hat S$.
 
 ### Why the wrong hypotheses took a while
 
@@ -557,3 +568,104 @@ residual of $10^{-7}$ to $10^{-2}$ depending on the channel, which is a
 measurement of the fit and not of the solve. It is kept because it owes Elk
 nothing and would catch a gross error, and it is documented as the weak
 instrument it is rather than quoted as a result.
+
+---
+
+## 2f. The total energy, and the prediction §2d got wrong
+
+### What was at stake
+
+Every Phase 2 piece so far was checked against Elk *on its own*: the functional
+pointwise, the cell integral against `INFO.OUT`, the Poisson solve element-wise.
+None of those says the pieces are consistent **with each other** — that the
+potential one builds is the one another integrates, against the density they
+share. `energy.f90`'s decomposition is the check that does, and it is a hard
+one: ten terms, spanning three orders of magnitude, with heavy cancellation
+between them.
+
+### Scope: what is reproduced and what is imported
+
+For a non-magnetic ground state `energy.f90` assembles
+
+$$E_{\rm tot}=E_{\rm kin}+\tfrac12E_{v_{cl}}+E_{\rm Mad}+E_x+E_c+E_{TS},
+\qquad E_{\rm kin}=\Sigma_\varepsilon-E_{v_{cl}}-E_{v_{xc}} .$$
+
+Everything but three terms is a functional of the density and the potentials
+built from it. The three are **imported**, and the module says so rather than
+burying them in a total: $\Sigma_\varepsilon$ (the occupation-weighted eigenvalue
+sum) and $E_{TS}$ (the smearing entropy) need the second-variational step and a
+zone sum, which is Phase 3; $E_{nn}$ is a property of the lattice, not of the
+density, and comes from `energynn`. **This is not a transcription of
+`energy.f90`** — it is the density-functional half of it.
+
+Patch 0017 exports Elk's own thirteen scalars at full precision rather than
+leaving the comparison to `INFO.OUT`'s print width. That matters: a total energy
+that agrees to $10^{-8}$ says nothing about which *convention* is right, and the
+term-by-term table is the entire diagnostic value of the exercise.
+
+### The table
+
+Bulk Si (`src/elkjax/energy.py`'s own `report`), with the Coulomb potential taken
+from §2e rather than from Elk:
+
+| term | elkjax | Elk | relative |
+|---|---|---|---|
+| `engyvcl` | −841.805985476284 | −841.805985476285 | 5.4e-16 |
+| `engymad` | −696.535809871263 | −696.535809871263 | 0 |
+| `engyen` | −1219.434954924043 | −1219.434954924043 | 0 |
+| `engyhar` | +188.814484723879 | +188.814484723879 | 1.2e-15 |
+| `engycl` | −1117.438802609406 | −1117.438802609406 | 0 |
+| `engyvxc` | −52.479468518512 | −52.479468518512 | 2.7e-16 |
+| `engyx` | −37.574959142856 | −37.574959142855 | 3.8e-16 |
+| `engyc` | −2.147752668912 | −2.147752668912 | 2.1e-16 |
+| `engykn` | +579.178007953273 | +579.178007953274 | 5.9e-16 |
+| `engytot` | −577.983515950320 | −577.983515950320 | 2.0e-16 |
+
+Same on monolayer h-BN, where the vacuum makes the interstitial dominate the cell
+integral rather than being a correction to the spheres. Every term is asserted
+individually and not through the total, because `engykn` is $+579$ against
+`engyen`'s $-1219$: an error of $10^{-3}$ in either would leave `engytot` looking
+fine at $10^{-6}$ relative.
+
+Two of these are cross-checks rather than repetitions. Substituting Elk's own
+`vclmt`/`vclir` for §2e's changes nothing at $10^{-13}$ — the *integrated*
+counterpart of §2e's pointwise check, which is not redundant with it, since a
+pointwise agreement could still integrate differently if the solve and the
+quadrature disagreed about the packing or the region split. And `engymad` is the
+one term that is not an integral: it reads the $l=0$ potential at the **first**
+radial point and subtracts `vcln` there, two numbers of order $10^7$ whose
+difference is of order $10^2$. Dropping the subtraction leaves a smooth, finite
+number wrong by five orders of magnitude, which the mutation test pins.
+
+### §2d's prediction was wrong, and the reason is the interesting part
+
+§2d found that `potxc` symmetrises the muffin-tin $v_{xc}$ and not
+$\varepsilon_{xc}$, and predicted that $E_{v_{xc}}=\int\rho\,v_{xc}$ — an
+integral against a symmetrised potential, computed here from an unsymmetrised
+one — would therefore disagree with Elk at the same $\sim10^{-4}$ relative level.
+
+It agrees at $2.7\times10^{-16}$.
+
+$\hat S$ is a *group average*, hence an **orthogonal projection**, and $\rho$ is
+already in its range (`rhomag` symmetrises it), so
+
+$$\langle\rho,\hat Sv\rangle=\langle\hat S\rho,v\rangle=\langle\rho,v\rangle$$
+
+identically. The leak lives entirely in the harmonics $\rho$ does not have, and
+every integral against $\rho$ is blind to it. Measured directly on both
+structures: the potentials differ by $5.3\times10^{-3}$ and
+$2.6\times10^{-3}$ pointwise, while
+$\langle\rho,v_{\rm mine}-v_{\rm Elk}\rangle/\langle\rho,v_{\rm Elk}\rangle$ is
+$8.6\times10^{-17}$ and $4.7\times10^{-17}$.
+
+So §2d's asymmetry is real, it is why the pointwise comparison fails, and it
+costs nothing in the energy — which is presumably why Elk carries it. What
+survives of §2d's consequences is the first: an SCF iteration compares potentials
+*pointwise*, so reproducing Elk's loop still needs $\hat S$.
+
+The methodological point is worth more than the physics. §2d's prediction was
+made from a correct fact by a plausible argument, and it took a measurement to
+find that the argument skipped a step. **A prediction derived from a verified
+finding is not itself verified**, and the cheapest way to keep that honest is to
+write predictions down where a later test will run into them — which is what
+happened here.

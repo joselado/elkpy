@@ -1,6 +1,6 @@
 --- a/src/elkpy_eigenstates.f90
 +++ b/src/elkpy_eigenstates.f90
-@@ -1724,6 +1724,28 @@
+@@ -1724,6 +1724,42 @@
  do ig=1,ngvc
    write(*,'(4ES25.16E3)') dble(vsig(ig)),aimag(vsig(ig))
  end do
@@ -26,6 +26,20 @@
 +do ias=1,natmtot
 +  write(*,'(4ES25.16E3)') atposc(1:3,idxia(ias),idxis(ias))
 +end do
++! --- energy.f90's own decomposition (patch 0017) ---
++! spzn is the nuclear charge (NEGATIVE in Elk's convention), needed for the
++! Madelung term engymad = sum_ias spzn*(vclmt(1,ias)-vcln(1,is))*y00/2.
++! The rest are Elk's own converged values, written so a transcription can be
++! checked TERM BY TERM at full precision rather than against INFO.OUT's print
++! width -- which is the whole point of exporting them, since a total energy
++! that agrees is uninformative about which convention is right.
++! evalsum and engyts need the second-variational step and the zone sum, so
++! they are the terms a Phase 2 transcription IMPORTS rather than reproduces.
++write(*,'(4ES25.16E3)') spzn(1:nspecies)
++write(*,'(4ES25.16E3)') evalsum,engykn,engyvcl,engyvxc
++write(*,'(4ES25.16E3)') engymad,engyen,engyhar,engycl
++write(*,'(4ES25.16E3)') engynn,engyx,engyc,engyts
++write(*,'(4ES25.16E3)') engytot
  end subroutine
  !EOC
  
