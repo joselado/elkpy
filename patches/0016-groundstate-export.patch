@@ -1,0 +1,140 @@
+--- a/src/elkpy_eigenstates.f90
++++ b/src/elkpy_eigenstates.f90
+@@ -1595,6 +1595,110 @@
+ !EOC
+ 
+ !BOP
++! !ROUTINE: elkpy_gsexport
++! !INTERFACE:
++subroutine elkpy_gsexport
++! !USES:
++use modmain
++! !DESCRIPTION:
++!   Writes, to standard output, the converged ground state's density and
++!   potentials on the grids Elk itself holds them on: the muffin-tin
++!   functions in Elk's own packing ({\tt lmmaxi} spherical-harmonic
++!   coefficients per radial point over the inner region, {\tt lmmaxo} over
++!   the outer one) and the interstitial functions on the real-space FFT
++!   grid, plus the reciprocal-lattice set the latter live on.
++!
++!   This is the Phase 2 counterpart of patch 0013/0014/0015's {\tt LAPW}
++!   query (docs/jax\_port.md): where those export the first-variational
++!   eigenproblem at one $k$-point, this exports the density-and-potential
++!   half, which is $k$-independent -- hence a query of its own rather than
++!   more fields on {\tt LAPW}.
++!
++!   Two of these are the reference nothing else can supply. {\tt vxcir} is
++!   the exchange-correlation potential evaluated POINTWISE on the same
++!   real-space grid {\tt rhoir} lives on, so comparing it against a
++!   transcription of {\tt xc\_pwca} applied to {\tt rhoir} is exact -- unlike
++!   a comparison through {\tt plot1d}, where a nonlinear functional does not
++!   commute with either the spherical-harmonic truncation or the Fourier
++!   interpolation. And {\tt vclmt}/{\tt vclir} are the output of Elk's
++!   Weinert Poisson solver, which has no other export.
++!
++!   {\tt rhomt} includes the core density ({\tt rhocore} adds it), and
++!   {\tt vclmt} includes the nuclear $-Z/r$ ({\tt potnucl}); both are what a
++!   transcription has to reproduce, not what it might expect. So is the fact
++!   that {\tt vxcir} has been passed through {\tt trimrfg}
++!   ({\tt potks.f90}), which zeroes every Fourier component with
++!   $|{\bf G}| > 2\,{\tt gkmax}$ -- i.e. every G-vector whose index exceeds
++!   {\tt ngvc}, which is therefore written too. Without reproducing that
++!   filter, a pointwise comparison against the functional applied to
++!   {\tt rhoir} stops at the trimmed content, measured 2.5e-5 relative on
++!   bulk Si.
++!
++!   Numbers are written four to a line in {\tt ES25.16E3} -- 17 significant
++!   digits, i.e. an exact round trip for an IEEE double -- rather than one
++!   per line by list-directed output, because these arrays are two orders of
++!   magnitude larger than anything patches 0013-0015 write. The caller
++!   tokenises on whitespace, so the layout is free.
++!
++! !REVISION HISTORY:
++!   Created 2026 (elkpy)
++!EOP
++!BOC
++implicit none
++! local variables
++integer is,ias,ig,i
++write(*,*) natmtot,nspecies,ngtot,ngvec,lmaxi,lmmaxi,lmaxo,lmmaxo,npmtmax
++write(*,*) ngvc
++write(*,*) ngridg(1),ngridg(2),ngridg(3)
++write(*,'(4ES25.16E3)') omega
++do is=1,nspecies
++  write(*,*) nrmt(is),nrmti(is),npmt(is)
++end do
++do ias=1,natmtot
++  write(*,*) idxis(ias)
++end do
++! the reciprocal-lattice set the interstitial functions live on
++do ig=1,ngtot
++  write(*,*) ivg(1,ig),ivg(2,ig),ivg(3,ig)
++end do
++do ig=1,ngtot
++  write(*,*) igfft(ig)
++end do
++write(*,'(4ES25.16E3)') gc(1:ngvec)
++write(*,'(4ES25.16E3)') vgc(1:3,1:ngvec)
++! muffin-tin functions, in Elk's own packing
++do ias=1,natmtot
++  is=idxis(ias)
++  write(*,'(4ES25.16E3)') rhomt(1:npmt(is),ias)
++end do
++do ias=1,natmtot
++  is=idxis(ias)
++  write(*,'(4ES25.16E3)') vclmt(1:npmt(is),ias)
++end do
++do ias=1,natmtot
++  is=idxis(ias)
++  write(*,'(4ES25.16E3)') vxcmt(1:npmt(is),ias)
++end do
++! interstitial functions, on the real-space FFT grid
++write(*,'(4ES25.16E3)') rhoir(1:ngtot)
++write(*,'(4ES25.16E3)') vclir(1:ngtot)
++write(*,'(4ES25.16E3)') vxcir(1:ngtot)
++write(*,'(4ES25.16E3)') vsir(1:ngtot)
++write(*,'(4ES25.16E3)') cfunir(1:ngtot)
++! and the G-space quantities olpistl/hmlistl actually consume
++do ig=1,ngvec
++  write(*,'(4ES25.16E3)') dble(cfunig(ig)),aimag(cfunig(ig))
++end do
++! NOTE vsig is allocated to ngvc, NOT ngvec (init0.f90): genvsig fills it from
++! the COARSE grid, so it only carries |G| <= 2 gkmax. Writing ngvec of them
++! reads past the end of the array.
++do ig=1,ngvc
++  write(*,'(4ES25.16E3)') dble(vsig(ig)),aimag(vsig(ig))
++end do
++end subroutine
++!EOC
++
++!BOP
+ ! !ROUTINE: elkpy_eigenstate_session
+ ! !INTERFACE:
+ subroutine elkpy_eigenstate_session
+@@ -1672,6 +1776,14 @@
+ !    JAX port (docs/jax\_port.md), not a physical observable: nothing
+ !    upstream writes {\tt apwalm} at all. $H$ and $O$ carry only the upper
+ !    triangle Elk fills.
++!   \item {\tt GROUNDSTATE} -- the converged density and potentials on the
++!    grids Elk holds them on (see {\tt elkpy\_gsexport}): {\tt rhomt},
++!    {\tt vclmt}, {\tt vxcmt} in Elk's own muffin-tin packing;
++!    {\tt rhoir}, {\tt vclir}, {\tt vxcir}, {\tt vsir}, {\tt cfunir} on
++!    the real-space FFT grid; {\tt cfunig} and {\tt vsig} in $G$-space;
++!    plus the reciprocal-lattice set. Takes no $k$-point -- unlike every
++!    other query here, this half of the calculation is $k$-independent.
++!    An export for the JAX port's Phase 2 (docs/jax\_port\_phase2.md).
+ !   \item {\tt PARITY k1 k2 k3 ist0 ist1} -- the inversion (parity) operator
+ !    $\langle\psi_m|\hat I|\psi_n\rangle$ over the band window
+ !    $[ist0,ist1]$, plus all {\tt nstsv} eigenvalues of the same
+@@ -1743,6 +1855,11 @@
+   if (ios /= 0) cycle
+   select case(trim(cmd))
+ 
++  case('GROUNDSTATE')
++    call elkpy_gsexport
++    write(*,'("ELKPY_SESSION_END")')
++    call flush(6)
++
+   case('QUIT')
+     exit
+ 

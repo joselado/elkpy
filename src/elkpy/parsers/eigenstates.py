@@ -650,6 +650,100 @@ def _parse_lapw_potential(tokens, pos, out):
     out["lofr"] = lofr
 
 
+def parse_groundstate_response(tokens):
+    """Parse the token stream of a GROUNDSTATE response -- the converged
+    density and potentials on the grids Elk holds them on (see
+    `elkpy_gsexport`, patches/0016).
+
+    Returns a dict with:
+
+      natmtot, nspecies, ngtot, ngvec, lmaxi, lmmaxi, lmaxo, lmmaxo,
+      npmtmax                   -- ints, the shapes
+      ngvc                      -- number of G-vectors with |G| <= 2 gkmax.
+                                   `vxcir` has been passed through
+                                   `trimrfg`, which zeroes every Fourier
+                                   component beyond it (potks.f90), so
+                                   reproducing `vxcir` from `rhoir` means
+                                   reproducing that filter too.
+      ngridg                    -- (3,) the real-space FFT grid
+      omega                     -- unit cell volume (Bohr^3)
+      nrmt, nrmti, npmt         -- (nspecies,) radial points, inner-region
+                                   radial points, packed muffin-tin length
+      idxis                     -- (natmtot,) 1-based species of each atom
+      ivg                       -- (3, ngtot) integer G-vectors
+      igfft                     -- (ngtot,) 1-based map from the G-vector
+                                   index to the FFT array position
+      gc                        -- (ngvec,) |G|
+      vgc                       -- (3, ngvec) G in Cartesian a.u.
+      rhomt, vclmt, vxcmt       -- (natmtot, npmtmax) muffin-tin density,
+                                   Coulomb and exchange-correlation
+                                   potentials, in ELK'S OWN PACKING (see
+                                   `unpack_muffin_tin`)
+      rhoir, vclir, vxcir,
+      vsir, cfunir              -- (ngtot,) the same functions plus the
+                                   Kohn-Sham potential and the characteristic
+                                   function, on the real-space FFT grid
+      cfunig                    -- (ngvec,) complex, in G-space
+      vsig                      -- (NGVC,) complex, not (ngvec,): `genvsig`
+                                   builds it on the COARSE grid, so it only
+                                   carries |G| <= 2 gkmax, and `init0`
+                                   allocates it that long
+
+    Two contents are what a transcription has to reproduce rather than what
+    it might expect: `rhomt` INCLUDES the core density (`rhocore` adds it),
+    and `vclmt` INCLUDES the nuclear -Z/r (`potnucl`).
+
+    `vxcir` is the sharpest available check on an exchange-correlation
+    transcription: it is the functional applied POINTWISE to `rhoir` on this
+    same grid, so the comparison is exact -- unlike one made through
+    `plot1d`, where a nonlinear functional does not commute with either the
+    spherical-harmonic truncation or the Fourier interpolation.
+    """
+    pos = 0
+    head, pos = _take(tokens, pos, 9, int)
+    out = dict(zip(
+        ("natmtot", "nspecies", "ngtot", "ngvec", "lmaxi", "lmmaxi",
+         "lmaxo", "lmmaxo", "npmtmax"), head))
+    (natmtot, nspecies, ngtot, ngvec, _, lmmaxi, _, lmmaxo, npmtmax) = head
+    (out["ngvc"],), pos = _take(tokens, pos, 1, int)
+    flat, pos = _take(tokens, pos, 3, int)
+    out["ngridg"] = np.array(flat)
+    (out["omega"],), pos = _take(tokens, pos, 1, float)
+    nrmt = np.zeros(nspecies, dtype=int)
+    nrmti = np.zeros(nspecies, dtype=int)
+    npmt = np.zeros(nspecies, dtype=int)
+    for is_ in range(nspecies):
+        triple, pos = _take(tokens, pos, 3, int)
+        nrmt[is_], nrmti[is_], npmt[is_] = triple
+    out.update(nrmt=nrmt, nrmti=nrmti, npmt=npmt)
+    flat, pos = _take(tokens, pos, natmtot, int)
+    out["idxis"] = np.array(flat)
+    flat, pos = _take(tokens, pos, 3 * ngtot, int)
+    out["ivg"] = np.array(flat).reshape(3, ngtot, order="F")
+    flat, pos = _take(tokens, pos, ngtot, int)
+    out["igfft"] = np.array(flat)
+    flat, pos = _take(tokens, pos, ngvec, float)
+    out["gc"] = np.array(flat)
+    flat, pos = _take(tokens, pos, 3 * ngvec, float)
+    out["vgc"] = np.array(flat).reshape(3, ngvec, order="F")
+    idxis = out["idxis"]
+    for key in ("rhomt", "vclmt", "vxcmt"):
+        arr = np.zeros((natmtot, npmtmax))
+        for ias in range(natmtot):
+            n = int(npmt[int(idxis[ias]) - 1])
+            flat, pos = _take(tokens, pos, n, float)
+            arr[ias, :n] = flat
+        out[key] = arr
+    for key in ("rhoir", "vclir", "vxcir", "vsir", "cfunir"):
+        flat, pos = _take(tokens, pos, ngtot, float)
+        out[key] = np.array(flat)
+    for key, count in (("cfunig", ngvec), ("vsig", int(out["ngvc"]))):
+        flat, pos = _take(tokens, pos, 2 * count, float)
+        reim = np.array(flat).reshape(count, 2)
+        out[key] = reim[:, 0] + 1j * reim[:, 1]
+    return out
+
+
 def unpack_muffin_tin(packed, nr, nri, lmmaxi, lmmaxo):
     """Elk's packed muffin-tin function -> a dense (nr, lmmaxo) array.
 

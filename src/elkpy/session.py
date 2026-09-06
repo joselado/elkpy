@@ -15,6 +15,7 @@ created.
 from collections import namedtuple
 
 from .parsers.eigenstates import (
+    parse_groundstate_response,
     parse_angular_momentum_response,
     parse_eigenstates_response,
     parse_momentum_response,
@@ -574,6 +575,18 @@ class EigenstateSession:
         nstfv = state.evecsv.shape[0] // self._nspinor
         ops = compute_spin_operator(state.evecsv, nstfv, ist0, ist1)
         return SpinOperator(k=state.k, **ops)
+
+    def ground_state(self):
+        """The converged density and potentials on Elk's own grids
+        (GROUNDSTATE query, patches/0016; docs/design.md #33).
+
+        Takes no k-point: unlike every other query here, this half of the
+        calculation is k-independent.  See
+        `parsers.eigenstates.parse_groundstate_response` for the fields, and
+        `parsers.eigenstates.unpack_muffin_tin` for the muffin-tin packing.
+        """
+        self._send("GROUNDSTATE")
+        return parse_groundstate_response(self._read_until_sentinel())
 
     def lapw_problem(self, k):
         """Every ingredient of the first-variational LAPW eigenvalue problem

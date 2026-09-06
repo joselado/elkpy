@@ -20,7 +20,8 @@ $V_s$ itself, which is what this phase is for.
 
 | item | result |
 |---|---|
-| **2a** the XC functional, and its gradient | **done for LDA (`xctype=3`)**: exchange exact against Dirac, correlation anchored on Gell-Mann–Brueckner, `jax.grad` reproduces Elk's hand-coded $v_{xc}$ to machine precision, and the $\rho\to0$ guard's `NaN` hazard is asserted rather than described |
+| **2a** the XC functional, and its gradient | **done for LDA (`xctype=3`)**: exchange exact against Dirac, correlation anchored on Gell-Mann–Brueckner, `jax.grad` reproduces Elk's hand-coded $v_{xc}$ to machine precision, Elk's own `vxcir` reproduced to **4.4e-16** once `trimrfg` is reproduced with it, and the $\rho\to0$ guard's `NaN` hazard is asserted rather than described |
+| **2a′** the `GROUNDSTATE` export (patch 0016) | **done** — density and potentials on Elk's own grids, $k$-independent; the reference for everything below |
 | **2b** the density `rhomag` | not started |
 | **2c** the Weinert Poisson solver | not started |
 | **2d** a GGA functional | not started |
@@ -114,13 +115,50 @@ not for anything that differentiates $\varepsilon_{xc}$ itself, where the true
 derivative diverges as $\rho^{-2/3}$ (measured $-1.1\times10^{12}$ just above
 the cutoff).
 
-### Against Elk's own $v_{xc}$, and why that tolerance is what it is
+### Against Elk's own $v_{xc}$: exact, once one more Elk step is reproduced
 
 All four checks above are statements about the *form* of the functional. None
-says it is the functional Elk used. `tests/test_calculation_xc.py` takes Elk's
-own $v_{xc}$ along a line through bulk silicon and compares it against
-$v_{xc}$ evaluated here on Elk's own density along the same line (`plot1d` puts
-both on the identical point set, which the test asserts).
+says it is the functional Elk used.
+
+Patch **0016** adds a `GROUNDSTATE` query — the converged density and
+potentials on the grids Elk holds them on, with no $k$-point, since this half
+of the calculation is $k$-independent. `vxcir` is then the sharpest possible
+reference: Elk evaluates the functional **pointwise** on the real-space FFT
+grid, so it is literally this transcription applied to `rhoir`.
+
+It agrees to **4.4e-16 absolute** — but only after one further Elk step is
+reproduced. `potks.f90` passes `vxcir` through `trimrfg`, which zeroes every
+Fourier component with $|\mathbf G| > 2k_{\max}$ (equivalently, every
+G-vector whose index exceeds `ngvc`, Elk's list being sorted by $|\mathbf G|$).
+Without that filter the same comparison stops at **2.5e-5 relative**, which
+looks exactly like a mediocre transcription and is not one.
+`elkjax.grid.trim` transcribes it, and the test asserts *both* numbers, so
+"we reproduce Elk's $v_{xc}$" cannot quietly come to mean "to four digits" if
+the filter is ever dropped.
+
+**Two things the export carries that a transcription would not expect**, both
+now in its docstring: `rhomt` includes the core density (`rhocore` adds it),
+and `vclmt` includes the nuclear $-Z/r$ (`potnucl`). A third was a bug found
+while writing it: `vsig` is allocated `ngvc` long, **not** `ngvec` —
+`genvsig` builds it on the coarse grid — so the first version of the export
+read past the end of the array.
+
+**What the muffin-tin side would take.** Elk builds $v_{xc}^{\rm MT}$ on an
+angular grid and keeps $l_{\max}^{\rm o}$ harmonics of the result, so a
+transcription needs `rbsht`/`rfsht`. Measured here, treating the density as if
+it were spherical reproduces Elk's $\ell=0$ channel to **8e-16 over most of
+the sphere** and to 1.4e-2 at worst, where the non-spherical part of the
+density reaches 35% of the spherical part. So the angular machinery is needed
+only in the outer shell — which is where to look first if it ever disagrees.
+
+### Through `plot1d`, and why that tolerance is what it is
+
+All four checks above are statements about the *form* of the functional. None
+says it is the functional Elk used. The same test file also compares Elk's
+$v_{xc}$ along a *line* through bulk silicon against $v_{xc}$ evaluated here on
+Elk's density along the same line (`plot1d` puts both on the identical point
+set, which the test asserts). That comparison is kept, even though the grid one
+above supersedes it, because its number is worth knowing on its own.
 
 Measured: **3.0e-5 median relative** over 200 points spanning
 $\rho=2\times10^{-3}$ to $1.3\times10^{3}$, rising to 1.2e-2 in the shell
@@ -135,11 +173,11 @@ harmonics of the *result*, while this comparison applies it to the truncated
 `plot1d` Fourier-interpolates the result, while this applies it to the
 interpolated density. The 1.2e-2 shell is where the two representations meet.
 
-It is still discriminating. Correlation is 17–20% of $v_{xc}$ along this line
-(asserted, not assumed), so a 3e-5 median agreement identifies the
-parameterisation to about four significant figures — four orders of magnitude
-finer than the difference between having this correlation functional and having
-none.
+It is still discriminating — correlation is 17–20% of $v_{xc}$ along this line
+(asserted, not assumed) — but the point to carry forward is that **3e-5 is the
+accuracy ceiling of any comparison made through Elk's plotting tasks**, four
+orders of magnitude worse than the same comparison made on the grid Elk
+computes on. Where an exported grid exists, use it.
 
 ### What this settles, and what it does not
 
