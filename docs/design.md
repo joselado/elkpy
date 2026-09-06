@@ -4510,6 +4510,45 @@ the eigensolver's choice of basis is free to rotate. So the separation between
 the two rules is a mechanism, not a number: the test now asserts growth in the
 smearing width and a widening separation instead of a fixed factor.
 
+### Patches 0016 and 0017: the ground state, and the Poisson solve's own inputs
+
+Patch **0016** adds a `GROUNDSTATE` query — the converged density and
+potentials on the grids Elk holds them on, taking **no k-point**, which is why
+it is a query of its own rather than more fields on `LAPW`. Muffin tin, in
+Elk's own packing: `rhomt`, `vclmt`, `vxcmt`, `exmt`, `ecmt`, the radial mesh
+and weights, and the four spherical-harmonic transform matrices
+(`rbshti`/`rfshti`/`rbshto`/`rfshto`). Interstitial: `rhoir`, `vclir`,
+`vxcir`, `exir`, `ecir`, `vsir`, `cfunir`, plus `cfunig`, `vsig` and the
+reciprocal-lattice set. Two contents are what a transcription must reproduce
+rather than what it might expect — `rhomt` includes the core density and
+`vclmt` includes the nuclear $-Z/r$ — and one is a bound rather than a value:
+`vsig` is allocated to `ngvc`, not `ngvec`, because `genvsig` fills it from
+the coarse grid, so writing `ngvec` of them reads past the end of the array.
+
+Patch **0017** adds four more fields, and the interesting part is what it does
+*not* add. The Weinert Poisson solve (`potcoul` → `genzvclmt` → `zpotclmt`,
+plus `zpotcoul`) consumes eleven arrays; seven of them are rebuilt in
+`src/elkjax/poisson.py` instead. $r^\ell$ and $R^\ell$ are the mesh; $4\pi/G^2$
+is `gc`; and $Y_{\ell m}(\hat G)$, $e^{i\mathbf G\cdot\mathbf r_\alpha}$ and
+$j_\ell(GR)$ are `genylmv`, `gensfacgp` and `sbessel`, all three already
+transcribed in `elkjax.lapw` and already pinned against Elk element-wise by
+patch 0013's own checks. Exporting `ylmg` alone would be about 38 MB of text
+to avoid reusing code that is verified.
+
+What is left is the four that cannot be rebuilt: `wprmt` (`wsplint`'s
+cumulative spline weights — **not** `wr2mt`, and no closed form worth
+retyping), `vcln` (the nuclear potential, which `potcoul` adds to the $l=0$
+channel *before* `zpotcoul` reads the sphere-boundary multipoles, so a
+transcription that omits it gets every $q_{\ell m}$ wrong), `npsd`/`lnpsd`, and
+`atposc`, which no other query carries.
+
+The measurements are in `docs/jax_port_phase2.md` §2e: `vclir` to 1.6e-15
+relative and `vclmt` to 4e-20 ($\ell=0$) and 7e-14 ($\ell>0$) on two
+structures, with the monopole identity $\sqrt{4\pi}q_{00}=N_{\rm MT}-Z$
+recovering the nuclear charges as exact integers from an independent code
+path.
+
+
 ### What the port does with it
 
 `src/elkjax/hamiltonian.py` transcribes `olpfv`/`hmlfv`'s muffin-tin half and

@@ -1182,8 +1182,8 @@ vendored tree:
 
 `docs/jax_port.md` (1,623 lines) is the design study, `docs/continue_here.md` §3 the cold-start
 summary, `docs/jax_port_phase0.md` the running log of what Phase 0 measured,
-`docs/jax_port_phase1.md` the same for Phase 1 (through §1l), and
-`docs/jax_port_phase2.md` for Phase 2, which has now started (§§2a-2c). §2a is the LDA
+`docs/jax_port_phase1.md` the same for Phase 1 (through §1m), and
+`docs/jax_port_phase2.md` for Phase 2, which is under way (§§2a-2e). §2a is the LDA
 exchange-correlation functional: `src/elkjax/xc.py` transcribes `xc_pwca.f90`, with
 `jax.grad` reproducing Elk's hand-coded $v_{xc}$ at machine precision against the study's
 stated $10^{-10}$, exchange exact against Dirac and its spin scaling, correlation
@@ -1214,7 +1214,32 @@ $v_{xc}$, so the disagreement is ~1% of what AD reproduces from nothing. §2c is
 integral and inner product (`rfint`/`rfinp`): $\int\rho$ gives the electron count to
 **1.1e-14** against the study's 1e-8 criterion (note `rhomt` INCLUDES the core density —
 assuming valence misses by 20 electrons, not by a tolerance), and $E_x$/$E_c$ match Elk's
-INFO.OUT to its print width). Verdict, in one line: **a research project justified by
+INFO.OUT to its print width). §2d transcribes the muffin-tin angular transform
+(`rbsht`/`rfsht`) and found a real property of Elk with it: `potxc.f90:55-58` calls
+`symrfmt` on `vxcmt` and `bxcmt` and **not** on `exmt`/`ecmt`, so inside a muffin tin
+$v_{xc}=\hat S\,v_{xc}[\rho]$ while $\varepsilon_{xc}=\varepsilon_{xc}[\rho]$ — the
+projection is not the identity even on an already-symmetric $\rho$, because $v_{xc}[\rho]$
+is not band-limited when $\rho$ is and the SHT round trip leaks weight into the forbidden
+harmonics (Elk holds 1e-20 at Si's $l=1,2,5$; the pointwise potential holds 1e-3). On a
+`symtype=0` ground state the same code reproduces `vxcmt` to 1.4e-14. Two consequences:
+reproducing Elk's SCF on a symmetric cell needs `symlatc`/`lsplsymc`/`ieqatom` exported and
+`rotrfmt` transcribed (one more patch, not a research problem), or a `symtype=0` run; and
+**Elk's own $v_{xc}$ is not the functional derivative of its own $E_{xc}$ there**, so a
+force or total-energy check better than $\sim10^{-4}$ relative would be evidence of a
+mistake rather than of success. §2e is the **Weinert Poisson solve** (patch **0017**,
+`src/elkjax/poisson.py`), which closes the last ingredient no export supplies as a
+function of the density: `vclir` to 1.6e-15 relative and `vclmt` to 4e-20 ($l=0$, of order
+$10^7$ since it carries the nucleus) and 7e-14 ($l>0$), on bulk Si and monolayer h-BN.
+Patch 0017 exports only `wprmt`, `vcln`, `npsd`/`lnpsd` and `atposc`; $r^l$, $R^l$ and
+$4\pi/G^2$ come from the mesh and `gc`, and `ylmg`/`sfacg`/`jlgrmt` are `genylmv`/
+`gensfacgp`/`sbessel`, already pinned element-wise by patch 0013 — exporting `ylmg` alone
+would be 38 MB of text. Two checks owe Elk's `vclmt` nothing: the monopole identity
+$\sqrt{4\pi}q_{00}=N_{\rm MT}-Z$ recovers $Z=14.000000,5.000000,7.000000$ with $N_{\rm MT}$
+from `elkjax.integrate`, and two mutation tests remove one thing Elk does each (the nuclear
+term *before* the multipoles are read; the outer region's own spline weights for
+$l>l_{\max}^{\rm i}$) and assert the answer moves — both mutants smooth, of the right order
+and wrong. Nothing there is differentiated, deliberately: Poisson is linear in $\rho$, so
+its linearisation is itself. Verdict, in one line: **a research project justified by
 differentiability, not by the GPU** — SIRIUS already does FP-LAPW on CUDA/ROCm with Elk as its
 reference, and Elk's hot spots are already near-peak BLAS-3. Nothing about the port is a plan of
 record; **Phase 0 (§6 of the study) is designed to kill it, not to start it**, and that is what

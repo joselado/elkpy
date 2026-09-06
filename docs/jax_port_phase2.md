@@ -27,6 +27,7 @@ $V_s$ itself, which is what this phase is for.
 | **2d** a GGA functional | **done for PBE (`xctype=20`)** (§2b): energy densities exact against Elk's own `exir`/`ecir` (4e-16), and `jax.grad` of the discretised energy reproduces Elk's hand-coded potential to 2.4e-5 median — with the gap identified as discretise-then-differentiate versus differentiate-then-discretise, not as an error in either |
 | **2e** symmetrisation | not started |
 | **2d′** the muffin-tin angular transform | **done** (§2d): `rbsht`/`rfsht` are mutual inverses to 2.7e-12 and give `exmt`/`ecmt` exactly. `vxcmt` misses by 1.2e-4 relative **because `potxc.f90:55-58` symmetrises the potential and not the energy density** — on a `symtype=0` ground state the same code gives 1.4e-14 |
+| **2c′** the Weinert Poisson solve | **done** (§2e, patch 0017): `vclir` to 1.6e-15 relative and `vclmt` to 4e-20 (l=0) / 7e-14 (l>0) on two structures. The monopole identity recovers Z = 14, 5, 7 exactly from a separate code path, and two mutation tests pin the step order and the region split — both mutants are smooth, of the right order and wrong |
 | **2f** total energy at fixed input potential | **partly** (§2c): the cell integral and inner product are built (`rfint`/`rfinp`), so the charge integrates to the electron count within 1.1e-14 — the study's forward criterion asks 1e-8 — and $E_x$/$E_c$ match Elk's own INFO.OUT to 1e-9. The total energy needs the density and the Poisson solve |
 
 ---
@@ -444,3 +445,115 @@ Elk holding exact zeros in three channels where the transcription held
 $10^{-3}$. A scalar residual, however carefully bounded, cannot show that.
 **When a field-valued quantity disagrees, decompose it in the basis the code
 stores it in before ruling anything out.**
+
+---
+
+## 2e. The Weinert Poisson solve
+
+### What was at stake
+
+Every other Phase 2 piece takes the converged potential as an *input*. This one
+does not: the Coulomb potential is a functional of the density, and no export
+supplies it as one — `vclmt`/`vclir` come out of `potcoul` and nowhere else. §2a
+and §2b close the exchange-correlation half pointwise; without this the SCF loop
+has a hole in it, and the total energy (item 2f) has no Hartree term.
+
+### The method, and why it is not a Fourier transform
+
+The interstitial Poisson equation would be trivial in $G$-space if the density
+were smooth. It is not: an all-electron density has a nuclear cusp and a core
+that varies over $10^{-4}$ Bohr, and its Fourier series is hopeless. Weinert's
+construction (*J. Math. Phys.* **22**, 2433 (1981)) replaces the charge inside
+each muffin tin by a smooth **pseudocharge** carrying the same multipole moments
+$q_{lm}$. Outside the spheres the two are indistinguishable — a multipole
+expansion knows nothing else — while the pseudocharge's Fourier series converges
+quickly. The intra-sphere problem is then solved exactly on the radial mesh, and
+the two are joined by adding the harmonic function $r^lY_{lm}$ that fixes the
+boundary value.
+
+`src/elkjax/poisson.py` is one function per step of `potcoul.f90`:
+
+1. `real_to_complex` (`rtozfmt`) — the density to complex harmonics, the basis
+   the multipole algebra is written in.
+2. `intra_sphere` (`zpotclmt`) — the exact radial solution
+   $$V_{lm}(r)=\frac{4\pi}{2l+1}\Big[r^{-l-1}\!\!\int_0^{r}\!\!\rho_{lm}r'^{l+2}dr'
+   + r^{l}\!\!\int_r^{R}\!\!\rho_{lm}r'^{1-l}dr'\Big],$$
+   both integrals by `wsplint`'s cumulative spline weights.
+3. `add_nuclear` — `vcln` into the $l=0$ channel.
+4. `pseudocharge_solve` (`zpotcoul`) — read $q_{lm}$ off the sphere boundary,
+   subtract what the interstitial density already contributes there, add the
+   pseudocharge in $G$-space, divide by $G^2$, and match the boundary.
+
+### Against Elk
+
+| quantity | agreement |
+|---|---|
+| `vclir` (Si / h-BN) | 1.6e-15 / 2.0e-14 relative |
+| `vclmt`, $l=0$ (scale $10^7$, carrying the nucleus) | 3.9e-20 / 3.7e-19 relative |
+| `vclmt`, $l>0$ (scale $10^{-1}$) | 7.2e-14 / 6.3e-14 relative |
+
+Split by endpoint and by $l$ deliberately. The muffin-tin array's $l=0$ channel
+is eight orders of magnitude larger than the other 48 harmonics, so comparing it
+as one array would let any error in all of those pass at any relative tolerance
+worth stating. h-BN is not a duplicate of Si either: every per-species array here
+(`wprmt`, `vcln`, the Bessel table) is indexed by `idxis`, and a transcription
+that indexes by *atom* instead is invisible on a one-species cell.
+
+### Two checks that owe Elk's `vclmt` nothing
+
+Most of the above is a comparison against the thing being reproduced, so two
+checks are built to be independent of it.
+
+**The monopole identity.** `zpotcoul` reads $q_{lm}$ off the sphere-boundary
+*value* of the intra-sphere potential — not by integrating $\rho r^l$ — and by
+that point the nucleus has been added, so $\sqrt{4\pi}\,q_{00}=N_{\rm MT}-Z$ with
+$N_{\rm MT}$ the electron count inside the sphere. Taking $N_{\rm MT}$ from
+`elkjax.integrate` (§2c, `rfmtint`, an unrelated code path) gives $Z=14.000000$
+for silicon and $5.000000$ / $7.000000$ for boron and nitrogen. Exact integers
+from a chain of splines, Bessel functions and an FFT.
+
+**Two mutation tests**, each removing one thing Elk does:
+
+* *the nuclear term, before the multipoles are read.* Skipping it leaves a
+  perfectly smooth intra-sphere potential of the right order, and flips the sign
+  of $q_{00}$. Nothing structural notices.
+* *the outer region's own spline weights.* For $l>l_{\max}^{\rm i}$ the inner
+  region does not store the harmonic at all, so Elk integrates from $r_{\rm iro}$
+  outward using the **sub-mesh's** weights. Zero-padding and integrating from the
+  origin uses the wrong weights at the lower boundary; the result is smooth, of
+  the right order, and differs from Elk in the fifth digit.
+
+Both mutants pass every structural check available. They are pinned because
+arguing that they would be wrong is not the same as measuring it.
+
+### Three details that were nearly wrong
+
+**`genylmv`'s $4\pi(-i)^l$ prefactor removes every $l=0$ special case.**
+`zpotcoul` writes the $l=0$ slot three times as `... * fourpi * y00 * z1`, with
+no $Y_{lm}$ factor, and the $l\ge1$ slots as `... * conjg(ylmgp(...))`. Since
+`ylmg[:,0]` *is* $4\pi y_{00}$ — a real constant — the uniform expression over
+all $lm$ reproduces all four lines exactly. Writing the special case out
+separately, as the Fortran does, would be a second transcription of one line and
+a second place for it to drift.
+
+**`vcln` is the $(0,0)$ coefficient, not the potential.** Its outermost value on
+silicon is $-22.596$, which is $-Z/R$ divided by $y_{00}$, not $-Z/R=-6.374$.
+
+**Elk leaves the FFT array's high-$G$ slots holding the raw density.** Only the
+first `ngvec` of `ngtot` slots are divided by $G^2$; here that is 7799 of 21952.
+Zeroing the rest is a *correction*, not a transcription — and the 8e-15 agreement
+in `vclir` says Elk's version is what the round trip needs.
+
+### Not differentiated, and that is the point
+
+Poisson is **linear** in the density, so its linearisation is itself: an
+AD-versus-FD check here would confirm that JAX can differentiate a linear map.
+The content is forward exactness, and the standing rule from §1k and §1l — every
+derivative check needs a forward check beside it — has nothing to check here in
+the first place. The one forward instrument built and *not* used is
+`intra_sphere_residual`, which evaluates $\nabla^2V_{lm}+4\pi\rho_{lm}$ directly
+on the solution: on Elk's logarithmic mesh a five-point polynomial fit gives a
+residual of $10^{-7}$ to $10^{-2}$ depending on the channel, which is a
+measurement of the fit and not of the solve. It is kept because it owes Elk
+nothing and would catch a gross error, and it is documented as the weak
+instrument it is rather than quoted as a result.

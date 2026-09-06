@@ -14,17 +14,18 @@ gets from Perdew's hand-derived expression, and the two agree.
 **Where to start.** §3's "Start here next session" is the ranked list, and the three
 Phase 2 items below it are ordered by cost. In short:
 
-1. **The Weinert Poisson solve** (item 2c, ~3 h) — the largest single gap, and the last
-   ingredient the total energy needs. `potcoul` → `genzvclmt` → `zpotclmt`, plus
-   `zpotcoul`. Patch 0016 already exports `rhomt`/`rhoir`/`vclmt`/`vclir` as the
-   reference. Read §2's traps first: the solve is done in *complex* harmonics, `vclmt`
-   includes the nuclear $-Z/r$, and `zpotclmt` alone is not checkable against `vclmt`.
+1. **`rhomag`** (item 2b) — the density from the eigenvectors, which is now the ONLY
+   thing between here and a closed SCF loop: the Poisson solve landed (§2e) and the
+   XC half was already there (§§2a-2b). Not started.
 2. **`symrfmt`** (~1 h) — needed the moment a symmetric cell's potential must match
    Elk's, which §2d measured at 1.2e-4 relative. Needs `symlatc`/`lsplsymc`/`ieqatom`/
    `isymlat` exported (one more patch) and `rotrfmt` transcribed. Phase 2 can proceed
    without it by running `symtype=0`.
-3. **`rhomag`** (item 2b) — the density from the eigenvectors, which closes the SCF
-   loop. Not started.
+3. **The total energy** (item 2f) — every ingredient now exists (`rfint`/`rfinp`, the
+   XC energy densities, the Hartree potential); what is left is `energy.f90`'s own
+   bookkeeping. Note §2d's warning: on a *symmetric* cell Elk's $v_{xc}$ and
+   $\varepsilon_{xc}$ are inconsistent at the $10^{-4}$ level, so agreement better
+   than that would be evidence of a mistake.
 4. **The two Phase 1 leftovers**: the position derivative $d\varepsilon/d\mathbf R$
    (needs moving radial integrals, so it waits on Phase 2); and smeared occupations at
    *second* order, which needs a Chebyshev expansion of the Fermi function —
@@ -520,19 +521,38 @@ named in item 12 need no Elk run and are the cheapest work available.
     found it in one run. Decompose a field-valued disagreement in the basis the code
     stores it in *first*.
 
-11. **The Weinert Poisson solve. NOT STARTED**, and the largest single gap — the last
-    ingredient the total energy needs. `potcoul.f90` → `genzvclmt` → `zpotclmt`, plus
-    `zpotcoul` for the interstitial. All four have been read; none transcribed. The
-    traps, in the order they arrive: the solve is done in **complex** harmonics
-    (`rtozfmt`/`ztorfmt`); **`vclmt` includes the nuclear $-Z/r$** from `potnucl`, so
-    it is not the electronic Hartree potential; the pseudocharge construction needs
-    `npsd`/`lnpsd`, `jlgrmt`, `ylmg`, `sfacg` and `gclg`; the $G=0$ component is a
-    *convention*, not a value, so check what `zpotcoul` sets it to rather than
-    deriving it; and `zpotclmt` alone is **not** checkable against `vclmt`, since the
-    intra-sphere solve is only one term. Check `vclmt` and `vclir` separately, and the
-    muffin-tin one split into $l=0$ and $l>0$. If it runs long, the honest stopping
-    point is "multipoles and pseudocharge checked, $G$-space solve open" — say which,
-    rather than stretching a tolerance.
+11. **~~The Weinert Poisson solve.~~ DONE** (§2e, patch 0017, `elkjax/poisson.py`).
+    `vclir` to 1.6e-15 relative and `vclmt` to 4e-20 ($l=0$, which carries the
+    nucleus and is of order $10^7$) and 7e-14 ($l>0$), on bulk Si and monolayer
+    h-BN. One function per step of `potcoul.f90`: `rtozfmt`, `zpotclmt`'s exact
+    radial solution, the nuclear term, `zpotcoul`'s pseudocharge and boundary
+    matching.
+
+    Patch 0017 exports only `wprmt`, `vcln`, `npsd`/`lnpsd` and `atposc` —
+    everything else is rebuilt from what 0016 already carries, including `ylmg`,
+    `sfacg` and `jlgrmt` from `elkjax.lapw`, which patch 0013 already pinned
+    element-wise. Exporting `ylmg` alone would be 38 MB of text.
+
+    **Two checks owe Elk's `vclmt` nothing.** The monopole identity
+    $\sqrt{4\pi}q_{00}=N_{\rm MT}-Z$ recovers $Z=14.000000,5.000000,7.000000$ with
+    $N_{\rm MT}$ from `elkjax.integrate` — exact integers out of splines, Bessel
+    functions and an FFT. And two mutation tests remove one thing Elk does each
+    (the nuclear term *before* the multipoles are read; the outer region's own
+    spline weights for $l>l_{\max}^{\rm i}$) and assert the answer moves; both
+    mutants are smooth, of the right order and wrong.
+
+    **Three details worth carrying.** `genylmv`'s $4\pi(-i)^l$ prefactor makes
+    `ylmg[:,0]` the real constant $4\pi y_{00}$, so `zpotcoul`'s three $l=0$
+    special cases *are* the uniform expression — writing them out separately
+    would be a second transcription of one line. `vcln` is the $(0,0)$
+    coefficient, $\sqrt{4\pi}$ times the potential. And Elk leaves the FFT array's
+    slots beyond `ngvec` (7799 of 21952) holding the raw density transform;
+    zeroing them is a correction, not a transcription, and the 8e-15 agreement
+    says Elk's version is what the round trip needs.
+
+    Nothing here is differentiated, deliberately: Poisson is linear in the
+    density, so an AD-versus-FD check would confirm that JAX can differentiate a
+    linear map.
 
 12. **The Phase 1 leftovers**, neither of which needs an Elk run. (`lax.scan` over the
     Newton-Schulz tape is **done**, §1m.) Smeared occupations at **second**
