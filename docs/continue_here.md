@@ -1,17 +1,24 @@
 # Continue here
 
-Working state as of 2026-09-06, so this can be picked up cold. Workstream A landed
-on `elk-full-coverage` and is now on `master`; Workstream B continues on `jax-port`.
+Working state as of 2026-09-06, so this can be picked up cold. Workstream A landed on
+`elk-full-coverage` and is now on `master` at `39de3e4`. Workstream B is on `jax-port`,
+which is **not merged**; to land it, `git checkout master && git merge --ff-only jax-port`.
 
 ```
-b15c0b4  Add the Elk-to-JAX port design study            docs/jax_port.md
-f04eabd  Record the code-review findings as a work list  docs/review_findings.md
-27afcca  Extend the Python interface to the whole of Elk 64 files, +19,828
-51bab45  (master) Add vertical tunnelling transport, patch 0012
+7a88920  Close a hole in 0c's forward check, pin the harmonic's pole  tests, docs
+794175f  Add the Phase 0 verdict and repair two stale status rows
+fe03924  Settle Phase 0c: the LAPW matching coefficients             src/elkjax/lapw.py
+01bf937  Correct two mechanism attributions, guard sign_projector
+adcb2d0  Settle Phase 0e: compile flat in shapes, ~n^1.85 in ops     src/elkjax/phase0e.py
+410be6a  Unblock Phase 0a-prime with an eigensolver-free projector
+14782ad  Settle Phase 0a: reverse mode survives the eigensolve       src/elkjax/fixedpoint.py
+15d910d  Settle Phase 0b: the safe-K projector rule is needed        src/elkjax/projector.py
+39de3e4  (master) Add a continuation document                        docs/continue_here.md
 ```
 
-`elk-full-coverage` has since been merged; `master` is at `39de3e4`. Workstream B
-continues on branch `jax-port` (this section 3, plus `docs/jax_port_phase0.md`).
+**Phase 0 of the JAX port is closed and it did not kill the project** — §3 has the
+results, `docs/jax_port_phase0.md` the numbers. Workstream A is untouched since the
+previous session; its open items are still §2's.
 
 ---
 
@@ -53,6 +60,14 @@ it does not.
 **elkpy is not pip-installed in the interpreter used here.** Every command below
 needs `PYTHONPATH=src`, or run `python3 -m pip install -e .` once (which drops
 `src/elkpy.egg-info` into the working tree — it is gitignored).
+
+**JAX is installed (0.7.1) but there is no CUDA jaxlib**, so `jax.devices()` is
+`[CpuDevice(id=0)]` and Phase 0d's timing question cannot be answered here. Two rules
+that are not obvious and were measured, not assumed: the `OMP_NUM_THREADS=1` above does
+**not** govern XLA's CPU backend — one 1200x1200 `jnp` matmul spawns 40 threads under it
+— so wrap every JAX command in `taskset -c 0-3`; and the port's production shape is
+26.8 GiB of H and S against ~28 GiB available, so it is compiled ahead-of-time and never
+executed. CLAUDE.md's "JAX port" section has the full set.
 
 ---
 
@@ -135,116 +150,129 @@ why it was left alone during a parallel merge.
 
 ---
 
-## 3. Workstream B — the JAX port study
+## 3. Workstream B — the JAX port
 
-`docs/jax_port.md` (1,623 lines). Verdict: **a research project justified by
-differentiability, not by the GPU** — SIRIUS already does FP-LAPW on CUDA/ROCm
-and was built with Elk as its reference, Elk's hot spots are already near-peak
-BLAS-3, and all-electron cannot leave FP64. That premise comes from the
-prior-art agent and **has not been independently verified**; check it before
-relying on the verdict, since the verdict rests on it.
+`docs/jax_port.md` (1,623 lines) is the design study; `docs/jax_port_phase0.md` is the
+running log of what Phase 0 actually measured, and is the file to read first.
 
-Phase 0 (§6) is designed to kill the project rather than start it. Its two real
-questions were: does reverse-mode implicit differentiation through the SCF fixed
-point work at all (DFTK shipped forward-only, and `lax.custom_root` with an
-iterative `tangent_solve` measurably raises `NotImplementedError`), and does the
-safe-K projector rule survive a degeneracy. **The second is answered — it does,
-and it is needed** (`docs/jax_port_phase0.md`); the first is untouched.
+Study verdict: **a research project justified by differentiability, not by the GPU** —
+SIRIUS already does FP-LAPW on CUDA/ROCm and was built with Elk as its reference, Elk's
+hot spots are already near-peak BLAS-3, and all-electron cannot leave FP64. That premise
+came from the study's prior-art agent and **has still not been independently verified**;
+check it before relying on the verdict, since the verdict rests on it.
 
-### The measurement disagreement — SETTLED (Phase 0b)
+### Phase 0 is closed, and it did not kill the project
 
-§8b claimed the occupied-subspace projector "still returns garbage under JAX's default
-VJP" whenever the window is gapped; the check recorded here disagreed for the hard
-integer window with the multiplet fully enclosed. **§8b was right.** Full numbers and
-reproduction in `docs/jax_port_phase0.md`; code in `src/elkjax/`, assertions in
-`tests/test_jax_projector.py`.
+| item | result |
+|---|---|
+| **0b** safe-K projector rule | needed, and works: 2.9e-14 against the closed form where naive AD is wrong by 11x |
+| **0a** reverse-mode implicit diff through the SCF fixed point | works: ≤1e-14 against a dense IFT reference on four spectra including exactly degenerate ones |
+| **0a′** second order | works, but only with an eigensolver-free projector (`sign_projector`); the `eigh`-based rule gives `NaN` |
+| **0c** `jax.jvp(match)` vs `dmatch.f90` | exact to 4e-16, forward and reverse |
+| **0e** compile cost | flat in the shapes; superlinear (≈1.85) in HLO op count |
+| **0d** `vmap` vs `lax.map` | memory settled (0.41 GiB vs 40.2 GiB); **timing needs a GPU** |
 
-What settled it was the reference this document asked for — the closed-form
-Daleckii-Krein derivative rather than finite differences. Over 3 assemblies x 21
-Hermitian directions on the disputed spectrum, worst relative error: naive AD
-`1.1e+1` forward and `3.4e+0` reverse, safe-K rule `2.9e-14`, central FD `3.7e-8`.
+**The honest qualification, and it is not small: nothing in Phase 0 has touched an LAPW
+Hamiltonian.** 0a/0a′ pass on a toy with an exactly degenerate spectrum, 0b's overlaps
+are synthetic with a prescribed κ(S), and 0c's radial derivative matrices are inputs
+rather than Elk's own `apwfr`.
 
-Two things the earlier check got backwards, both worth remembering:
+### Three findings worth carrying into Phase 1
 
-- **Finite differences were reliable here**, not noisy. `Tr[P M]` is a smooth function
-  of `H` whenever the *window boundary* is gapped, however degenerate the interior, so
-  central FD is stable across three step sizes. The third assembly's `1.3e-2` was
-  therefore AD error, not FD noise.
-- **The direction was the whole story.** `e00` — one real diagonal entry — is nearly
-  benign in reverse mode (`<1e-7`) and already wrong at `1.3e-2` in *forward* mode on
-  the same matrix. Testing one direction in one mode is what produced the false pass.
-  For a scalar-in scalar-out function, forward and reverse disagreeing is by itself the
-  proof; that check costs nothing and should be in every AD test from here on.
+None of these is in the study, and each cost a wrong answer to find.
 
-A finding neither document had: **which failure mode appears is the eigensolver's
-choice.** LAPACK and XLA split the same engineered pair differently, and at n=1000 XLA
-returns it bitwise equal where LAPACK gives 1.5e-14 — so the identical code gives finite
-garbage at n=400 and `NaN` at n=1000. §10 item 1's "split by cause" is refined
-accordingly.
+1. **A green gradient test does not validate a transcription.** Measured twice on 0c:
+   dropping `genylmv`'s 4π(-i)^l prefactor, and handing `match` a transposed derivative
+   matrix, both leave the exact `dmatch` identity passing at 3e-16 while the
+   coefficients are wrong by O(1) — a constant factor and a basis change both commute
+   with d/dr. Every AD check needs a forward check beside it, and the strongest one
+   available without Elk is the quantity's *own defining equation*, not a comparison of
+   its pieces. The same shape appears in 0a: a perturbation that **respects** the
+   symmetry protecting a degeneracy hides the projector bug completely (1.5e-14
+   symmetric vs 4.7e-1 symmetry-broken, same Hamiltonian), so test along general
+   directions and break the symmetry. And always compare forward mode against reverse —
+   for a scalar-in scalar-out function they are the same number, so disagreement is
+   proof on its own and costs nothing.
+2. **Never unroll a Pulay-type mixer.** Unrolled Anderson reaches a forward value good
+   to 1.8e-13 while its gradient is wrong by 1e17 to 1e32 relative, across five decades
+   of the mixer's internal ridge; unrolled linear mixing converges normally. Elk's
+   default `mixtype=3` is a Broyden scheme of the same shape. Note also that "the
+   implicit gradient agrees between mixers" proves nothing — the `custom_vjp` backward
+   pass only ever sees (θ, v*).
+3. **`scan` repeated structure; unroll only what must be.** Compile time does not care
+   about tensor size (0.46 s at both 200×4 and 3000×100) but is superlinear in HLO op
+   count; a `lax.scan` over 4x more radial points costs nothing, while unrolled
+   Gram-Schmidt over 8→128 columns costs 0.44 s→32.4 s. And `vmap` over the k-axis is
+   not a benchmark question: 40.2 GiB does not fit on a 40 GB device.
 
-### 0a — settled too: reverse mode survives the eigensolve
+### What is left, and what each needs
 
-Getting the adjoint through an SCF fixed point with an exactly degenerate spectrum
-works: `custom_vjp` + GMRES on the transposed operator agrees with a dense
-implicit-function-theorem reference to 1e-14 on four spectra, both for `Tr[P M]` and for
-the band energy, with the linear solve converged to ~1e-15. The naive projector rule
-fails on the identical machinery. Mixer-independent to 2.5e-13; the error against the
-converged answer tracks the SCF residual linearly, so gradient work needs tighter
-convergence than a forward run.
-
-**The trap worth carrying forward**: a perturbation that *respects* the symmetry
-protecting a degeneracy hides the bug completely — 1.5e-14 with the naive rule symmetric
-versus 4.7e-1 symmetry-broken, on the same Hamiltonian. Same shape as 0b's
-single-direction mistake. Test along general directions and break the symmetry.
-
-**0a′ works too, but only with a projector built for it.** Reverse-over-reverse through
-the fixed point was never the problem; what returned `NaN` was the safe-K rule's own
-second derivative, since its JVP body calls `jnp.linalg.eigh`. The fix is
-`projector.sign_projector`: `P = (1 - sign(H - mu))/2` with the matrix sign by
-Newton-Schulz, i.e. a chain of matmuls with no eigendecomposition, no gauge and no
-`1/(lambda_i - lambda_j)`. Its first derivative equals the safe-K rule's (a third,
-independent confirmation of 0b), and `grad(grad)` through the fixed point agrees with
-central FD to 1.2e-9 where the eigh-based rule gives `NaN`. Costs an unrolled
-Newton-Schulz loop (~30 steps at an all-electron gap-to-span ratio) and covers hard
-windows only — smeared occupations would need a Chebyshev Fermi function.
-Use `grad(grad)`, never `jax.hessian`: it is `jacfwd(jacrev)` and a `custom_vjp` cannot
-be forward-differentiated at all, so its `TypeError` is a JAX limitation, not a result.
-
-**Do not unroll a Pulay-type mixer.** Measured: unrolled Anderson reaches a forward value
-good to 1.8e-13 while its gradient is wrong by 1e17 to 1e32 relative, across five decades
-of the mixer's internal ridge; unrolled linear mixing converges normally. Elk's default
-`mixtype=3` is a Broyden scheme of the same shape.
-
-### Still open in Phase 0
-
-- **The self-consistent Fermi level.** 0a covers smearing at *fixed* mu. Fixed electron
+- **Patch 0013 — the one Fortran job.** 0c's forward coefficients have never been
+  compared against Elk's own, because nothing in `vendor/elk/src/` writes `apwalm`
+  (checked). A small export task — diagonalise nothing, read `STATE.OUT`, call `match`
+  at one k-point and write the array — would close it. Under CLAUDE.md's core
+  constraint that is a commitment to maintain a patch across Elk upgrades, so it is a
+  decision rather than a chore; it is not started. Until then `apwfr`'s own
+  normalisation is 0c's one remaining assumption.
+- **0d's timing needs a GPU instance.** Do not fake it on CPU; the study's own 1.03x CPU
+  number settles nothing. The memory half is already answered and points the other way.
+- **κ(S) for a real LAPW overlap has still never been measured**, and §8b's cheap
+  Cholesky-diagonal estimate is a provable *lower* bound (each L_ii² is a Schur pivot),
+  140x low on a synthetic κ=1e6 — the dangerous direction, since the tolerance is meant
+  to be an upper bound. This is Phase 1's first measurement.
+- **The self-consistent Fermi level.** 0a covers smearing at *fixed* μ. Fixed electron
   number adds a second constraint whose rule §8b gives in closed form,
   `dmu/deps_i = w_i f'_i / sum_j w_j f'_j`. Untested.
-- **0c — done, with one gap.** `src/elkjax/lapw.py` transcribes `match`, `gengkvec`,
-  `gensfacgp`, `genylmv` and `sbessel`; `jax.jvp` against `dmatch`'s
-  `i(G+p) apwalm` is exact to 7e-16, and so is reverse mode. The forward half is
-  checked against SciPy (Bessel 4.3e-14, Ylm 9.7e-16) and against the matching
-  physical continuity condition (1.0e-11): the muffin-tin function and the plane wave
-  agree in value and slope at R, with the radial family taken analytic so the check pins
-  D's index convention rather than merely inverting the matrix it was handed —
-  transposing D takes it from 4.0e-13 to 4.0e+00 while the dmatch identity stays at
-  3.0e-16. But **never against Elk's own apwalm**, because nothing in
-  `vendor/elk/src/` exports it. That is the next Fortran
-  job: a small export as **patch 0013**, which under CLAUDE.md's core constraint is a
-  commitment to maintain it across Elk upgrades, so it is a decision rather than a
-  chore. One convention is assumed rather than verified until then: `apwfr`'s own
-  normalisation, which is Phase 1 work since D is an input here.
-  Note also the lesson: dropping `genylmv`'s `t4pil` prefactor still passes the
-  `dmatch` identity exactly, since a constant factor commutes with d/dr.
-- **κ(S) for a real LAPW overlap has still never been measured**, and §8b's cheap
-  Cholesky-diagonal estimate underestimates a synthetic κ=1e6 by 140x — the dangerous
-  direction, since the tolerance is meant to be an upper bound.
+- **`sign_projector` covers hard windows only.** Smeared occupations at second order
+  would need a Chebyshev expansion of the Fermi function. Separate work.
+
+### The code, and how to run it
+
+`src/elkjax/` is a **sibling package** to `elkpy`, not a submodule: Phase 0 is
+explicitly "no Elk code" and elkpy's fast suite must not acquire a `jax` dependency.
+
+```
+memory.py      RLIMIT_AS cap, AOT compile cost, the production-shape arithmetic
+reference.py   closed-form eigenproblem derivatives in NumPy — the reference for 0a/0b
+projector.py   the safe-K custom_jvp rule, and sign_projector (eigensolver-free)
+fixedpoint.py  custom_vjp + GMRES on the transposed operator; the mixers
+scftoy.py      a Kohn-Sham-shaped fixed point with an engineered degeneracy
+lapw.py        match, gengkvec, gensfacgp, genylmv, sbessel
+phase0a/b/c/e  the experiment drivers, one per item
+```
+
+```bash
+PYTHONPATH=src taskset -c 0-3 python3 -m elkjax.phase0b   # and phase0a, phase0c, phase0e
+ELKPY_RUN_SLOW_TESTS=1 PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
+    tests/test_jax_projector.py tests/test_jax_fixedpoint.py \
+    tests/test_jax_compile_cost.py tests/test_jax_lapw.py -q      # 38 tests, ~6 min
+```
+
+**`taskset` is not decoration.** `.claude/settings.json`'s `OMP_NUM_THREADS=1` does not
+govern XLA's CPU backend — measured, one 1200x1200 `jnp` matmul spawns 40 threads under
+it, and `XLA_FLAGS=--xla_cpu_multi_thread_eigen=false` changes nothing. The full memory
+and CPU rules are in CLAUDE.md's "JAX port" section; the short version is that the
+production shape (26.8 GiB of H and S) is never allocated, only compiled.
+
+---
 
 ## 4. Decisions waiting on you
 
-- Merge `elk-full-coverage` into `master`, or keep reviewing on the branch.
-- Fix `inputfile.py` at the source and collapse the two shims, or leave the shims.
-- Run the three never-executed integration suites, which will likely surface
-  assertion adjustments rather than passing clean.
-- Whether the JAX port is worth Phase 0 at all, given that its own verdict says
-  the GPU motivation is largely answered by SIRIUS.
+**Workstream B**
+
+- Start patch 0013 (the `apwalm` export) or leave 0c's forward half resting on its own
+  defining equation. This is the first entry in a tracked patch series for the port, so
+  it is a maintenance commitment, not just thirty lines.
+- Phase 1 at all, or the §9.2 hybrid. Phase 0 removed the technical objections; the
+  scope question it does not answer is whether the targets that need `dv*/dθ` — phonons,
+  Born charges, elastic constants, response functions, ML-XC training, reverse-mode
+  inverse design — are the goal. §9.2 puts the hybrid at 13-15 weeks and it delivers
+  everything that needs no SCF derivative.
+- Merge `jax-port` into `master`, or keep it on the branch.
+
+**Workstream A** (unchanged from the previous session)
+
+- The 17 review findings in `docs/review_findings.md`, three of which are one bug.
+- Fix `inputfile.py:15` at the source and collapse the two shims, or leave the shims.
+- Run the three never-executed integration suites (`spectra`, `optics`,
+  `magnetism_manybody`), which will likely surface assertion adjustments.
