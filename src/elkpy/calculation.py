@@ -38,11 +38,12 @@ from .parsers import (
     wilson,
 )
 from .session import EigenstateSession
+from .tasks import ALL_MIXINS
 
 MANIFEST_NAME = ".elkpy_manifest.json"
 
 
-class Calculation:
+class Calculation(*ALL_MIXINS):
     def __init__(
         self,
         structure,
@@ -289,6 +290,97 @@ class Calculation:
         f.write(subdir / "elk.in")
         self.launcher.run(subdir)
         return subdir
+
+    # ------------------------------------------------------------------
+    # Input-derived properties of the run, reproduced from Elk's own rules.
+    #
+    # These live on Calculation rather than in one task-family mixin
+    # because several families need them (the spectra plotting triples,
+    # the Fermi-surface splitting, the torque tasks, the ultra-long-range
+    # magnetisation plots), and two mixins independently transcribing the
+    # same Fortran is exactly how they drift apart.
+    # ------------------------------------------------------------------
+
+    def _block_floats(self, name):
+        """Every number in one of this Calculation's ``extra_blocks``, flat.
+
+        A three-vector block may reasonably be written either as one line
+        of three values or as three lines of one, so callers that need the
+        components must not index the block's line structure.
+        """
+        block = self.extra_blocks.get(name)
+        if not block:
+            return []
+        values = []
+        for line in block:
+            if isinstance(line, (list, tuple)):
+                values.extend(float(v) for v in line)
+            else:
+                values.append(float(line))
+        return values
+
+    def _block_flag(self, name):
+        """The truth value of a single-line logical ``extra_blocks`` entry."""
+        block = self.extra_blocks.get(name)
+        return bool(block[0]) if block else False
+
+    def _ndmag(self):
+        """The number of magnetisation components Elk will use, ``ndmag``.
+
+        Transcribed from src/init0.f90's own decision, which is fully
+        determined by ``elk.in`` and so reproducible from Python::
+
+            if (spinpol) then
+              ndmag=1
+              if ((abs(bfieldc0(1)) > epslat).or.(abs(bfieldc0(2)) > epslat)) ndmag=3
+              do is=1,nspecies; do ia=1,natoms(is)
+                if ((abs(bfcmt0(1,ia,is)) > epslat).or. &
+                    (abs(bfcmt0(2,ia,is)) > epslat)) ndmag=3
+              end do; end do
+              if (spinorb) ndmag=3
+              if (nosource.or.spinsprl) then
+                ndmag=3
+                cmagz=.false.
+              end if
+              if (cmagz) ndmag=1
+            else
+              ndmag=0
+            end if
+
+        with ``epslat`` defaulting to 1e-6 (src/readinput.f90). Note the
+        ORDER: ``nosource``/``spinsprl`` clear ``cmagz``, so they win over
+        it -- checking ``cmagz`` first would wrongly report a collinear
+        spin spiral. ``ndmag == 3`` is exactly Elk's ``ncmag``
+        (non-collinear magnetism), which decides whether ``torque.f90``
+        computes anything at all, whether ``fermisurf.f90`` splits its
+        output into _UP/_DN files, and how many components the vector
+        plotting tasks and the ultra-long-range magnetisation plots carry.
+
+        Returns 0, 1 or 3. An ``epslat`` overridden through
+        ``extra_blocks`` is honoured.
+        """
+        if not (self.spinpol or self.spinorb):
+            return 0
+        epslat_block = self._block_floats("epslat")
+        epslat = epslat_block[0] if epslat_block else 1e-6
+        ndmag = 1
+        bfieldc = self._block_floats("bfieldc")
+        if len(bfieldc) >= 2 and (
+            abs(bfieldc[0]) > epslat or abs(bfieldc[1]) > epslat
+        ):
+            ndmag = 3
+        for atoms in self.structure.species.values():
+            for _position, bfcmt in atoms:
+                if abs(bfcmt[0]) > epslat or abs(bfcmt[1]) > epslat:
+                    ndmag = 3
+        if self.spinorb:
+            ndmag = 3
+        if self._block_flag("nosource") or self._block_flag("spinsprl"):
+            # both clear cmagz, so the cmagz branch below cannot undo this
+            return 3
+        if self._block_flag("cmagz"):
+            return 1
+        return ndmag
 
     def _default_label(self, tasks, blocks):
         label = f"tasks_{'_'.join(map(str, tasks))}"

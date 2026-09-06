@@ -3949,3 +3949,323 @@ The Elk run itself is drivable from a plain `elk.in` — task 9005 plus the
 `elkpy_transport_exit` / `elkpy_transport_window` / `elkpy_transport_kgrid` /
 `elkpy_transport_koffset` / `elkpy_transport_sdir` / `elkpy_transport_spol`
 blocks and the usual `plot2d` — see `examples/vertical-transport/`.
+
+## 32. The full Elk task surface: six task-family mixins and the input table
+
+Everything above §12 is elkpy's own physics — capabilities Elk does not have.
+This section is the opposite kind of work: it makes the physics Elk *already*
+has reachable by name. Before it, `Calculation` wrapped about twenty of the
+task codes `vendor/elk/src/elk.f90` dispatches on, and everything else went
+through `run_tasks()` — which could always reach every code, but only by
+handing the caller the job of knowing the task number, the prerequisite chain,
+the input blocks and the output layout. That is exactly the knowledge this
+project keeps insisting belongs in `spec.py` and in a docstring rather than in
+a user's head. 143 of the 146 live dispatch codes now sit behind a named
+method (the three exceptions are at the end of this section).
+
+The work is organised as one mixin module per task family under
+`src/elkpy/tasks/`, composed in `tasks/__init__.py`'s `ALL_MIXINS` and
+unpacked by `class Calculation(*ALL_MIXINS)`. No mixin holds state, defines
+`__init__`, or imports `..calculation`, so the composition is documentation
+rather than semantics; `Calculation`'s own methods come first in the MRO, so
+nothing a mixin defines can shadow the existing surface.
+
+### The input surface (`params.py`)
+
+Elk's behaviour is set almost entirely by `elk.in`, and this project has
+repeatedly found that one input parameter separates a physical result from a
+plausible-looking artefact. §29's four-state exchange mapping is unusable at
+Elk's default `epsengy` of 1e-4 Ha (~2.7 meV), which exceeds the whole
+anisotropy signal, and needs `nosym`/`reducek=0` so the four symmetry-broken
+configurations share one k-set and their systematic errors cancel. §28's
+rotation-eigenvalue indicators and §31's vertical transport both require
+`tshift=False`, because Elk otherwise relocates the origin onto the inversion
+centre — the bond midpoint of a honeycomb, not the $C_3$ axis — which silently
+makes every rotation non-symmorphic and, for transport, moves the sheet out
+from between the two plotting planes. Until now those settings reached Elk
+through an untyped `extra_blocks` dict, where a misspelt name or a wrong arity
+surfaced only as `Error(readinput)` inside a subprocess.
+
+`params.py` records all 315 `case(...)` branches of `readinput.f90` as data:
+the Fortran variable each sets and that variable's declared type and module,
+the value's shape (scalar, fixed vector, padded vector, optional derivative
+tail, fixed multi-line block, blank-terminated list, count-prefixed list,
+verbatim text), the default, the range checks the branch performs before
+`stop`ping, and a one-line description from the manual where it documents the
+block and from the comment above the Fortran declaration otherwise. On top sit
+a validator that rejects a bad name, type, arity or out-of-range value in
+Python; a renderer emitting exact `elk.in` text; and a browsable surface
+(`describe`, `search`, 27 physics categories), re-exported from `elkpy`
+directly. Coverage is asserted rather than assumed — the test re-parses
+`readinput.f90` and fails in *both* directions, so a version bump reports
+exactly which blocks appeared or vanished, in the same spirit as `spec.py`.
+
+### Deformation, fields, and the nucleus
+
+Elk evaluates no analytic stress tensor. It constructs a symmetry-adapted
+orthonormal basis of strain tensors $\{e_k\}$ (`genstrain.f90` — $e_1$ is the
+isotropic $A/\|A\|_F$, each further candidate symmetrised over the point
+group, orthogonalised against its predecessors, kept only if a finite norm
+survives), deforms $A \to A + \delta\,e_k$, and differences converged total
+energies, $\sigma_k = [E(\delta)-E(0)]/\delta$. `get_strain_tensors()` exposes
+that basis, so the component index of every strain-differentiated quantity has
+a meaning; `nstrain` is a property of the symmetry alone (exactly 1 for a
+cubic crystal). Because $e_1$ is isotropic, $V(t) = V_0(1+t/\|A\|_F)^3$ and
+the hydrostatic pressure $P = -\sigma_1\|A\|_F/(3V_0)$, which `get_stress()`
+returns alongside the raw derivatives. This is the missing half of
+`get_relaxed()`: task 2/3 relaxes positions at fixed cell; the stress says
+whether the cell itself is at equilibrium. **A stress is basis-limited, not
+physics, until `rgkmax` is converged** — the basis is `rgkmax` times a
+muffin-tin radius that does not change with the cell, so expanding at fixed
+`rgkmax` improves the basis and lowers the energy spuriously (Pulay stress);
+measured $+4$ GPa at Si's experimental lattice constant, the wrong sign for
+converged LDA.
+
+The same finite-difference machinery with the King-Smith–Vanderbilt Berry-phase
+polarisation (`polar.f90`) in place of the energy gives the piezoelectric
+tensor $d_{ki}=\partial P_i/\partial t$ (forbidden by inversion, so a
+centrosymmetric crystal is a genuine null test) and, differencing in the
+applied field, the linear magnetoelectric tensor
+$\alpha_{ji}=\partial P_i/\partial B_j$ — odd under both time reversal and
+inversion and identically zero without spin-orbit coupling, which elkpy now
+enforces rather than documents. Two all-electron nuclear-site observables
+follow, both properties of muffin-tin components a pseudopotential code cannot
+reach without reconstructing the core: the electric field gradient
+$V_{ij}=\partial^2 V'_C/\partial r_i\partial r_j$, which sets the nuclear
+quadrupole coupling measured by NQR/NMR and vanishes identically at a cubic
+site; and the Mössbauer contact density $\rho(0)$ with the Fermi contact
+hyperfine field $B=\tfrac{8\pi}{3}\mu_B\langle m(0)\rangle$ (Blügel et al.,
+PRB 35, 3271 (1987)), which fix the isomer shift and hyperfine splitting. The
+diffraction observables themselves are $F(\mathbf H)=\int\rho\,e^{i\mathbf
+H\cdot\mathbf r}$ and its magnetic sibling, printed in the crystallographic
+convention so that $F(0)$ is exactly the electron count — a hard normalisation
+check. Beyond the local-density ground state, Hartree-Fock replaces $v_{xc}$
+by the nonlocal Fock operator (or mixes them, giving hybrids); RDMFT replaces
+the density by the one-body density matrix, making natural-orbital occupations
+variational and so reaching the fractional occupations static correlation
+demands; and the coupled tensor moments $w^{kpr}_t$ (Bultmark, Cricchio,
+Granas & Nordström, PRB 80, 035121 (2009)) re-expand a DFT+U density matrix,
+their low ranks being the shell occupation, spin moment and orbital moment and
+their higher ranks the multipoles that distinguish competing orbital orderings.
+
+### The plotting triples, band character, and the Fermi surface
+
+Elk's real-space output is organised as triples whose last task digit selects
+dimensionality — x1 a line, x2 a plane, x3 a parallelepiped — all routed
+through `plot1d`/`plot2d`/`plot3d`. elkpy previously exposed only the 3D
+member of the density, potential and ELF triples. Alongside those it now plots
+the magnetisation $\mathbf m(\mathbf r)$ — the vector part of the spin density
+matrix, hence *twice* §17's spin expectation value — together with its
+conjugate field $\mathbf B_{xc}=\delta E_{xc}/\delta\mathbf m$, that field's
+divergence (the unphysical magnetic-monopole density a local spin-density
+functional carries, which `nosource` drives to zero), the local torque
+$\mathbf m\times\mathbf B_{xc}$ that vanishes identically for a collinear
+state and so maps where non-collinearity actually lives, the electrostatic
+field $\mathbf E=-\nabla v_C$, the paramagnetic current $\mathbf j_p$, the
+meta-GGA potential $W_{xc}=\delta E_{xc}/\delta\tau$, and the static screened
+density. A single state's $|\psi_{n\mathbf k}(\mathbf r)|^2$ comes the way
+`wfplot.f90` does it — zero every occupancy but one and reuse the charge
+machinery with symmetrisation off; replacing that occupancy with a smeared
+delta at $E_F$ gives upstream's spin-summed Tersoff-Hamann image, the
+counterpart of §30.
+
+Two genuinely new capabilities arrive here. The **Fermi surface**, in all five
+of Elk's representations: $\prod_n(\varepsilon_n(\mathbf k)-E_F)$ over the
+crossing bands, whose zero isosurface is the surface; the same eigenvalues per
+band so each sheet draws separately; a smeared delta at $E_F$, summed or per
+band; and the XCrySDen `.bxsf` grid the rest of the community's tooling reads.
+Alongside it the **nesting function**
+$N(\mathbf q)=\frac{\Omega_{BZ}}{N_k}\sum_{\mathbf k}
+[\sum_n\delta(E_F-\varepsilon_{n\mathbf k})]
+[\sum_m\delta(E_F-\varepsilon_{m\mathbf k+\mathbf q})]$,
+whose peaks locate the parallel Fermi-surface patches that precondition a
+charge- or spin-density-wave instability and a phonon Kohn anomaly, and which
+is identically zero for an insulator. And the **character decomposition** of a
+band structure or DOS — resolved by $\ell$, by $(\ell,m)$ (optionally rotated
+into the irreps of the site symmetry group), by spin along an arbitrary
+quantisation axis, or by the local moment. All are built from `gendmatk`'s
+muffin-tin density matrix, the same `wfmtsv`/`wr2cmt` expansion §§16, 18, 19
+turn into the atom, $\ell$-channel and angular-momentum operators, so elkpy
+now has an independent Fortran code path for those. Because the weight is a
+muffin-tin integral the atomic characters sum to less than one, and `dos.f90`
+subtracts each channel from the running total as it goes, so `IDOS.OUT` holds
+the *interstitial remainder* rather than a second total — making
+IDOS + $\sum$PDOS = TDOS an exact identity (measured 8.6e-9 on a scale of
+23.5) that pins the block ordering, the spin-sign convention and the meaning
+of the interstitial file at once.
+
+**One Fortran finding governs the whole Fermi-surface family**: `init1.f90`
+lines 130-134 *replace* `ngridk` with `np3d` for tasks 100-104, and (except
+for 102) the k-point box with the `plot3d` box. The plotting grid therefore
+sets the k-mesh, and the calculation's own `ngridk` is ignored — so these
+methods take `grid`, not `ngridk`, and that argument fixes the cost.
+
+### Optical response beyond one Kubo sum
+
+Where §22's `get_dielectric_function()` gives the independent-particle
+spectrum, this family covers what lies beyond it. The second-order
+susceptibility $\chi^{abc}(-2\omega;\omega,\omega)$ follows Sipe & Ghahramani,
+PRB 48, 11705 (1993) and Hughes & Sipe, PRB 53, 10751 (1996): from
+$r_{nm}=p_{nm}/i(\varepsilon_m-\varepsilon_n)$ it accumulates the interband
+$\chi_{II}$, the intraband-modulation $\eta_{II}$ and the intraband
+$\tfrac{i}{2\omega}\sigma_{II}$ terms separately and as their sum. Both
+$\omega$ and $2\omega$ denominators appear, which is what makes second-harmonic
+generation sensitive to states a linear spectrum cannot see; $\chi^{(2)}$
+vanishes identically in a centrosymmetric crystal, so Si is a null test.
+
+Two complementary routes to the electron-hole interaction are wrapped. The
+**Bethe-Salpeter** chain diagonalises
+$H_{vc\mathbf k,v'c'\mathbf k'}=(\varepsilon_{c\mathbf k}-\varepsilon_{v\mathbf
+k})\delta+2K^x-K^d$ over the pair basis, with $K^d$ screened by the inverse RPA
+dielectric matrix $\epsilon^{-1}(\mathbf G,\mathbf G';\mathbf q,0)$; an
+eigenvalue below the independent-particle gap is a bound exciton. **Linear-
+response TDDFT** instead solves the Dyson equation in the full $\mathbf
+G,\mathbf G'$ basis, so it carries the local-field corrections task 121
+discards; at $\mathbf q=0$ the head is a $3\times3$ matrix whose re-inversion
+gives the measurable macroscopic tensor, together with Faraday rotation, a
+TDDFT Kerr angle and magnetic linear dichroism. Its spin-polarised sibling
+returns the full $4\times4$ charge/magnetisation response $\chi_{ij}$ whose
+transverse component $\chi_{+-}$ has the **magnon energies** as its poles —
+the dynamical counterpart of §29's static exchange constants.
+
+The **real-time** branch is a protocol rather than a task:
+$\mathbf A(t)=\sum_i\mathbf A_0^i e^{-(t-t_0^i)^2/2\sigma_i^2}
+\sin[\omega_i(t-t_0^i)+\phi_i+r_c^i t^2/2]$
+is built first (with its power density and the spectrum of $\mathbf
+E=-\tfrac1c\,d\mathbf A/dt$), the Kohn-Sham orbitals are propagated under it
+recording $\mathbf J(t)$, and Ohm's law is inverted in frequency space,
+$\epsilon_{ij}(\omega)=\delta_{ij}+4\pi i J_i(\omega)/[(\omega+is)E_j(\omega)]$,
+to extract the dielectric tensor of the actual propagation — local fields, the
+kernel in use and any non-linearity the pulse excited included. Two
+wavefunction-level primitives round it out: $\langle i,\mathbf k+\mathbf
+q|e^{i\mathbf q\cdot\mathbf r}|j,\mathbf k\rangle$, the plane-wave matrix
+elements every density response is assembled from; and the LAPW states
+re-expanded in a pure plane-wave basis, whose per-state norm
+$\sum_H|c_H|^2\to1$ measures directly how well a plane-wave representation
+captures an all-electron wavefunction (0.982-0.994 at `hkmax=3`).
+
+### Lattice dynamics, coupling, and superconductivity
+
+Within the harmonic approximation the lattice is the dynamical matrix
+$D_{\kappa a,\kappa'b}(\mathbf q)=(M_\kappa M_{\kappa'})^{-1/2}\sum_{\mathbf
+R}e^{i\mathbf q\cdot\mathbf R}\,\partial^2E/\partial u_{\kappa a}(0)\partial
+u_{\kappa'b}(\mathbf R)$, built by DFPT (205) or by finite differences of
+Hellmann-Feynman forces in a supercell (200 — **the classical method this
+project previously listed as not implemented**, and the only route for a
+magnetic cell, since `phonon.f90` hard-stops on `spinpol`). `get_phonon_modes()`
+exposes frequencies *and* eigenvectors at arbitrary $\mathbf q$, the complement
+of `get_phonon_dispersion()`, which discards the eigenvectors; note `dynev.f90`
+diagonalises $D/\sqrt{M_iM_j}$, so a physical displacement is
+$e_i/\sqrt{M_i}$, and an unstable mode returns as a **negative** frequency,
+Elk storing $\mathrm{sign}(\sqrt{|\omega^2|},\omega^2)$.
+
+The Born effective charge $Z^*_{\kappa,ab}=\Omega\,\partial P_a/\partial
+u_{\kappa b}=\partial F_{\kappa a}/\partial E_b$ comes by the same Berry phase,
+with core and nuclear charge already folded into the diagonal; its
+finite-frequency generalisation comes from the current following a small static
+vector potential, propagated in real time. Born charges plus $\varepsilon_\infty$
+are exactly what the non-analytic term
+$D^{\rm NA}\propto(\mathbf q\cdot Z^*_\kappa)_a(\mathbf q\cdot
+Z^*_{\kappa'})_b/(\mathbf q\cdot\varepsilon_\infty\cdot\mathbf q)$ needs, so
+`get_phonon_dispersion_loto()` chains tasks 120, 121, 208, 205 and 220 to give a
+dispersion carrying the LO-TO splitting at $\Gamma$. On the electronic side the
+vertex $g^{\mathbf q\nu}_{mn}(\mathbf k)=(2\omega_{\mathbf q\nu})^{-1/2}
+\langle\psi_{m\mathbf k+\mathbf q}|\partial V_{\rm KS}/\partial u_{\mathbf
+q\nu}|\psi_{n\mathbf k}\rangle$ gives the Allen linewidth $\gamma_{\mathbf
+q\nu}$, the mode coupling $\lambda_{\mathbf q\nu}=\gamma/\pi N(\varepsilon_F)
+\omega^2$, its interpolation along a q-path, the Eliashberg function
+$\alpha^2F(\omega)=[2\pi N(\varepsilon_F)]^{-1}\sum_{\mathbf q\nu}
+(\gamma/\omega)\delta(\omega-\omega_{\mathbf q\nu})$ with
+$\lambda=2\int\alpha^2F/\omega\,d\omega$ and the Allen-Dynes $T_c$ (PRB 12, 905
+(1975)), a full isotropic Matsubara-axis solution for $\Delta(i\omega_n)$ and
+$Z(i\omega_n)$, and — skipping the isotropic approximation entirely — the
+self-consistent coupled electron-phonon Bogoliubov problem (C.-Yu Wang et al.,
+PRB 105, 174509 (2022)).
+
+Because `dyntask`/`bectask` treat an existing DYN/BEC file as "already done"
+and silently skip it — the hazard §4 records for task 205 — every method
+needing dynamical matrices recomputes them in its own wiped subdirectory.
+`get_superconductivity()` exists so the whole chain (205, 210, 220, 240, 245,
+250, 260) runs **once** off a single set of dynamical matrices.
+
+### Magnetism, GW, Wannier export, ultra-long-range
+
+The **magnetic anisotropy energy** $\Delta E=\max_i E(\hat m_i)-\min_i E(\hat
+m_i)$ is computed by brute force, one complete ground state per direction —
+and `mae.f90` does not rotate the moment at all but rotates the *lattice* by
+the inverse rotation while holding $\mathbf m$ along $+z$ with `cmagz`, which
+keeps the collinear machinery valid and avoids re-deriving the symmetry group
+for a tilted moment. It is also exactly the quantity §12's per-species
+`soc_scale` is normally fitted against. The **exchange-correlation torque**
+$\boldsymbol\tau=\int\mathbf m\times\mathbf B_{xc}\,d^3r$ measures how badly
+the local approximations violate the zero-torque theorem (an exact functional's
+$E_{xc}$ is invariant under a global spin rotation, so $\boldsymbol\tau$ must
+vanish). **Spin spirals** come by two exactly complementary routes, and Elk's
+naming is misleading: `spiralsc` (350-352) is the *supercell* method, while the
+*supercell-free* generalised Bloch theorem is not a task code at all but the
+`spinsprl`/`vqlss` input pair on an ordinary ground state — a translation
+combined with a spin rotation about $z$ is a symmetry, so the two spinor
+components carry Bloch vectors $\mathbf k\mp\mathbf q/2$ and an incommensurate
+spiral fits in the chemical unit cell. That theorem holds only without
+spin-orbit coupling, which is precisely what the supercell route buys back.
+Sweeping the Bloch route gives $E(\mathbf q)-E(0)=-[J(\mathbf q)-J(0)]$, the
+reciprocal-space counterpart of §29's real-space tensor.
+
+**GW** (600-640) is Elk's finite-temperature $G_0W_0$ evaluated entirely on
+the imaginary axis: $\Sigma$ is built from $W=\epsilon^{-1}v$ at Matsubara
+frequencies $\omega_j=(2j+1)\pi/\beta$, whose spacing is set by `tempk` and
+extent by `wmaxgw` — neither a physical temperature, just a way to keep the
+frequency count tractable. Working there makes everything smooth, which is why
+the real-axis $A=-\tfrac1\pi\mathrm{Im\,Tr}\,G$ arrives later and by analytic
+continuation. The prerequisite chain was established from the Fortran, not the
+manual: 610, 630 and 640 all read `GWSEFM.OUT` back, so re-finding the
+interacting Fermi energy is *not* the cheap post-processing its one-number
+output suggests; 620 is the exception, recomputing the entire inverse
+dielectric matrix at every path point. **Wannier90 export** is wrapped
+honestly: `.win` and `.eig` are complete, but `.amn`/`.mmn`/`.spn` need the
+Wannier90 library for the neighbour-shell $\mathbf b$-vectors and this build
+links `w90_stub.f90`, which aborts — the very gap `patches/0002` fills by
+reimplementing the overlap export without the shell search (§13). Finally the
+**ultra-long-range** family targets order incommensurate with the unit cell
+without a supercell, by keeping fast and slow degrees of freedom in different
+representations: orbitals stay in the unit-cell LAPW basis at k-points shifted
+by a few ultracell $\boldsymbol\kappa$-points, while density, magnetisation and
+potential acquire a slow dependence expanded in a handful of ultracell
+reciprocal vectors, $n(\mathbf r,\mathbf R)=\sum_{\mathbf Q}n_{\mathbf
+Q}(\mathbf r)e^{i\mathbf Q\cdot\mathbf R}$, so cost scales with the number of
+$\mathbf Q$-points rather than the ultracell's atom count.
+
+### Run shapes, and what is not covered
+
+`_run_resumed()` prefixes task 1 and `run_tasks(resume=False)` prefixes task 0.
+Both are **wrong** for the tasks that drive their own sequences of ground
+states — 380, 390, 420/421 and 440 set `trdstate=.false.` or override
+`tshift`/`ngridk`/`maxscl` before their own runs, so a prefixed ground state
+would be discarded or computed under different settings. Those go through a
+`_run_standalone()` helper: same wiped-subdirectory discipline, no task prefix.
+Three families additionally need the *opposite* of a wipe, and each solved it
+separately: molecular-dynamics restart (`restart=True`, since `readtimes`
+reads `TIMESTEP.OUT` back), the GW/ULR dependents (`_run_dependent`, running in
+place in the producing run's directory and replaying its blocks from a JSON
+sidecar), and `continue_tddft_evolution()` (rewriting `elk.in` in place,
+because the `_TD.OUT` eigenvectors and APPEND-mode observables must survive).
+Three mechanisms for one idea is a known non-uniformity, recorded here rather
+than refactored now.
+
+Of the 148 codes `elk.f90` dispatches on, **2 are upstream no-ops** — 670 and
+680 dispatch to commented-out calls — leaving 146 live, of which **143 are
+emitted by a named method (97.9%)**. The three that are not:
+
+- **task 2** (`geomopt` from atomic densities). The capability is wrapped:
+  `get_relaxed()` emits task 3, the same subroutine reading `STATE.OUT`, which
+  is what `_run_resumed` always supplies. Only the non-resume variant is
+  unreachable, and it would be wrong there.
+- **task 201** (`phononsc` resume) and **task 271** (`gndsteph` resume). Both
+  resume from files a *previous* run of the same task left in the directory,
+  which the wiped-subdirectory invariant cannot supply. Supporting them
+  honestly needs a non-wiping run mode; tasks 200 and 270 are wrapped, so only
+  the restarts are missing.
+
+Coverage is measured against the dispatch, not claimed: a code counts only
+when a named method actually places it in a task list it runs. `run_tasks()`
+could always reach all 146, which is exactly what this section improves on.

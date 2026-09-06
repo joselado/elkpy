@@ -12,11 +12,12 @@ compiled Elk binary on bulk Si/Fe (`tests/test_calculation_si.py`, `tests/test_c
 `tests/test_calculation_si_phonons.py`). Also present: `vendor/elk/` (vendored Elk 11.0.2, unmodified,
 tracked in git), `docs/elk_manual.pdf`/`.txt` (official manual, plain-text version for grepping), and
 `docs/design.md` + `docs/roadmap.md` (architecture strategy and forward plan — read before adding code).
-Not implemented: symbolic k-path's disconnected-segment support (`,` breaks), the classical supercell
-phonon method (task 200, DFPT/task 205 only), scheduler-backed launchers, MPI. (Potential and
-ELF volumetric plots now DO have named methods — `get_potential()`/`get_elf()`, tasks 43/53 — as do
-the dielectric function and MOKE, tasks 121/122.) Check `src/elkpy/`
-directly rather than assuming the docs describe current code; update both as they diverge.
+Not implemented: symbolic k-path's disconnected-segment support (`,` breaks), scheduler-backed
+launchers, MPI. (Potential and ELF volumetric plots now DO have named methods —
+`get_potential()`/`get_elf()`, tasks 43/53 — as do the dielectric function and MOKE, tasks 121/122;
+and the classical supercell phonon method, task 200, is no longer DFPT-only — see §32 below.)
+Check `src/elkpy/` directly rather than assuming the docs describe current code; update both as
+they diverge.
 
 Also implemented, as the first real entry in the Fortran patch series described below:
 `Calculation(spinorb=, soc_scale={"Fe": 1.5, ...})` — per-species scaling of the spin-orbit coupling
@@ -902,6 +903,43 @@ is implemented and structurally exercised, but has **no end-to-end physics test*
 is spin-layer locking in a 2H WSe2 bilayer or an A-type AFM bilayer, which is 10-30x the graphene
 cost. Physics writeup: `docs/design.md` §31 and `docs/physics.tex` Part XVIII.
 
+Also implemented, and unlike every entry above **not new physics at all** — it makes the physics
+Elk *already has* reachable by name (`docs/design.md` §32, no `physics.tex` part and no notebook,
+per the routine-wrapping rule below): six task-family mixins under `src/elkpy/tasks/`, composed in
+`tasks/__init__.py`'s `ALL_MIXINS` and unpacked by `class Calculation(*ALL_MIXINS)`. **143 of the
+146 live task codes `vendor/elk/src/elk.f90` dispatches on now sit behind a named method (97.9%)**,
+up from about twenty; `Calculation` exposes 115 `get_*` methods. Coverage is measured against the
+dispatch, not claimed — a code counts only when a named method actually puts it in a task list,
+since `run_tasks()` could always reach all of them, which is exactly what this improves on. The
+three exceptions: task 2 (`geomopt` from atomic densities — the capability is wrapped, `get_relaxed()`
+emitting task 3, the same subroutine reading `STATE.OUT`) and tasks 201/271, restarts that read
+files a *previous* run of the same task left behind, which the wiped-subdirectory invariant (§4)
+cannot supply. New coverage includes: stress/strain and the piezoelectric and magnetoelectric
+tensors; the electric field gradient and Mössbauer hyperfine parameters; X-ray and magnetic
+structure factors; Hartree-Fock, RDMFT and DFT+U tensor moments; molecular dynamics; the complete
+1D/2D/3D plotting triples (magnetisation, B_xc and its divergence, the m×B_xc torque density, the
+electrostatic field, paramagnetic current, meta-GGA W_xc, wavefunctions); Fermi surfaces in all
+five Elk representations plus the nesting function; l-, (l,m)-, spin- and moment-resolved band
+character and partial DOS; second-harmonic generation, the Bethe-Salpeter chain, linear-response
+and real-time TDDFT, and the spin response whose transverse poles are the magnon energies; the
+**classical supercell phonon method (task 200 — the only route for a magnetic cell**, since
+`phonon.f90` hard-stops on `spinpol`), Born effective charges, LO-TO splitting, electron-phonon
+coupling, the Eliashberg function and gap equations; magnetic anisotropy energy, spin spirals by
+both the supercell and generalised-Bloch routes, GW, Wannier90 export and the ultra-long-range
+family. Alongside it, `src/elkpy/params.py` records all 315 `case(...)` branches of
+`readinput.f90` as data — Fortran variable, type, value shape, default, the branch's own range
+checks, and a description — with a validator, a renderer, and a browsable surface
+(`describe`/`search`/27 categories) re-exported from `elkpy` directly; its completeness test
+re-parses `readinput.f90` and fails in **both** directions, so a version bump reports exactly which
+blocks appeared or vanished. `spec.py` grew from 23 to 152 task codes, 27 to 190 output filenames
+and 3 to 22 filename templates. **Verification is uneven and deliberately labelled per method** in
+`docs/design.md` §32 and in each docstring: some methods were exercised end-to-end against the real
+binary, many are format-derived (task ordering, blocks and output layouts transcribed from
+`vendor/elk/src/`, parsers unit-tested against fixtures built from the cited `write` statements,
+but never run), and a few are structurally unrunnable in this build (meta-GGA `W_xc` needs libxc,
+which `build-config/make.inc` stubs out; Wannier90's `.amn`/`.mmn` need `libwannier`). Treat a
+format-derived method as untested until its first real run.
+
 ## Architecture
 
 - `src/elkpy/structure.py` — `Structure`: lattice vectors (`avec`, Bohr) + species, each atom either a
@@ -925,7 +963,23 @@ cost. Physics writeup: `docs/design.md` §31 and `docs/physics.tex` Part XVIII.
   `raise_on_nonconvergence=` control whether non-convergence raises or must be checked explicitly.
 - `src/elkpy/spec.py` — version-coupled knowledge (task codes, `xctype` codes, output filenames) as
   data, each entry cross-checked against `vendor/elk/src/` (not just the manual) — an Elk version bump
-  should mean editing this one file.
+  should mean editing this one file. 152 task codes, 190 output filenames, 22 filename templates.
+- `src/elkpy/tasks/` — one mixin module per Elk task family (`groundstate`, `spectra`, `optics`,
+  `phonons`, `magnetism_manybody`, plus `params`), composed in `tasks/__init__.py`'s `ALL_MIXINS`
+  and unpacked by `class Calculation(*ALL_MIXINS)` — that tuple is the single place the composition
+  is written down. No mixin holds state, defines `__init__`, or imports `..calculation`, and
+  `Calculation`'s own methods come first in the MRO, so nothing a mixin defines can shadow the
+  existing surface. `_ndmag()` (Elk's number of magnetisation components, from `init0.f90`) and its
+  `_block_floats`/`_block_flag` helpers live on `Calculation` itself, NOT in a mixin: several
+  families need it and two independent transcriptions of one Fortran rule drift apart. See
+  `docs/design.md` §32, including the three non-wiping run mechanisms and what is only
+  format-derived.
+- `src/elkpy/params.py` — every `elk.in` input block `readinput.f90` accepts (all 315 `case(...)`
+  branches) as a data table: Fortran variable, declared type and module, value shape, default, the
+  branch's own range checks, and a description. Plus a validator, an exact-text renderer (working
+  around two `inputfile.py` bugs — see its module docstring) and a browsable surface
+  (`describe`/`search`/`categories`), re-exported from `elkpy` directly. Its completeness test
+  re-parses `readinput.f90` and fails in BOTH directions, so a version bump names the delta.
 - `src/elkpy/inputfile.py` — generic `elk.in` block writer (block name + value lines) and `read_blocks()`
   reader (used to parse `GEOMETRY_OPT.OUT`, which Elk writes in the same block syntax).
 - `src/elkpy/launcher.py` — `LocalLauncher`: `run()` is blocking local subprocess execution, used by

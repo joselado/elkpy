@@ -5,6 +5,18 @@ Status: Tiers 1-3 implemented and verified against a real compiled Elk binary
 Tier 4 was never "scheduled" but has largely happened anyway, one landed
 direction at a time — see the "landed for real" notes in that section, which
 now cover Berry curvature, atom projection and momentum matrix elements.
+**Tier 3's "more `get_*` methods" is now essentially complete** (`docs/design.md`
+§32): six task-family mixins under `src/elkpy/tasks/` put 143 of the 146 live
+task codes `vendor/elk/src/elk.f90` dispatches on behind a named method — the
+three exceptions being task 2 (`geomopt` without resume, whose capability
+`get_relaxed()` covers via task 3) and tasks 201/271, restarts that read files
+a previous run of the same task left in a directory the wiped-subdirectory
+invariant cannot preserve. `spec.py` grew from 23 to 152 task codes, from 27 to
+190 output filenames and from 3 to 22 filename templates, and a new
+`src/elkpy/params.py` records every one of `readinput.f90`'s 315 input-block
+branches as a validated, searchable table. Coverage is measured against the
+dispatch rather than claimed: a code counts only when a named method actually
+puts it in a task list, since `run_tasks()` could always reach all of them.
 Tier 5 (MPI, schedulers, sweep helpers) remains planning only. Tier 6: CI has
 landed (`.github/workflows/ci.yml`, including the patch-series check §8 asks
 for); the README quickstart exists; packaging polish does not. Builds on the v0 slice (`Structure`,
