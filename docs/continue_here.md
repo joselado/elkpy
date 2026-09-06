@@ -411,13 +411,29 @@ Weinert Poisson, XC) and two Phase 1 items are reachable without it.
    cutting Si's $\Gamma_{25'}$ triplet instead, with no extra ground state.
    Reinstating a continuous sweep needs the second-variational step.
 
-8. **Not yet: the position derivative.** It is the study's stated Phase 1 gradient
-   criterion. Half of the old obstacle is gone — `hmlrad`/`olprad` are built now, not
-   imported (§1k) — but the other half stands: moving an atom moves the muffin-tin
-   *potential*, and where that comes from is Phase 2. What §1k does unlock is the
-   frozen-potential position derivative, i.e. the `apwalm` structure factor alone, and
-   the Phase 4 isolation that compares a force with and without `stop_gradient` on
-   `apwalm`.
+8. **~~The position derivative.~~ HALF DONE** (§1l, `elkjax/phase1_position.py`). The
+   frozen-potential half — the rigid-muffin-tin picture, where positions enter only
+   through `match`'s structure factor — is done and pinned by an exact identity rather
+   than a finite difference: **rigid translation of every atom cannot move the
+   spectrum**, since the matrix transforms by a diagonal unitary
+   $U=\mathrm{diag}(e^{i(\mathbf G_i+\mathbf k)\cdot\boldsymbol\delta})$. Measured
+   1.8e-15 Ha on Si and 8.4e-15 on h-BN with the interstitial's own response supplied
+   (closed form: $\tilde\Theta(\mathbf G)\to\tilde\Theta(\mathbf G)e^{-i\mathbf
+   G\cdot\boldsymbol\delta}$), against 2.9e-4 and 4.3e-4 without it.
+
+   **The finding: the FORWARD form of that null is sharper than the gradient form.**
+   With the interstitial response left out, the error is $O(\delta^2)$ on Si (ratios
+   4.01, 4.00 per halving) and $O(\delta)$ on h-BN (1.87, 1.79) — so the wrong assembly
+   satisfies the *gradient* null identically on silicon and only the finite-shift
+   comparison separates them on both. That is the third distinct instance in this port
+   of "a green gradient test does not validate a transcription" (after 0c's
+   $4\pi(-i)^\ell$ and §1k's frozen `apwalm`), and every time the check with teeth was
+   forward. Treat it as a rule for Phase 2, not three anecdotes.
+
+   **Still missing for a real force**: the muffin-tin potential's own response to the
+   displacement, and the characteristic function's (`gencfun` with the sphere moved).
+   Both are Phase 2. What IS unlocked is the Phase 4 isolation that compares a quantity
+   with and without `stop_gradient` on `apwalm`, since the moving half now exists.
 
 One caution carried from this session for whatever comes next: the AD-vs-`genpmatk`
 comparison agreed to 0.2-1.4%, which is a **physics** agreement, not a correctness
@@ -542,6 +558,8 @@ radial_functions.py  item 1k: rschrodint/genapwfr/genlofr -- the radial
                predictor-corrector (transcribed, not improved)
 phase1_potential.py  item 1k: the derivative in the potential, split into a
                frozen-basis branch with a closed-form oracle and a full one
+phase1_position.py   item 1l: the frozen-potential position derivative, pinned
+               by the rigid-translation sum rule
 ```
 
 ```bash
@@ -557,7 +575,8 @@ PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
     tests/test_calculation_lapw_secondorder.py \
     tests/test_calculation_lapw_radial.py \
     tests/test_calculation_lapw_radial_functions.py \
-    tests/test_calculation_lapw_potential.py -q
+    tests/test_calculation_lapw_potential.py \
+    tests/test_calculation_lapw_position.py -q
 ```
 
 **`taskset` is not decoration.** `.claude/settings.json`'s `OMP_NUM_THREADS=1` does not

@@ -448,8 +448,8 @@ def _reciprocal_vectors(export):
             - np.asarray(export["vkc"])[:, None]).T            # (ngp, 3)
 
 
-def matching_coefficients(export, vgkc):
-    """`apwalm` at an arbitrary k, in Elk's own array layout.
+def matching_coefficients(export, vgkc, atposc=None):
+    r"""`apwalm` at an arbitrary k, in Elk's own array layout.
 
     Rebuilds it through `elkjax.lapw.match` -- verified element-wise against
     Elk's array by patch 0013 -- rather than taking the exported one, so the
@@ -457,11 +457,16 @@ def matching_coefficients(export, vgkc):
     property of the cutoff and changes discontinuously with k, which is not a
     problem for a derivative at a point but does mean this is only valid for
     k near the exported one.
+
+    `atposc` overrides the exported Cartesian positions, which is how an atom
+    is moved: they enter only through the structure factor
+    :math:`e^{i(\mathbf G+\mathbf k)\cdot\mathbf r_\alpha}`.
     """
     from . import lapw
 
     idxis = np.asarray(export["idxis"]) - 1
-    atposc = np.asarray(export["atposc"])
+    atposc = (np.asarray(export["atposc"]) if atposc is None
+              else jnp.asarray(atposc))
     rmt = np.asarray(export["rmt"])
     omega = float(export["omega"])
     lmaxapw = int(export["lmaxapw"])

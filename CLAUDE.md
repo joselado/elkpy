@@ -1182,7 +1182,7 @@ vendored tree:
 
 `docs/jax_port.md` (1,623 lines) is the design study, `docs/continue_here.md` §3 the cold-start
 summary, `docs/jax_port_phase0.md` the running log of what Phase 0 measured, and
-`docs/jax_port_phase1.md` the same for Phase 1, which is now under way (through §1k). Verdict, in one line: **a research project justified by
+`docs/jax_port_phase1.md` the same for Phase 1, which is now under way (through §1l). Verdict, in one line: **a research project justified by
 differentiability, not by the GPU** — SIRIUS already does FP-LAPW on CUDA/ROCm with Elk as its
 reference, and Elk's hot spots are already near-peak BLAS-3. Nothing about the port is a plan of
 record; **Phase 0 (§6 of the study) is designed to kill it, not to start it**, and that is what
@@ -1518,12 +1518,22 @@ by ~3e-10 and retuned one over-fitted constant in the smearing suite by 13x, whi
 Dirac splitting moved only in its eighth digit; measured with the call off and on rather
 than inferred, and the test now asserts the mechanism rather than a fixed factor.
 
-**Still open in Phase 1**: the POSITION derivative $d\varepsilon_j/d\mathbf R$ on
-displaced h-BN — half the old obstacle is gone (the radial integrals are built now), but
-moving an atom moves the muffin-tin *potential*, which is Phase 2; what §1k does unlock is
-the frozen-potential version, i.e. the `apwalm` structure factor alone, and with it the
-Phase 4 isolation that compares a force with and without `stop_gradient` on `apwalm`.
-Also open: smeared occupations **at second order**, which `sign_projector` does not cover
+**The position derivative is half done (§1l)**, and the half that exists is pinned by an
+exact identity rather than a finite difference. At frozen potential (rigid muffin tin)
+positions enter only through `match`'s structure factor, and **a rigid translation of
+every atom cannot move the spectrum** — the matrix transforms by the diagonal unitary
+$U=\mathrm{diag}(e^{i(\mathbf G_i+\mathbf k)\cdot\boldsymbol\delta})$, the muffin-tin
+blocks getting that right on their own while the imported interstitial ones need their
+own closed-form response $\tilde\Theta(\mathbf G)\to\tilde\Theta(\mathbf
+G)e^{-i\mathbf G\cdot\boldsymbol\delta}$. Measured 1.8e-15 Ha (Si) and 8.4e-15 (h-BN)
+with it, 2.9e-4 and 4.3e-4 without. **The FORWARD form of that null is sharper than the
+gradient form**: without the interstitial response the error is $O(\delta^2)$ on Si and
+$O(\delta)$ on h-BN, so the wrong assembly satisfies the *gradient* null identically on
+silicon. Third distinct instance in this port of "a green gradient test does not validate
+a transcription" (after 0c's $4\pi(-i)^\ell$ and §1k's frozen `apwalm`) — every time the
+check with teeth was forward. **It is NOT a force**: the muffin-tin potential's own
+response to the displacement and the characteristic function's (`gencfun` with the sphere
+moved) are both Phase 2. Also open: smeared occupations **at second order**, which `sign_projector` does not cover
 (it is hard-window only; that needs a Chebyshev expansion of the Fermi function, and §1i
 removed the tolerance from the smeared first derivative, not the `eigh` from its JVP); and
 the unrolled Newton-Schulz tape, where `lax.scan` over a two-matmul body is the obvious fix
@@ -1600,7 +1610,8 @@ size of the observed failure.
 `docs/continue_here.md` is current as of §1k: both workstreams are on `master`, and its
 §3 marks patches 0013/0014/0015, the κ(S) measurement, the projector rule at a real
 multiplet, the `match` pole removal, the negative test, the smeared occupations, second
-derivatives, and the radial integrals/potential derivative all done. The `ELKPY_F90_LIB` override it documents is still what builds Elk
+derivatives, the radial integrals/potential derivative and the frozen-potential position
+derivative all done. The `ELKPY_F90_LIB` override it documents is still what builds Elk
 here.
 
 

@@ -18,7 +18,7 @@ Elk's own `apwalm` by patch 0013, so the first build step is the assembly.
 | **1b** the radial integrals from `genapwfr`/`genlofr`/`hmlrad`/`olprad` | **done, and without Phase 2** (§1k): patch 0015 exports the muffin-tin potential, so the chain $v_s^{\rm MT}\to$ radial functions $\to$ radial integrals $\to H,O\to\varepsilon_j$ closes; every stage machine-precision against Elk |
 | **1c** the interstitial blocks from `gencfun`/`genvsig` | not started; `vsig` needs the interstitial Kohn-Sham potential, i.e. Phase 2 |
 | **1a′** the assembly as a differentiable function of $k$ | **done — and it found that $d\varepsilon/dk \neq \langle p\rangle$ in a finite LAPW basis** |
-| **1d** gradient vs finite differences on displaced h-BN | not started |
+| **1d** gradient vs finite differences on displaced h-BN | **half done** (§1l): the frozen-potential half is done and pinned by a translation sum rule; the other half needs the potential's own response to the displacement, i.e. Phase 2 |
 | **1e** the adversarial `soc_scale` sweep, and the required refusal | **withdrawn as written — `soc_scale` cannot move the first-variational spectrum at all** (§1f); the refusal itself is done, by cutting a real multiplet |
 | **1f** the Cholesky-reduced eigensolve wired to the safe-$K$ projector rule, on real matrices | **done — the rule is needed and it works**: 6.7e-2 (forward) / `NaN` (reverse) naive against 4.1e-12 safe, at a multiplet Elk's own matrices supply by symmetry |
 | **1g** the two removable poles in `match` | **done — the $k$-derivative now works at $\Gamma$**, and at every $k_z=0$ point of a slab cell, which is where every multiplet is |
@@ -26,6 +26,7 @@ Elk's own `apwalm` by patch 0013, so the first build step is the assembly.
 | **1i** smeared occupations and the self-consistent Fermi level | **done** — the closed-form kernel inside the JVP makes the tolerance INERT for smeared occupations; whether the near-degenerate branch fires is set by the assembly's roundoff, not by the physics |
 | **1j** second derivatives at a real multiplet | **done** — only `sign_projector` survives; both `eigh`-based routes return `NaN`, and the control at a generic $k$ says the failure is the multiplet, not the order |
 | **1k** the spectrum as a differentiable function of the muffin-tin potential | **done — and the two channels are exactly complementary**: the spherical part of $v_s$ enters ONLY through the basis (frozen-basis derivative exactly zero) and the non-spherical part ONLY through the integrals (basis response 7e-16) |
+| **1l** the position derivative at frozen potential | **done — pinned by a sum rule**: rigid translation leaves the spectrum invariant to 2e-15 Ha, and the forward form of that null is sharper than the gradient form, which is identically satisfied by the wrong assembly on silicon |
 
 ---
 
@@ -1259,4 +1260,104 @@ but the table above says it would not catch the failure mode that matters here:
 a Phase 2 chain that produced a perfectly correct $\delta v_s$ and then fed it
 to a frozen LAPW basis would return **zero** for the spherical channel while
 looking entirely healthy.
+
+---
+
+## 1l. The position derivative at frozen potential, and the sum rule that pins it
+
+### What was at stake
+
+`docs/jax_port.md` states Phase 1's gradient criterion as
+$d\varepsilon_j/d\mathbf R$ on displaced h-BN, and §1k removed half of what
+blocked it: the radial integrals are built now, not imported. The other half
+stands. Moving an atom moves the Kohn-Sham potential *inside* its sphere, and
+where that potential comes from is Phase 2.
+
+What is reachable is the derivative at **frozen potential** — the
+rigid-muffin-tin picture, in which each sphere's potential rides with it
+unchanged and the interstitial contribution is held fixed. Positions then enter
+the eigenproblem in exactly one place, the structure factor of the matching
+coefficients,
+$A^\alpha \propto e^{\,i(\mathbf G+\mathbf k)\cdot\mathbf r_\alpha}
+ (D^{\alpha\ell})^{-1}\cdots$.
+
+**This is not a force.** Elk's total force also carries the Hellmann-Feynman
+and core terms, and the interstitial characteristic function moves with the
+sphere. Calling it one would be the overclaim §Phase 4 of the study warns
+about, and no amount of finite-difference agreement would change that — as §1k
+just demonstrated, AD and FD of the *same* truncated function agree perfectly.
+
+### The oracle is a sum rule
+
+Translating every atom by the same $\boldsymbol\delta$ cannot move the
+spectrum. Under that translation every basis function picks up a phase, so
+
+$$M(\boldsymbol\delta) = U^\dagger M(0)\,U,\qquad
+U = \mathrm{diag}\bigl(e^{\,i(\mathbf G_i+\mathbf k)\cdot\boldsymbol\delta}\bigr)$$
+
+on the APW rows and unity on the local orbitals — a diagonal unitary, hence
+invariant eigenvalues. The muffin-tin blocks do this on their own, through the
+structure factor. The imported interstitial blocks do not, but their exact
+response is the same phase, since
+$\Theta(\mathbf r)\to\Theta(\mathbf r-\boldsymbol\delta)$ gives
+$\tilde\Theta(\mathbf G)\to\tilde\Theta(\mathbf G)e^{-i\mathbf G\cdot
+\boldsymbol\delta}$, and that is closed-form. Supplying it closes the loop: a
+wrong sign or a wrong factor in `match`'s position dependence breaks the
+invariance and nothing else in `match` can.
+
+Measured at $\boldsymbol\delta=(0.031,-0.017,0.023)$ Bohr:
+
+| | bulk Si | monolayer h-BN |
+|---|---|---|
+| forward, interstitial response supplied | 1.8e-15 Ha | 8.4e-15 Ha |
+| forward, interstitial frozen | 2.9e-4 Ha | 4.3e-4 Ha |
+| gradient, interstitial response supplied | 1.2e-15 | 6.3e-16 |
+| gradient, interstitial frozen | **9.7e-16** | 1.7e-2 |
+
+### And the forward form of the null is the sharper one
+
+The bolded entry is the finding. On silicon the *wrong* assembly satisfies the
+gradient null identically, and only the finite-shift comparison separates the
+two. The reason is the scaling: with the interstitial response left out, the
+error goes as $\delta^2$ on Si (measured ratios 4.01 and 4.00 per halving of
+$\delta$) and as $\delta$ on h-BN (1.87, 1.79). A second-order error has no
+first derivative to find.
+
+This is Phase 0's carried-forward finding — *a green gradient test does not
+validate a transcription* — in its third distinct form in this port, after
+0c's $4\pi(-i)^\ell$ prefactor and §1k's frozen `apwalm`. Each time the check
+with teeth was forward and the gradient check was the blind one. That is worth
+stating as a rule for Phase 2 and beyond rather than as three anecdotes:
+**every derivative here needs a forward check beside it, and where an exact
+identity is available it beats a finite difference.**
+
+### The single-atom derivative
+
+One atom displaced along a general direction, AD against central FD of the same
+function, has no oracle beyond the finite difference — so what is reported is
+the shape of the sweep rather than one number:
+
+| step (Bohr) | bulk Si | monolayer h-BN |
+|---|---|---|
+| $10^{-3}$ | 5.6e-7 | 8.3e-8 |
+| $10^{-4}$ | 3.9e-9 | 7.0e-10 |
+| $10^{-5}$ | 1.1e-8 | 1.0e-8 |
+
+The minimum in the middle is the point: truncation dominates at the large step
+and roundoff at the small one, so the two are converging on each other rather
+than sitting at the step-independent offset that marks a wrong gradient.
+
+### What this settles
+
+The position dependence of `match` is correct, pinned by an exact identity
+rather than by a difference. The plumbing to move atoms is in place
+(`matching_coefficients` takes positions), and with it one half of the
+isolation `docs/jax_port.md` §Phase 4 asks for — the same quantity computed
+with and without `stop_gradient` on `apwalm` — since the moving half now
+exists.
+
+**It does not settle a force**, and the two missing pieces are named: the
+muffin-tin potential's own response to the displacement (Phase 2), and the
+characteristic function's (`gencfun` with the sphere moved, which is a Phase 2
+ingredient for the same reason $H^{\rm I}$ is).
 
