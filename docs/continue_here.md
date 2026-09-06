@@ -15,6 +15,7 @@ $k$-tangent `NaN` at $\Gamma$ and across every $k_z=0$ plane; **that is fixed to
 (§1g), so the projector derivative now works where the multiplets are.
 
 ```
+2306e08  Close the negative test, correct the study's own fixture
 4a4090f  Remove the two poles that made the k-tangent NaN at Gamma  elkjax/lapw.py
 bcc21f8  Write up the projector rule at a real multiplet
 60980ab  Wire the eigensolve to the safe-K projector rule      elkjax/phase1_projector.py

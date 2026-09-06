@@ -1381,9 +1381,12 @@ time-reversal-invariant momentum every branch is EVEN in $\mathbf k$, so the sor
 branches never exchange between $+t$ and $-t$ and AD and central FD both correctly return
 zero (measured $10^{-17}$–$10^{-11}$ on Si's $\Gamma_{25'}$ triplet). Degeneracy is not
 enough; the branches must cross LINEARLY. On graphene at $K$ (2 atoms, `rgkmax=6`, under
-two minutes including the ground state) the Dirac pair gives AD $\pm0.184$, central FD
-$\pm0.0009$ (the branch average, since the branches exchange) and one-sided
-$\mp0.376$ (the extreme branch), while their trace agrees across all three to
+two minutes including the ground state) the Dirac pair gives AD $\pm0.184$ (a
+basis-dependent number that means nothing on its own — it is the diagonal of
+$v^\dagger\delta Hv$ in whichever basis the eigensolver picked, so only its *disagreement*
+with the other two is the result), central FD $\pm0.0009$ (the branch average, since the
+branches exchange) and one-sided $\mp0.376$ (the extreme branch), while their trace agrees
+across all three to
 $5\times10^{-7}$ of that scale — with the $\sigma$ doublet at the same $K$, equally
 degenerate but not linearly split, as the in-fixture control where AD and central FD do
 agree. So `first_variational_eigenvalues` is safe for a trace and unsafe for an

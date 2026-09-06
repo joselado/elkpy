@@ -687,7 +687,12 @@ multiplet, which is neither.
 | band 5 (upper Dirac branch) | $-0.18377$ | $-0.00087$ | $+0.37608$ |
 | **their sum** | $-1.93\times10^{-7}$ | $-2.01\times10^{-7}$ | $-1.67\times10^{-5}$ |
 
-(1-based band numbering; the pair is split by $3.4\times10^{-7}$ Ha.) The three individual
+(Band numbering is 1-based throughout this section; the pair is split by
+$3.4\times10^{-7}$ Ha.) **The $0.184$ means nothing on its own** — it is the diagonal of
+$v^\dagger\,\delta H\,v$ in whichever basis the eigensolver happened to pick inside the
+multiplet, so it can be anywhere in $[-v,+v]$ and is not reproducible across
+eigensolvers, the same caution 0b-C already attaches to naive-AD values. What is the
+result is that it agrees with *neither* of the other two. The three individual
 values differ by more than 10% of the scale from each other; the trace agrees to
 $5\times10^{-7}$ of it between AD and central FD, and to $4\times10^{-5}$ one-sided, whose
 own $O(\text{step})$ truncation is the residue. The fixture carries its own control: the
