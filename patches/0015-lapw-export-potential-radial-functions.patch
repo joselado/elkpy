@@ -1,0 +1,174 @@
+--- a/src/elkpy_eigenstates.f90
++++ b/src/elkpy_eigenstates.f90
+@@ -1109,7 +1109,28 @@
+ !   {\tt gntyry} -- together, every remaining input of {\tt olpfv} and
+ !   {\tt hmlfv} beyond {\tt apwalm} and the interstitial blocks, so that
+ !   the port can assemble each muffin-tin block itself and compare it
+-!   against Elk's, one upstream routine at a time.
++!   against Elk's, one upstream routine at a time. Patch 0015 appends the
++!   ingredients of those radial integrals in turn: the muffin-tin Kohn-Sham
++!   potential {\tt vsmt} in Elk's own packing, the radial mesh
++!   {\tt rlmt} and its quadrature weights {\tt wr2mt}, the APW and
++!   local-orbital linearisation energies and derivative orders, and the
++!   radial functions {\tt apwfr}, {\tt apwdfr} and {\tt lofr} in full
++!   (patch 0013 wrote only the last {\tt npapw} points of {\tt apwfr},
++!   which is what {\tt match} needs and nothing more). With them the port
++!   closes the chain vsmt -> apwfr/lofr -> radial integrals -> H, O ->
++!   evalfv and can differentiate the spectrum with respect to the potential.
++!
++!   {\bf Patch 0015 also calls {\tt genapwlofr} before building anything},
++!   which makes everything written here consistent with the {\tt vsmt} it
++!   writes. Elk's SCF loop calls {\tt genapwlofr} at the top of an iteration
++!   and {\tt potks}/{\tt mixerifc} at the bottom, so on exit the radial
++!   functions and integrals belong to the potential of the PREVIOUS
++!   iteration. Measured on bulk Si that is 3e-10 relative in {\tt haa} --
++!   which is small, invisible while the potential was not exported, and
++!   indistinguishable from a transcription bug the moment it is. The side
++!   effect is that a {\tt LAPW} query updates those global arrays for the
++!   rest of the session; the update is idempotent and is what the next SCF
++!   iteration would have done anyway.
+ !
+ !   The interstitial ingredients ({\tt cfunig}, {\tt vsig}) are
+ !   deliberately NOT written. {\tt hi} and {\tt oi} are already those
+@@ -1201,6 +1222,17 @@
+ ! generate the G+k vectors, structure factors and matching coefficients
+ vl(1:3)=vpl(1:3)
+ vc(1:3)=bvec(1:3,1)*vpl(1)+bvec(1:3,2)*vpl(2)+bvec(1:3,3)*vpl(3)
++! Regenerate the radial functions and integrals from the CURRENT vsmt before
++! anything is built or written (patch 0015). Without this the export is
++! internally inconsistent by exactly one mixing step: gndstate calls
++! genapwlofr at the top of each SCF iteration and potks/mixerifc at the
++! bottom, so on exit apwfr, lofr and the radial integrals belong to the
++! potential of the PREVIOUS iteration while vsmt is the current one. Measured
++! on bulk Si, that is 3e-10 relative in haa -- invisible until vsmt itself is
++! exported, and indistinguishable from a transcription bug once it is. Note
++! that linengy is deliberately NOT called: apwe and lorbe are exported as they
++! stand and held fixed, which is also what Elk's own forces assume.
++call genapwlofr
+ call gengkvec(ngvc,ivg,vgc,vl,vc,gkmax,ngkmax,ngp,igpig,vgpl,vgpc,gpc)
+ call gensfacgp(ngp,vgpc,ngkmax,sfacgp)
+ call match(ngp,vgpc,gpc,sfacgp,apwalm)
+@@ -1441,6 +1473,123 @@
+     end do
+   end do
+ end do
++! --------------------------------------------------------------------------
++! patch 0015: the muffin-tin Kohn-Sham potential, the radial mesh and its
++! quadrature weights, the linearisation energies, and the APW/local-orbital
++! radial functions in full. Everything above takes the radial integrals
++! (haa, hloa, hlolo, oalo, ololo) and the matching coefficients as GIVEN;
++! these fields are what genapwfr, genlofr, olprad and hmlrad consume to
++! build them, so with them the port can close the chain
++!
++!   vsmt -> apwfr/lofr -> radial integrals -> H, O -> evalfv
++!
++! and differentiate the spectrum with respect to the potential itself.
++!
++! Appended after gntyry, behind a header of its own, so a caller that only
++! knows patches 0013/0014 still parses correctly up to that point.
++!
++! Two conventions here are load-bearing and are exported rather than left to
++! be re-derived. vsmt is written EXACTLY as Elk packs it -- lmmaxi harmonics
++! per radial point over the inner region (points 1..nrmti), lmmaxo over the
++! outer region -- because that packing, not the values, is what a
++! transcription of hmlrad gets wrong; and wr2mt is written rather than
++! rebuilt from the mesh, because it is a Simpson-like weight array from
++! wsplint, not r^2 dr.
++! --------------------------------------------------------------------------
++write(*,*) lmaxi,lmmaxi,nrmtmax,lorbordmax,nplorb,npmtmax
++write(*,*) y00,solsc,deapw,delorb
++do is=1,nspecies
++  write(*,*) nrmti(is),npmt(is)
++end do
++do is=1,nspecies
++  do ir=1,nrmt(is)
++    write(*,*) rlmt(ir,1,is)
++  end do
++end do
++do is=1,nspecies
++  do ir=1,nrmt(is)
++    write(*,*) wr2mt(ir,is)
++  end do
++end do
++! APW derivative orders and, per atom, the linearisation energies they shift
++do is=1,nspecies
++  do l=0,lmaxapw
++    do io=1,apword(l,is)
++      write(*,*) apwdm(io,l,is)
++    end do
++  end do
++end do
++do ias=1,natmtot
++  is=idxis(ias)
++  do l=0,lmaxapw
++    do io=1,apword(l,is)
++      write(*,*) apwe(io,l,ias)
++    end do
++  end do
++end do
++! local-orbital order, energy ordering and derivative orders
++do is=1,nspecies
++  do ilo=1,nlorb(is)
++    write(*,*) lorbord(ilo,is),idxelo(ilo,is)
++  end do
++end do
++do is=1,nspecies
++  do ilo=1,nlorb(is)
++    do jo=1,lorbord(ilo,is)
++      write(*,*) lorbdm(jo,ilo,is)
++    end do
++  end do
++end do
++do ias=1,natmtot
++  is=idxis(ias)
++  do ilo=1,nlorb(is)
++    do jo=1,lorbord(ilo,is)
++      write(*,*) lorbe(jo,ilo,ias)
++    end do
++  end do
++end do
++! the muffin-tin Kohn-Sham potential, in Elk's own packing
++do ias=1,natmtot
++  is=idxis(ias)
++  do i=1,npmt(is)
++    write(*,*) vsmt(i,ias)
++  end do
++end do
++! the radial functions themselves: u and (the Gram-Schmidt combination of)
++! e*u for the APWs, then the surface-derivative term, then the same pair for
++! the local orbitals
++do ias=1,natmtot
++  is=idxis(ias)
++  nr=nrmt(is)
++  do l=0,lmaxapw
++    do io=1,apword(l,is)
++      do j=1,2
++        do ir=1,nr
++          write(*,*) apwfr(ir,j,io,l,ias)
++        end do
++      end do
++    end do
++  end do
++end do
++do ias=1,natmtot
++  is=idxis(ias)
++  do l=0,lmaxapw
++    do io=1,apword(l,is)
++      write(*,*) apwdfr(io,l,ias)
++    end do
++  end do
++end do
++do ias=1,natmtot
++  is=idxis(ias)
++  nr=nrmt(is)
++  do ilo=1,nlorb(is)
++    do j=1,2
++      do ir=1,nr
++        write(*,*) lofr(ir,j,ilo,ias)
++      end do
++    end do
++  end do
++end do
+ deallocate(apwalm,evecfv,h,o,hi,oi)
+ end subroutine
+ !EOC

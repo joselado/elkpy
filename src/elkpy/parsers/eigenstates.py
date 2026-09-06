@@ -496,3 +496,177 @@ def _parse_lapw_radial(tokens, pos, out):
     reim = np.array(flat).reshape(n, 2)
     out["gntyry"] = (reim[:, 0] + 1j * reim[:, 1]).reshape(
         (lmmaxo, lmmaxapw, lmmaxapw), order="F")
+    _parse_lapw_potential(tokens, pos, out)
+
+
+def _parse_lapw_potential(tokens, pos, out):
+    """The muffin-tin potential, the radial mesh and the radial functions
+    (patch 0015).
+
+    These are the INPUTS of the radial integrals parsed above -- what
+    `genapwfr`, `genlofr`, `olprad` and `hmlrad` consume -- so with them the
+    port can build `haa`/`hloa`/`hlolo`/`oalo`/`ololo` itself rather than
+    importing them, and differentiate the spectrum with respect to the
+    potential. Adds:
+
+      lmaxi, lmmaxi  -- the inner muffin-tin region's angular cutoff, and
+                        (lmaxi+1)^2. Elk stores a muffin-tin function with
+                        only lmmaxi harmonics per radial point over points
+                        1..nrmti and lmmaxo over the rest; that packing is
+                        the load-bearing detail of hmlrad.
+      nrmtmax, lorbordmax, nplorb, npmtmax  -- shapes
+      y00            -- 1/sqrt(4 pi), the l=0 real spherical harmonic
+      solsc          -- speed of light in atomic units, as scaled by `socscf`
+      deapw, delorb  -- the finite-difference energy steps behind Elk's
+                        energy-derivative radial functions
+      nrmti          -- (nspecies,) inner-region radial points
+      npmt           -- (nspecies,) packed length of one muffin-tin function
+      rlmt           -- (nspecies, nrmtmax) the radial mesh (zero-padded)
+      wr2mt          -- (nspecies, nrmtmax) the r^2-weighted quadrature
+                        weights.  Written rather than rebuilt: these come
+                        from `wsplint`, a Simpson-like rule, not r^2 dr.
+      apwdm          -- (apwordmax, lmaxapw+1, nspecies) int
+      apwe           -- (apwordmax, lmaxapw+1, natmtot)
+      lorbord, idxelo -- (nlomax, nspecies) int
+      lorbdm         -- (lorbordmax, nlomax, nspecies) int
+      lorbe          -- (lorbordmax, nlomax, natmtot)
+      vsmt           -- (natmtot, npmtmax) the muffin-tin Kohn-Sham
+                        potential in Elk's own packing; see
+                        `unpack_muffin_tin`
+      apwfr          -- (nrmtmax, 2, apwordmax, lmaxapw+1, natmtot), Elk's
+                        own index order.  [..., 0, ...] is u_{io,l}(r) and
+                        [..., 1, ...] is the Gram-Schmidt combination of
+                        e*u that genapwfr stores -- NOT e times the first
+                        component, except at APW order 1
+      apwdfr         -- (apwordmax, lmaxapw+1, natmtot), the surface
+                        derivative term (p1s - p0(nr)) * rmt / 2
+      lofr           -- (nrmtmax, 2, nlomax, natmtot), same pairing
+
+    Ragged axes (`apword(l, is)` orders per l, `lorbord(ilo, is)` per local
+    orbital) are zero-padded to the maximum, so every field above is a dense
+    array; the counts needed to slice them are `apword`/`lorbord`/`nlorb`.
+
+    Absent on a binary built before patch 0015, in which case the keys are
+    simply not set.
+    """
+    if pos >= len(tokens):
+        return
+    head, pos = _take(tokens, pos, 6, int)
+    out.update(zip(
+        ("lmaxi", "lmmaxi", "nrmtmax", "lorbordmax", "nplorb", "npmtmax"),
+        head))
+    lmaxi, lmmaxi, nrmtmax, lorbordmax, nplorb, npmtmax = head
+    vals, pos = _take(tokens, pos, 4, float)
+    out.update(zip(("y00", "solsc", "deapw", "delorb"), vals))
+    nspecies = out["nspecies"]
+    natmtot = out["natmtot"]
+    apwordmax = out["apwordmax"]
+    nlomax = out["nlomax"]
+    nl = out["lmaxapw"] + 1
+    nrmt = out["nrmt"]
+    npmt = np.zeros(nspecies, dtype=int)
+    nrmti = np.zeros(nspecies, dtype=int)
+    for is_ in range(nspecies):
+        pair, pos = _take(tokens, pos, 2, int)
+        nrmti[is_], npmt[is_] = pair
+    out["nrmti"] = nrmti
+    out["npmt"] = npmt
+    for key in ("rlmt", "wr2mt"):
+        arr = np.zeros((nspecies, nrmtmax))
+        for is_ in range(nspecies):
+            flat, pos = _take(tokens, pos, int(nrmt[is_]), float)
+            arr[is_, :int(nrmt[is_])] = flat
+        out[key] = arr
+    apword = out["apword"]
+    idxis = out["idxis"]
+    apwdm = np.zeros((apwordmax, nl, nspecies), dtype=int)
+    for is_ in range(nspecies):
+        for l in range(nl):
+            flat, pos = _take(tokens, pos, int(apword[l, is_]), int)
+            apwdm[:int(apword[l, is_]), l, is_] = flat
+    out["apwdm"] = apwdm
+    apwe = np.zeros((apwordmax, nl, natmtot))
+    for ias in range(natmtot):
+        is_ = idxis[ias] - 1
+        for l in range(nl):
+            flat, pos = _take(tokens, pos, int(apword[l, is_]), float)
+            apwe[:int(apword[l, is_]), l, ias] = flat
+    out["apwe"] = apwe
+    nlorb = out["nlorb"]
+    lorbord = np.zeros((nlomax, nspecies), dtype=int)
+    idxelo = np.zeros((nlomax, nspecies), dtype=int)
+    for is_ in range(nspecies):
+        for ilo in range(int(nlorb[is_])):
+            pair, pos = _take(tokens, pos, 2, int)
+            lorbord[ilo, is_], idxelo[ilo, is_] = pair
+    out["lorbord"] = lorbord
+    out["idxelo"] = idxelo
+    lorbdm = np.zeros((lorbordmax, nlomax, nspecies), dtype=int)
+    for is_ in range(nspecies):
+        for ilo in range(int(nlorb[is_])):
+            n = int(lorbord[ilo, is_])
+            flat, pos = _take(tokens, pos, n, int)
+            lorbdm[:n, ilo, is_] = flat
+    out["lorbdm"] = lorbdm
+    lorbe = np.zeros((lorbordmax, nlomax, natmtot))
+    for ias in range(natmtot):
+        is_ = idxis[ias] - 1
+        for ilo in range(int(nlorb[is_])):
+            n = int(lorbord[ilo, is_])
+            flat, pos = _take(tokens, pos, n, float)
+            lorbe[:n, ilo, ias] = flat
+    out["lorbe"] = lorbe
+    vsmt = np.zeros((natmtot, npmtmax))
+    for ias in range(natmtot):
+        is_ = idxis[ias] - 1
+        flat, pos = _take(tokens, pos, int(npmt[is_]), float)
+        vsmt[ias, :int(npmt[is_])] = flat
+    out["vsmt"] = vsmt
+    apwfr = np.zeros((nrmtmax, 2, apwordmax, nl, natmtot))
+    for ias in range(natmtot):
+        is_ = idxis[ias] - 1
+        nr = int(nrmt[is_])
+        for l in range(nl):
+            for io in range(int(apword[l, is_])):
+                for j in range(2):
+                    flat, pos = _take(tokens, pos, nr, float)
+                    apwfr[:nr, j, io, l, ias] = flat
+    out["apwfr_full"] = apwfr
+    apwdfr = np.zeros((apwordmax, nl, natmtot))
+    for ias in range(natmtot):
+        is_ = idxis[ias] - 1
+        for l in range(nl):
+            flat, pos = _take(tokens, pos, int(apword[l, is_]), float)
+            apwdfr[:int(apword[l, is_]), l, ias] = flat
+    out["apwdfr"] = apwdfr
+    lofr = np.zeros((nrmtmax, 2, nlomax, natmtot))
+    for ias in range(natmtot):
+        is_ = idxis[ias] - 1
+        nr = int(nrmt[is_])
+        for ilo in range(int(nlorb[is_])):
+            for j in range(2):
+                flat, pos = _take(tokens, pos, nr, float)
+                lofr[:nr, j, ilo, ias] = flat
+    out["lofr"] = lofr
+
+
+def unpack_muffin_tin(packed, nr, nri, lmmaxi, lmmaxo):
+    """Elk's packed muffin-tin function -> a dense (nr, lmmaxo) array.
+
+    A muffin-tin function is stored with only `lmmaxi` spherical-harmonic
+    coefficients per radial point over the inner region (points 1..nri) and
+    `lmmaxo` over the outer one, laid out radial-point-slowest.  Every
+    consumer in `vendor/elk/src/` therefore addresses it with a stride
+    (`vsmt(lm:i1:lmmaxi, ias)`), and reproducing that stride arithmetic is
+    where a transcription of `hmlrad` goes wrong.  This returns the dense
+    array instead, with the harmonics the inner region does not carry set to
+    ZERO -- which is exactly what makes `hmlrad`'s `l2 <= lmaxi` guard
+    automatic rather than a branch to remember.
+    """
+    out = np.zeros((nr, lmmaxo))
+    inner = np.asarray(packed[:lmmaxi * nri]).reshape(nri, lmmaxi)
+    out[:nri, :lmmaxi] = inner
+    outer = np.asarray(
+        packed[lmmaxi * nri:lmmaxi * nri + lmmaxo * (nr - nri)])
+    out[nri:, :] = outer.reshape(nr - nri, lmmaxo)
+    return out

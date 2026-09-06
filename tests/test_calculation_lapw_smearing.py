@@ -156,11 +156,22 @@ def test_the_eigenvector_rule_degrades_as_the_smearing_widens(graphene):
 
     Its error is ~eps ||A - A^dag|| / dlambda absolute against a derivative of order
     f' = 1/4w, so the RELATIVE error grows linearly in the smearing width -- the
-    opposite of the intuition that broader smearing is gentler.  Measured on this
-    build: 3.9e-9, 3.9e-8, 2.8e-7 in forward mode at w = 1e-3, 1e-2, 1e-1, against
-    1.0e-13, 7.7e-14, 2.0e-10 for the safe rule.  Asserted as a growth rate and a
-    separation, not as thresholds, since both depend on the eigensolver's own splitting
-    of the pair.
+    opposite of the intuition that broader smearing is gentler.
+
+    THE CONSTANT IS NOT A PROPERTY OF THE PHYSICS, and this was measured directly
+    rather than argued.  Patch 0015 made the export regenerate the radial functions
+    from the potential it writes, which changes the assembled matrix by ~3e-10
+    relative; across that change the Dirac splitting moved only in its eighth digit
+    (3.3712177e-7 -> 3.3712180e-7 Ha) and the safe rule stayed on its 3-6e-14 floor,
+    while the naive rule's error moved by 13x -- 2.8e-10, 2.8e-9, 2.8e-8 before,
+    2.2e-11, 2.2e-10, 3.1e-9 after, at w = 1e-3, 1e-2, 1e-1.  The reason is that
+    ||A - A^dag|| depends on how the eigensolver resolves a PAIR, and inside a pair
+    split at the assembly's own roundoff that resolution is free to rotate.  (A third
+    value, 3.9e-9 / 3.9e-8 / 2.8e-7, was recorded here from an earlier build.)
+
+    So only the mechanism is asserted: growth linear in the width, a wide separation
+    at every width, and -- because safe does not grow -- a separation that itself
+    widens.  A fixed factor between the two routes would be fitting one build.
     """
     reduced, tol, mu = graphene["reduced"], graphene["tol"], graphene["efermi"]
     observable = np.diag(np.linspace(-1.0, 1.0, reduced.shape[0])).astype(complex)
@@ -171,7 +182,9 @@ def test_the_eigenvector_rule_degrades_as_the_smearing_widens(graphene):
         naive.append(max(_rel(r["naive_fwd"], r["exact"]) for r in rows))
         safe.append(max(_rel(r["safe_rev"], r["exact"]) for r in rows))
     assert naive[2] > 20 * naive[0], naive          # ~100x over two decades of width
-    assert all(n > 1e3 * s for n, s in zip(naive, safe)), (naive, safe)
+    assert all(n > 100 * s for n, s in zip(naive, safe)), (naive, safe)
+    ratio = [n / s for n, s in zip(naive, safe)]
+    assert ratio[2] > 20 * ratio[0], ratio          # safe does not grow with w
 
 
 def test_the_direct_quotient_is_enough_at_this_splitting(graphene):
