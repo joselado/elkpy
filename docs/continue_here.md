@@ -6,8 +6,22 @@ Workstream B's `jax-port` was fast-forwarded in earlier; `origin/master` is now 
 The `elk-full-coverage` and `jax-port` branches still exist and point at older commits;
 deleting both is safe.
 
-**§§1i-1j are the newest work**, and between them they close **both** remaining Phase 1
-items that needed no Phase 2 ingredient. §1i: smeared occupations and the
+**§1k is the newest work, and it moved the Phase 1/Phase 2 boundary.** Patch **0015**
+exports the muffin-tin Kohn-Sham potential, the radial mesh and its quadrature weights,
+the linearisation energies and the radial functions in full, so `hmlrad`/`olprad` (
+`src/elkjax/radial.py`) and `rschrodint`/`genapwfr`/`genlofr` (
+`src/elkjax/radial_functions.py`) can be transcribed and the chain
+
+    vsmt -> apwfr/lofr -> radial integrals -> H, O -> evalfv
+
+closed **without any Phase 2 ingredient** — every stage machine-precision against Elk.
+Differentiating it found that the two channels of the potential are **exactly
+complementary**: the spherical part enters ONLY through the basis (frozen-basis
+derivative exactly zero) and the non-spherical part ONLY through the integrals (basis
+response 4e-16). See §3's item 6 and `docs/jax_port_phase1.md` §1k.
+
+**§§1i-1j are the work before it**, and between them they closed both Phase 1
+items that needed no Phase 2 ingredient *at the time*. §1i: smeared occupations and the
 self-consistent Fermi level on Elk's own matrices — the first configuration in which the
 divided-difference kernel's near-degenerate branch is not vacuous — after which the
 tolerance was **removed** rather than tuned, by putting the cancellation-free closed form
@@ -24,6 +38,9 @@ $k$-tangent `NaN` at $\Gamma$ and across every $k_z=0$ plane; **that is fixed to
 (§1g), so the projector derivative now works where the multiplets are.
 
 ```
+e2a70f6  Differentiate the spectrum in the potential          elkjax/phase1_potential.py
+00e7216  Integrate the radial Schrodinger equation in JAX     elkjax/radial_functions.py
+eef2a57  Build the radial integrals from Elk's potential      patches/0015, elkjax/radial.py
 bd4ee3e  Remove the smeared tolerance, differentiate twice   elkjax/phase1_secondorder.py
 8e4e04f  Make the fixed-N tests use the reference they claim
 0b2cbe2  Record what the smeared kernel measured
@@ -345,7 +362,36 @@ Weinert Poisson, XC) and two Phase 1 items are reachable without it.
    expansion of the Fermi function), and the iteration is unrolled — `lax.scan` over a
    two-matmul body is the obvious fix at production shapes and has not been tried.
 
-6. **~~The adversarial `soc_scale` sweep.~~ WITHDRAWN as written** — `soc_scale`
+6. **~~The radial integrals, and the spectrum as a function of the potential.~~ DONE**
+   (§1k, patch 0015, `elkjax/radial.py`, `elkjax/radial_functions.py`,
+   `elkjax/phase1_potential.py`). The plan put this in Phase 2 on the grounds that it
+   needs the muffin-tin potential; it does, but a converged potential is an *input* that
+   can be exported and held fixed exactly as `STATE.OUT` already is. Everything is
+   machine-precision against Elk element-wise: `oalo`/`ololo` 2.4e-16,
+   `haa`/`hloa`/`hlolo` 2.0e-16, `apwfr`/`apwdfr` 1.3e-14, `lofr` 7e-15.
+
+   **The finding to carry forward is the channel split.** Frozen-basis vs full AD on
+   bulk Si: a purely SPHERICAL perturbation gives frozen-basis derivative **exactly
+   zero** and 100% basis response; a purely NON-SPHERICAL one gives 4.2e-16 basis
+   response. Both are structural. `hmlrad`'s $\ell_2=0$ element is
+   $\langle u|\hat Hu\rangle$ — `genapwfr` has already applied $\hat H$, the radial
+   functions being that operator's own solutions — so the spherical potential never
+   appears in a radial integral and reaches $H$ only through the basis; and
+   `genapwfr`/`genlofr` integrate in the spherical part alone, so the non-spherical
+   potential cannot move the basis. **Consequence for Phase 2**: a chain that produced
+   a perfectly correct $\delta v_s$ and fed it to a frozen LAPW basis would return
+   ZERO for the spherical channel while passing the study's pointwise $v_{xc}$ check.
+
+   Two more things worth remembering. The export was internally inconsistent by one
+   mixing step until 0015 called `genapwlofr` (`gndstate` mixes the potential AFTER
+   building the radial functions) — found by splitting the comparison into
+   potential-free and potential-carrying integrals, which is a much better diagnostic
+   than a single aggregate. And the map from the potential to the radial integrals is
+   AFFINE, not linear: its constant part is that same $\ell_2=0$ block, and carrying it
+   into $\delta H$ flips the sign of the closed-form reference rather than merely
+   degrading it.
+
+7. **~~The adversarial `soc_scale` sweep.~~ WITHDRAWN as written** — `soc_scale`
    cannot move the first-variational spectrum at all. `socfr` enters only
    `eveqnsv`; it appears zero times in `hmlfv`/`olpfv`/`hmlaa`/`hmlalo`/`hmllolo`/
    `olpaa`/`olpalo`/`olplolo`/`eveqnfv`/`hmlrad`/`olprad` (grep-verified). The
@@ -355,11 +401,13 @@ Weinert Poisson, XC) and two Phase 1 items are reachable without it.
    cutting Si's $\Gamma_{25'}$ triplet instead, with no extra ground state.
    Reinstating a continuous sweep needs the second-variational step.
 
-7. **Not yet: the position derivative.** It is the study's stated Phase 1 gradient
-   criterion, but moving an atom moves the muffin-tin potential and hence the radial
-   integrals, which `hamiltonian.py` imports — so an honest $d\varepsilon/d\mathbf R$
-   needs Phase 2's `hmlrad`/`olprad`, not just AD plumbing. The $k$-derivative was
-   done first precisely because it does *not* have that dependency.
+8. **Not yet: the position derivative.** It is the study's stated Phase 1 gradient
+   criterion. Half of the old obstacle is gone — `hmlrad`/`olprad` are built now, not
+   imported (§1k) — but the other half stands: moving an atom moves the muffin-tin
+   *potential*, and where that comes from is Phase 2. What §1k does unlock is the
+   frozen-potential position derivative, i.e. the `apwalm` structure factor alone, and
+   the Phase 4 isolation that compares a force with and without `stop_gradient` on
+   `apwalm`.
 
 One caution carried from this session for whatever comes next: the AD-vs-`genpmatk`
 comparison agreed to 0.2-1.4%, which is a **physics** agreement, not a correctness
@@ -413,8 +461,13 @@ as the control that separates an AD bug from a real basis effect.
   whole degenerate group as `docs/design.md` §13 already does for Berry curvature. And
   tightening `epspot` 1e-6 → 1e-9 leaves that 3.53e-9 identical to twelve digits, so it
   is not SCF convergence — source still open.
-- **The POSITION derivative is still open**, and is harder than the $k$ one: moving an
-  atom moves the muffin-tin potential and hence the radial integrals, which are imported.
+- **The POSITION derivative is still open.** The radial integrals are no longer imported
+  (§1k), so half of the old obstacle is gone; what remains is that moving an atom moves
+  the *potential* inside its sphere, and where that comes from is Phase 2. What IS
+  available now is the frozen-potential position derivative (the `apwalm` structure
+  factor alone) and, with it, the isolation `docs/jax_port.md` §Phase 4 asks for — the
+  same force with and without `stop_gradient` on `apwalm` — because the other half of
+  that comparison now exists.
 - **0d's timing needs a GPU instance.** Do not fake it on CPU; the study's own 1.03x CPU
   number settles nothing. The memory half is already answered and points the other way.
   **This is now the only open Phase 0 item.**
@@ -472,6 +525,13 @@ phase1_smearing.py   item 1i: smeared occupations and the self-consistent Fermi
                kernel's near-degenerate branch is not vacuous
 phase1_secondorder.py  item 1j: second derivatives via sign_projector, where both
                eigh-based routes return NaN at a real multiplet
+radial.py      item 1k: hmlrad/olprad -- the muffin-tin radial integrals, from
+               the potential.  The vsmt packing is the load-bearing part
+radial_functions.py  item 1k: rschrodint/genapwfr/genlofr -- the radial
+               Schrodinger equation on Elk's own mesh, with Elk's own
+               predictor-corrector (transcribed, not improved)
+phase1_potential.py  item 1k: the derivative in the potential, split into a
+               frozen-basis branch with a closed-form oracle and a full one
 ```
 
 ```bash
@@ -479,12 +539,15 @@ PYTHONPATH=src taskset -c 0-3 python3 -m elkjax.phase0b   # and phase0a, phase0c
 ELKPY_RUN_SLOW_TESTS=1 PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
     tests/test_jax_projector.py tests/test_jax_fixedpoint.py \
     tests/test_jax_compile_cost.py tests/test_jax_lapw.py -q      # ~6 min
-# needs the elk binary too -- the Phase 1 pair, ~2 min with ground states cached
+# needs the elk binary too -- the Phase 1 suites, ~20 min with ground states cached
 PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
     tests/test_calculation_lapw_assembly.py \
     tests/test_calculation_lapw_projector.py \
     tests/test_calculation_lapw_smearing.py \
-    tests/test_calculation_lapw_secondorder.py -q
+    tests/test_calculation_lapw_secondorder.py \
+    tests/test_calculation_lapw_radial.py \
+    tests/test_calculation_lapw_radial_functions.py \
+    tests/test_calculation_lapw_potential.py -q
 ```
 
 **`taskset` is not decoration.** `.claude/settings.json`'s `OMP_NUM_THREADS=1` does not

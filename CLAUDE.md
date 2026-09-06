@@ -1182,7 +1182,7 @@ vendored tree:
 
 `docs/jax_port.md` (1,623 lines) is the design study, `docs/continue_here.md` §3 the cold-start
 summary, `docs/jax_port_phase0.md` the running log of what Phase 0 measured, and
-`docs/jax_port_phase1.md` the same for Phase 1, which is now under way (through §1j). Verdict, in one line: **a research project justified by
+`docs/jax_port_phase1.md` the same for Phase 1, which is now under way (through §1k). Verdict, in one line: **a research project justified by
 differentiability, not by the GPU** — SIRIUS already does FP-LAPW on CUDA/ROCm with Elk as its
 reference, and Elk's hot spots are already near-peak BLAS-3. Nothing about the port is a plan of
 record; **Phase 0 (§6 of the study) is designed to kill it, not to start it**, and that is what
@@ -1459,15 +1459,65 @@ and the predicted count 13 — 10 steps is not converged (error 1.1, not a proje
 all), 20 reaches $3\times10^{-14}$ against both the safe rule and Elk's own occupied
 subspace, in 42 ms at $n=177$. Use `grad(grad)`, never `jax.hessian`.
 
-**Still open in Phase 1**: the radial integrals are inputs, not outputs (building them
-needs `genapwfr`/`genlofr`/`hmlrad`/`olprad` and through `vsmt` the muffin-tin potential
-— Phase 2); the POSITION derivative $d\varepsilon_j/d\mathbf R$ on displaced h-BN, which
-is harder than the $k$ one because moving an atom moves the radial integrals; smeared
-occupations **at second order**, which `sign_projector` does not cover (it is hard-window
-only; that needs a Chebyshev expansion of the Fermi function, and §1i removed the
-tolerance from the smeared first derivative, not the `eigh` from its JVP); and the
-unrolled Newton-Schulz tape, where `lax.scan` over a two-matmul body is the obvious fix at
-production shapes and has not been tried.
+**The radial integrals are no longer inputs (§1k), and the chain closes without any
+Phase 2 ingredient.** The plan put this in Phase 2 because it needs the muffin-tin
+potential — it does, but a converged potential is an *input* that can be exported and
+held fixed exactly as `STATE.OUT` already is. Patch **0015** exports `vsmt` in Elk's own
+packing, the radial mesh `rlmt` with its `wr2mt` quadrature weights, the linearisation
+energies, and `apwfr`/`apwdfr`/`lofr` in full; `src/elkjax/radial.py` transcribes
+`hmlrad`/`olprad` and `src/elkjax/radial_functions.py` transcribes
+`rschrodint`/`genapwfr`/`genlofr`, so **vsmt → apwfr/lofr → radial integrals → H, O →
+evalfv** is closed and differentiable. Element-wise against Elk on the three fixtures:
+`oalo`/`ololo` 2.4e-16, `haa`/`hloa`/`hlolo` 2.0e-16, `apwfr`/`apwdfr` 1.3e-14, `lofr`
+7e-15. Elk's predictor-corrector is transcribed rather than replaced — a Runge-Kutta step
+would converge to the same continuum solution and disagree at the mesh's own truncation
+error, four decades above what is checked; its first three points are unrolled (their
+stencil windows overlap the $r\to0$ boundary values, and the current iterate sits INSIDE
+the four-point window it is integrated over) and `lax.scan` starts at the fourth.
+
+**The finding, and it is structural: the two channels of the potential are exactly
+complementary.** Frozen-basis vs full AD on bulk Si over the occupied window — a purely
+SPHERICAL perturbation gives a frozen-basis derivative of **exactly zero** and 100% basis
+response; a purely NON-SPHERICAL one gives 4.2e-16 basis response; a random direction
+mixes them at 79%. `hmlrad`'s $\ell_2=0$ element is $\langle u|\hat Hu\rangle$ and
+`genapwfr` has already applied $\hat H$ — the radial functions ARE that operator's
+solutions, which is the LAPW construction itself — so the spherical potential never
+appears in a radial integral and reaches $H$ only by moving the basis; and
+`genapwfr`/`genlofr` integrate in the spherical part alone, so the non-spherical
+potential cannot move the basis. **A Hellmann-Feynman-shaped treatment of the muffin-tin
+potential does not lose a small correction in the spherical channel — it loses the whole
+term**, which is a warning for Phase 2: a chain producing a perfectly correct
+$\delta v_s$ and feeding it to a frozen LAPW basis would return zero there while passing
+the study's pointwise $v_{xc}$ check. The frozen branch is pinned by a closed form, not
+by finite differences (at fixed basis the overlap does not respond, so first-order
+perturbation theory collapses to $\sum_n c_n^\dagger\delta Hc_n$ with Elk's own
+`evecfv`): 1.2e-15. Getting that reference right needs one non-obvious fact — **the map
+from the potential to the radial integrals is AFFINE, not linear**, its constant part
+being that same $\ell_2=0$ block, and carrying it into $\delta H$ flips the sign
+(-2.27e-1 against a true +2.63e-2) rather than merely degrading it. AD vs central FD of
+the same function: 3.9e-10 at $h=10^{-4}$, degrading as $h$ shrinks — the $1/h$ roundoff
+signature, not a wrong gradient.
+
+**Patch 0015 also had to fix an inconsistency in the export itself.** `gndstate` calls
+`genapwlofr` at the top of an SCF iteration and `potks`/`mixerifc` at the bottom, so on
+exit the radial functions and integrals belong to the PREVIOUS iteration's potential;
+0015 calls `genapwlofr` before exporting. Found by splitting the comparison into
+potential-free and potential-carrying integrals (2.6e-16 vs 3e-10) — an aggregate number
+would have read as an indexing bug. Knock-on: that regeneration moves Elk's own matrices
+by ~3e-10 and retuned one over-fitted constant in the smearing suite by 13x, while the
+Dirac splitting moved only in its eighth digit; measured with the call off and on rather
+than inferred, and the test now asserts the mechanism rather than a fixed factor.
+
+**Still open in Phase 1**: the POSITION derivative $d\varepsilon_j/d\mathbf R$ on
+displaced h-BN — half the old obstacle is gone (the radial integrals are built now), but
+moving an atom moves the muffin-tin *potential*, which is Phase 2; what §1k does unlock is
+the frozen-potential version, i.e. the `apwalm` structure factor alone, and with it the
+Phase 4 isolation that compares a force with and without `stop_gradient` on `apwalm`.
+Also open: smeared occupations **at second order**, which `sign_projector` does not cover
+(it is hard-window only; that needs a Chebyshev expansion of the Fermi function, and §1i
+removed the tolerance from the smeared first derivative, not the `eigh` from its JVP); and
+the unrolled Newton-Schulz tape, where `lax.scan` over a two-matmul body is the obvious fix
+at production shapes and has not been tried.
 
 **$\kappa(O)$ for a real LAPW overlap is measured, and the cheap estimate is
 useless.** Patch 0013 (§33) supplies real $H$ and $O$; `python3 -m elkjax.phase0b_overlap`
@@ -1537,10 +1587,10 @@ $A=v^\dagger\,\delta H\,v$ were bitwise Hermitian, and JAX's `_eigh_jvp_rule` fo
 symmetrisation — so $\|A-A^\dagger\|/\delta\lambda\approx0.2$–$0.5$ survives, which is the
 size of the observed failure.
 
-`docs/continue_here.md` is current as of §1i: both workstreams are on `master`, `master`
-is pushed, and its §3 marks patches 0013/0014, the κ(S) measurement, the projector rule
-at a real multiplet, the `match` pole removal, the negative test, and the smeared
-occupations all done. The `ELKPY_F90_LIB` override it documents is still what builds Elk
+`docs/continue_here.md` is current as of §1k: both workstreams are on `master`, and its
+§3 marks patches 0013/0014/0015, the κ(S) measurement, the projector rule at a real
+multiplet, the `match` pole removal, the negative test, the smeared occupations, second
+derivatives, and the radial integrals/potential derivative all done. The `ELKPY_F90_LIB` override it documents is still what builds Elk
 here.
 
 
