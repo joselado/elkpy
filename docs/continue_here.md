@@ -1,71 +1,72 @@
 # Continue here
 
-Working state as of 2026-09-06, so this can be picked up cold. **Both workstreams are
-on `master` and `master` is pushed**: Workstream A landed via `elk-full-coverage`, and
-Workstream B's `jax-port` was fast-forwarded in earlier; `origin/master` is now current.
-The `elk-full-coverage` and `jax-port` branches still exist and point at older commits;
-deleting both is safe.
+Working state as of 2026-09-07, written to be picked up cold.
 
-**Phase 2 is under way** (`docs/jax_port_phase2.md`, §§2a-2c), and patch **0016** adds
-the `GROUNDSTATE` query it is built on — the converged density and potentials on Elk's
-own grids, taking no k-point. Three results to carry forward. **§2b is the port's first
-real demonstration of its own premise**: only PBE's ENERGY densities are transcribed
-(exact against Elk's `exir`/`ecir` at 4e-16, which unlike `vxcir` are not trimmed), and
-`jax.grad` supplies the functional derivative Elk gets from Perdew's hand-derived
-expression — which needs $\nabla^2\rho$ and $(\nabla\rho)\cdot(\nabla|\nabla\rho|)$
-as extra inputs that nothing here computes. It agrees to 2.4e-5 median, and the reason it
-is not exact matters for Phase 3: **Elk discretises the exact continuum functional
-derivative; AD returns the exact derivative of the discretised energy.** **§2a's** LDA
-comparison against Elk's own `vxcir` is exact (4.4e-16) but only once `potks`'s
-`trimrfg` low-pass is reproduced — without it, 2.5e-5, which looks like a bad
-transcription and is not one. And **§2c**'s cell integral gives the electron count to
-1.1e-14 against the study's 1e-8 criterion, with the trap that `rhomt` includes the core
-density.
+**Status in one paragraph.** Both workstreams are on `master` and `master` is pushed.
+*Workstream A* — the full-coverage Elk wrapper — is complete and untouched since the
+session that landed it; its open items are §2's. *Workstream B* — the JAX port — has
+Phase 0 closed (it did not kill the project; the only open item is 0d's timing, which
+needs a GPU), Phase 1 closed except for three named items, and Phase 2 under way through
+item 2d. The port's own premise is now demonstrated rather than argued: §2b transcribes
+only PBE's *energy* densities and lets `jax.grad` supply the functional derivative Elk
+gets from Perdew's hand-derived expression, and the two agree.
 
-§2a also transcribes the LDA
-exchange-correlation functional (`xc_pwca.f90`, `xctype=3`, Elk's default) into
-`src/elkjax/xc.py`. The study's own criterion — `jax.grad` of $\varepsilon_{xc}$
-against Elk's hand-coded $v_{xc}$ — is met at machine precision rather than the stated
-$10^{-10}$, but that is an INTERNAL check, so the functional is also pinned against
-Dirac exchange (1e-15), the exact exchange spin scaling (1e-14, the only check that
-exercises the $\zeta$ machinery), the Gell-Mann–Brueckner high-density limit of the
-correlation, and Elk's own $v_{xc}$ along a line through bulk Si (3e-5 median, limited
-by a commutation rather than by the transcription). And the study's named `NaN` hazard
-is now an assertion: Elk's `rho < 1e-20` guard written as one `jnp.where` gives the
-correct value and a `NaN` gradient, at exactly zero density — which is what a
-zero-initialised or padded array carries.
+**Where to start.** §3's "Start here next session" is the ranked list, and the three
+Phase 2 items below it are ordered by cost. In short:
 
-**§§1k-1l are the Phase 1 work that preceded it, and §1k moved the Phase 1/Phase 2
-boundary.** Patch **0015**
-exports the muffin-tin Kohn-Sham potential, the radial mesh and its quadrature weights,
-the linearisation energies and the radial functions in full, so `hmlrad`/`olprad` (
-`src/elkjax/radial.py`) and `rschrodint`/`genapwfr`/`genlofr` (
-`src/elkjax/radial_functions.py`) can be transcribed and the chain
+1. **The Weinert Poisson solve** (item 2c, ~3 h) — the largest single gap, and the last
+   ingredient the total energy needs. `potcoul` → `genzvclmt` → `zpotclmt`, plus
+   `zpotcoul`. Patch 0016 already exports `rhomt`/`rhoir`/`vclmt`/`vclir` as the
+   reference. Read §2's traps first: the solve is done in *complex* harmonics, `vclmt`
+   includes the nuclear $-Z/r$, and `zpotclmt` alone is not checkable against `vclmt`.
+2. **`symrfmt`** (~1 h) — needed the moment a symmetric cell's potential must match
+   Elk's, which §2d measured at 1.2e-4 relative. Needs `symlatc`/`lsplsymc`/`ieqatom`/
+   `isymlat` exported (one more patch) and `rotrfmt` transcribed. Phase 2 can proceed
+   without it by running `symtype=0`.
+3. **`rhomag`** (item 2b) — the density from the eigenvectors, which closes the SCF
+   loop. Not started.
+4. **The three Phase 1 leftovers**: the position derivative $d\varepsilon/d\mathbf R$
+   (needs moving radial integrals); smeared occupations at *second* order (needs a
+   Chebyshev expansion of the Fermi function — `sign_projector` is hard-window only);
+   and `lax.scan` over the Newton-Schulz tape, which is self-contained and needs no Elk
+   run.
 
-    vsmt -> apwfr/lofr -> radial integrals -> H, O -> evalfv
+**Five rules this port has paid for, in the order they will bite again.** Each is a
+measurement in `docs/jax_port_phase{0,1,2}.md`, not a maxim.
 
-closed **without any Phase 2 ingredient** — every stage machine-precision against Elk.
-Differentiating it found that the two channels of the potential are **exactly
-complementary**: the spherical part enters ONLY through the basis (frozen-basis
-derivative exactly zero) and the non-spherical part ONLY through the integrals (basis
-response 4e-16). See §3's item 6 and `docs/jax_port_phase1.md` §1k.
+* **A green gradient test does not validate a transcription.** AD and finite differences
+  differentiate the *same* function, truncated the same way, so they agree on a wrong
+  one. Dropping `genylmv`'s $4\pi(-i)^l$ prefactor still passes the exact `dmatch`
+  identity to 7e-16. Every derivative check needs a forward check beside it, and the
+  strongest available without Elk is the quantity's own defining equation. Four
+  instances so far.
+* **Always compare forward mode against reverse mode.** For a scalar-in, scalar-out
+  function they are the same number, so disagreement is proof on its own and costs
+  nothing. A single real diagonal direction in reverse mode made the *naive* projector
+  rule look correct; the same direction in forward mode is wrong at 1.3e-2.
+* **Elk discretises the exact continuum derivative; AD returns the exact derivative of
+  the discretised energy.** These differ, and the difference is not an error in either.
+  §2b's 2.4e-5 PBE residual tracks the reduced gradient $s$, exactly as that reading
+  predicts. This will recur through all of Phase 3.
+* **When a field-valued quantity disagrees, decompose it in the basis the code stores it
+  in before ruling anything out.** §2d spent six decisive-looking eliminations on a
+  scalar residual; the $l$ decomposition identified the cause in one run, by showing Elk
+  holding exact zeros in three channels where the transcription held $10^{-3}$.
+* **An export is only as consistent as the point in the SCF loop it is taken at.** The
+  radial functions belong to the *previous* iteration's potential unless `genapwlofr` is
+  called first (patch 0015), worth 3e-10 in `haa`; `vxcmt` is symmetrised and
+  `exmt`/`ecmt` are not (§2d), worth 1.2e-4. Both were found by splitting an aggregate
+  comparison, never by tightening it.
 
-**§§1i-1j are the work before it**, and between them they closed both Phase 1
-items that needed no Phase 2 ingredient *at the time*. §1i: smeared occupations and the
-self-consistent Fermi level on Elk's own matrices — the first configuration in which the
-divided-difference kernel's near-degenerate branch is not vacuous — after which the
-tolerance was **removed** rather than tuned, by putting the cancellation-free closed form
-inside the JVP. §1j: second derivatives, where `sign_projector` returns a finite,
-FD-confirmed number at a real symmetry multiplet and both `eigh`-based routes return
-`NaN`. See §3's items 4 and 5, and `docs/jax_port_phase1.md`.
+**Traps that cost real time, kept as a list.** `vsig` is allocated to `ngvc`, not
+`ngvec` — writing `ngvec` of them reads past the end of the array. `rhomt` includes the
+core density. `potks` trims `vxcir` and nothing else. `tshift=False` is mandatory
+wherever a rotation centre or a plotting plane matters (§28, §31). `lax.map`/`lax.scan`
+over the k-axis is the memory default; `vmap(eigh)` materialises every k-point at once.
+`jax_enable_x64` must be set before the first array exists. Wrap every JAX invocation in
+`taskset` — the thread pins in `.claude/settings.json` do not govern XLA.
 
-**Phase 0 is closed and Phase 1 has started.** `hmlfv`/`olpfv` are transcribed and
-checked against Elk element-wise (`docs/jax_port_phase1.md`, patch 0014), the assembly
-is differentiable in $k$, and the eigensolve is now wired to the safe-$K$ projector rule
-and measured at a real multiplet (§1f). The only open Phase 0 item is still 0d's timing,
-which needs a GPU. Doing that turned up a removable pole in `match` that made the
-$k$-tangent `NaN` at $\Gamma$ and across every $k_z=0$ plane; **that is fixed too**
-(§1g), so the projector derivative now works where the multiplets are.
+Recent commits, newest first:
 
 ```
 e2a70f6  Differentiate the spectrum in the potential          elkjax/phase1_potential.py
@@ -102,13 +103,6 @@ adcb2d0  Settle Phase 0e: compile flat in shapes, ~n^1.85 in ops     src/elkjax/
 15d910d  Settle Phase 0b: the safe-K projector rule is needed        src/elkjax/projector.py
 39de3e4  Add a continuation document                                 docs/continue_here.md
 ```
-
-**Phase 0 of the JAX port is closed and it did not kill the project** — §3 has the
-results, `docs/jax_port_phase0.md` the numbers. Since the last session, patch **0013**
-has closed the two items §3 listed as outstanding: 0c's forward coefficients now agree
-with Elk's own `apwalm` element-wise, and $\kappa(O)$ has been measured on real LAPW
-overlaps. **The only Phase 0 item still open is 0d's timing, which needs a GPU.**
-Workstream A is untouched since the previous session; its open items are still §2's.
 
 ---
 
@@ -301,8 +295,9 @@ None of these is in the study, and each cost a wrong answer to find.
 ### Start here next session
 
 The open items below are a mix of done and outstanding; this is the ranked entry
-point. **Phase 2 is not the next step** — it is a large piece of work (density,
-Weinert Poisson, XC) and two Phase 1 items are reachable without it.
+point. Items 1-8 are Phase 1 and all are closed or deliberately withdrawn; 9-11 are
+Phase 2, which is now under way (`docs/jax_port_phase2.md`). The Phase 1 leftovers
+named in item 12 need no Elk run and are the cheapest work available.
 
 1. **~~Wire the Cholesky-reduced eigensolve to the safe-$K$ projector rule.~~ DONE**
    (`docs/jax_port_phase1.md` §1f). The rule is needed and it works on Elk's own
@@ -481,6 +476,70 @@ Weinert Poisson, XC) and two Phase 1 items are reachable without it.
    **Still missing for a real force**: the muffin-tin and interstitial Kohn-Sham
    potentials' own response to the displacement, which is Phase 2 and nothing else. What IS unlocked is the Phase 4 isolation that compares a quantity
    with and without `stop_gradient` on `apwalm`, since the moving half now exists.
+
+9. **~~The exchange-correlation functional, and the cell integrals.~~ DONE**
+   (§§2a-2c, patch 0016, `elkjax/xc.py`, `elkjax/grid.py`, `elkjax/integrate.py`).
+   A `GROUNDSTATE` query exports the converged density and potentials on Elk's own
+   grids, taking no k-point. LDA (`xc_pwca`) is pinned four ways — Dirac exchange
+   1e-15, the exact exchange spin scaling 1e-14 (the only check that exercises the
+   $\zeta$ machinery), the Gell-Mann–Brueckner high-density limit, and `jax.grad`
+   against Elk's hand-coded $v_{xc}$ at machine precision — and reproduces Elk's own
+   `vxcir` to **4.4e-16**, but only once `potks`'s `trimrfg` low-pass is reproduced;
+   without it 2.5e-5, which looks like a bad transcription and is not one. The cell
+   integral gives the electron count to 1.1e-14 against the study's 1e-8 criterion,
+   and $E_x$/$E_c$ match `INFO.OUT` to 1e-9.
+
+   **§2b is the port's first demonstration of its own premise.** Only PBE's ENERGY
+   densities are transcribed; `jax.grad` supplies the functional derivative Elk gets
+   from Perdew's hand-derived expression, which needs $\nabla^2\rho$ and
+   $(\nabla\rho)\cdot(\nabla|\nabla\rho|)$ as extra inputs that nothing here computes.
+   They agree to 2.4e-5 median, and **the residual is not an error in either**: it
+   tracks the reduced gradient $s$ (5.8e-6 in the lowest quarter, 1.25e-5 in the
+   highest), because Elk discretises the exact continuum functional derivative while
+   AD returns the exact derivative of the discretised energy. Carry that reading into
+   Phase 3.
+
+10. **~~The muffin-tin angular transform.~~ DONE, and it found a real property of
+    Elk** (§2d). `rbsht`/`rfsht` are transcribed and are mutual inverses to 2.7e-12;
+    `exmt`/`ecmt` from the angular-grid density are exact (1.8e-15, 2.8e-16). `vxcmt`
+    misses by 5.3e-3 on a scale of 45 **because `potxc.f90:55-58` calls `symrfmt` on
+    the potential and the field and not on the energy densities** — so in a muffin tin
+    Elk's $v_{xc}=\hat S\,v_{xc}[\rho]$ while $\varepsilon_{xc}=\varepsilon_{xc}[\rho]$.
+    On a `symtype=0` ground state the same code gives 1.4e-14.
+
+    Two consequences. Reproducing Elk's SCF on a symmetric cell needs `symlatc`,
+    `lsplsymc`, `ieqatom`, `isymlat` exported and `rotrfmt` transcribed — one more
+    patch, not a research problem — or a `symtype=0` run. And inside a symmetric
+    muffin tin Elk's own $v_{xc}$ is **not** the functional derivative of its own
+    $E_{xc}$, so a force or total-energy check better than $\sim10^{-4}$ relative
+    there would be evidence of a mistake rather than of success.
+
+    The method note is worth more than the result: six individually decisive
+    eliminations on a scalar residual all missed the cause, and the $l$ decomposition
+    found it in one run. Decompose a field-valued disagreement in the basis the code
+    stores it in *first*.
+
+11. **The Weinert Poisson solve. NOT STARTED**, and the largest single gap — the last
+    ingredient the total energy needs. `potcoul.f90` → `genzvclmt` → `zpotclmt`, plus
+    `zpotcoul` for the interstitial. All four have been read; none transcribed. The
+    traps, in the order they arrive: the solve is done in **complex** harmonics
+    (`rtozfmt`/`ztorfmt`); **`vclmt` includes the nuclear $-Z/r$** from `potnucl`, so
+    it is not the electronic Hartree potential; the pseudocharge construction needs
+    `npsd`/`lnpsd`, `jlgrmt`, `ylmg`, `sfacg` and `gclg`; the $G=0$ component is a
+    *convention*, not a value, so check what `zpotcoul` sets it to rather than
+    deriving it; and `zpotclmt` alone is **not** checkable against `vclmt`, since the
+    intra-sphere solve is only one term. Check `vclmt` and `vclir` separately, and the
+    muffin-tin one split into $l=0$ and $l>0$. If it runs long, the honest stopping
+    point is "multipoles and pseudocharge checked, $G$-space solve open" — say which,
+    rather than stretching a tolerance.
+
+12. **The three Phase 1 leftovers**, none of which needs an Elk run. `lax.scan` over
+    the Newton-Schulz tape (§1j; the iteration is unrolled and its op count is what
+    Phase 0e showed compile time is superlinear in). Smeared occupations at **second**
+    order, which needs a Chebyshev expansion of the Fermi function — `sign_projector`
+    is hard-window only, and §1i removed the tolerance from the smeared *first*
+    derivative, not the `eigh` from its JVP. And §8(b)'s k-point weights, which cancel
+    at a single $k$ and stay untested until a zone-summed Fermi level exists.
 
 One caution carried from this session for whatever comes next: the AD-vs-`genpmatk`
 comparison agreed to 0.2-1.4%, which is a **physics** agreement, not a correctness
