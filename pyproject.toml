@@ -13,6 +13,7 @@ dependencies = [
 
 [project.optional-dependencies]
 ase = ["ase"]
+jax = ["jax"]
 test = ["pytest"]
 
 [tool.setuptools.packages.find]

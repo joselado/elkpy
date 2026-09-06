@@ -1,7 +1,7 @@
 # Continue here
 
-Working state as of 2026-09-06, so this can be picked up cold. Everything below
-is on branch `elk-full-coverage`; `master` is untouched at `51bab45`.
+Working state as of 2026-09-06, so this can be picked up cold. Workstream A landed
+on `elk-full-coverage` and is now on `master`; Workstream B continues on `jax-port`.
 
 ```
 b15c0b4  Add the Elk-to-JAX port design study            docs/jax_port.md
@@ -10,7 +10,8 @@ f04eabd  Record the code-review findings as a work list  docs/review_findings.md
 51bab45  (master) Add vertical tunnelling transport, patch 0012
 ```
 
-Nothing is merged to `master`. To land it: `git checkout master && git merge --ff-only elk-full-coverage`.
+`elk-full-coverage` has since been merged; `master` is at `39de3e4`. Workstream B
+continues on branch `jax-port` (this section 3, plus `docs/jax_port_phase0.md`).
 
 ---
 
@@ -144,78 +145,62 @@ prior-art agent and **has not been independently verified**; check it before
 relying on the verdict, since the verdict rests on it.
 
 Phase 0 (§6) is designed to kill the project rather than start it. Its two real
-questions: does reverse-mode implicit differentiation through the SCF fixed
+questions were: does reverse-mode implicit differentiation through the SCF fixed
 point work at all (DFTK shipped forward-only, and `lax.custom_root` with an
 iterative `tangent_solve` measurably raises `NotImplementedError`), and does the
-safe-K projector rule survive a degeneracy. Also worth doing early and cheaply:
-benchmark `vmap(eigh)` vs `lax.map` on a **GPU** — measured only 1.03x on CPU
-here, and the GPU number is unknown.
+safe-K projector rule survive a degeneracy. **The second is answered — it does,
+and it is needed** (`docs/jax_port_phase0.md`); the first is untouched.
 
-### An unresolved measurement disagreement — settle this before trusting §8b
+### The measurement disagreement — SETTLED (Phase 0b)
 
-§8b claims the occupied-subspace projector "still returns garbage under JAX's
-default VJP" whenever the window is gapped. An independent check disagrees for
-the **hard integer window with the multiplet fully enclosed**. Reproduction
-(JAX 0.7.1, CPU, x64 enabled):
+§8b claimed the occupied-subspace projector "still returns garbage under JAX's default
+VJP" whenever the window is gapped; the check recorded here disagreed for the hard
+integer window with the multiplet fully enclosed. **§8b was right.** Full numbers and
+reproduction in `docs/jax_port_phase0.md`; code in `src/elkjax/`, assertions in
+`tests/test_jax_projector.py`.
 
-```python
-import jax, jax.numpy as jnp, numpy as np
-jax.config.update("jax_enable_x64", True)
-n = 6
-evals = jnp.array([-2.0, 1.0, 1.0, 3.0, 4.0, 5.0])   # degenerate pair at 1,2
-M = jnp.diag(jnp.arange(n).astype(float)).astype(jnp.complex128)
+What settled it was the reference this document asked for — the closed-form
+Daleckii-Krein derivative rather than finite differences. Over 3 assemblies x 21
+Hermitian directions on the disputed spectrum, worst relative error: naive AD
+`1.1e+1` forward and `3.4e+0` reverse, safe-K rule `2.9e-14`, central FD `3.7e-8`.
 
-def assemble(seed):                    # the REALISTIC route: U diag(e) U^H
-    rng = np.random.default_rng(seed)
-    A = rng.normal(size=(n, n)) + 1j*rng.normal(size=(n, n))
-    U, _ = jnp.linalg.qr(jnp.array(A))
-    return (U * evals) @ U.conj().T
+Two things the earlier check got backwards, both worth remembering:
 
-def hard(H):                           # integer occupations, multiplet enclosed
-    w, v = jnp.linalg.eigh(H)
-    P = v[:, :3] @ v[:, :3].conj().T
-    return jnp.real(jnp.trace(P @ M))
+- **Finite differences were reliable here**, not noisy. `Tr[P M]` is a smooth function
+  of `H` whenever the *window boundary* is gapped, however degenerate the interior, so
+  central FD is stable across three step sizes. The third assembly's `1.3e-2` was
+  therefore AD error, not FD noise.
+- **The direction was the whole story.** `e00` — one real diagonal entry — is nearly
+  benign in reverse mode (`<1e-7`) and already wrong at `1.3e-2` in *forward* mode on
+  the same matrix. Testing one direction in one mode is what produced the false pass.
+  For a scalar-in scalar-out function, forward and reverse disagreeing is by itself the
+  proof; that check costs nothing and should be in every AD test from here on.
 
-def smeared(H, mu=2.0, w_s=0.3):       # Fermi-Dirac, the metallic DFT case
-    w, v = jnp.linalg.eigh(H)
-    f = jax.nn.sigmoid(-(w - mu) / w_s)
-    return jnp.real(jnp.trace(((v * f) @ v.conj().T) @ M))
+A finding neither document had: **which failure mode appears is the eigensolver's
+choice.** LAPACK and XLA split the same engineered pair differently, and at n=1000 XLA
+returns it bitwise equal where LAPACK gives 1.5e-14 — so the identical code gives finite
+garbage at n=400 and `NaN` at n=1000. §10 item 1's "split by cause" is refined
+accordingly.
 
-def fd(fn, H, h=1e-6):
-    D = jnp.zeros((n, n), dtype=jnp.complex128).at[0, 0].set(1.0)
-    return float((fn(H + h*D) - fn(H - h*D)) / (2*h))
+### Still open in Phase 0
 
-for name, fn in [("hard", hard), ("smeared", smeared)]:
-    for s in range(3):
-        H = assemble(s)
-        ad, ref = float(jnp.real(jax.grad(fn)(H)[0, 0])), fd(fn, H)
-        print(name, s, ad, ref, abs(ad-ref)/abs(ref))
-```
-
-Measured: hard window agrees with central FD to `1.5e-9` and `7.4e-10` on two of
-three assemblies (the third shows `1.3e-2`, which is FD noise near a degeneracy,
-not AD error). Smeared occupations show `2.1e-2` to `5.0e-2`, consistent with
-§8b's own `2.08e-2`.
-
-Reading: the divergent terms for a fully-enclosed multiplet are exact negatives
-and cancel bitwise, so the hard-window case is safe; with smearing, `f_i - f_j`
-is a nonzero rounding-level number and the `1/(λ_i-λ_j)` amplifies it. If that
-holds, the insulator mitigation is the one this project already uses for Berry
-curvature (CLAUDE.md §13): **window the whole degenerate group together**.
-
-**A 6x6 toy cannot settle it, because finite differences are themselves
-unreliable near a degeneracy** — visible in the data above. Settling it needs a
-reference that is not FD: an analytically differentiable model (a 2x2 or 4x4
-k·p Hamiltonian with a closed-form projector derivative), or complex-step
-differentiation, at realistic matrix size with a Cholesky-reduced overlap.
-
-The headline hazard, by contrast, **is** confirmed independently: a diagonal test
-matrix gives `NaN`, while the same spectrum assembled from `U diag(e) U^H` splits
-by ~1e-15 and returns a **finite** gradient of order 1e14 whose sign flips
-between assemblies (+7.9e12, -1.1e12, -1.6e13 measured). Unit tests use the
-first shape; real Hamiltonians are the second.
-
----
+- **0a / 0a′** — reverse-mode implicit differentiation through the SCF fixed point, and
+  then `jax.hessian` through it. Not started. Note the rule in `elkjax.projector` is
+  **first-order only**: its JVP body calls `jnp.linalg.eigh`, so a second derivative
+  falls back on JAX's default eigenvector rule and the hazard returns. Use the analytic
+  reference for 0a too — its stated kill criterion is "agreement with central FD", and
+  §8(b)'s own measurements show FD cannot serve near the engineered degeneracy.
+- **0c** — `jax.jvp(match)` vs `dmatch.f90`. Not started; needs no SCF.
+- **0d** — `vmap(eigh)` vs `lax.map` at n=1000: **requires a GPU this machine does not
+  have**. Deferred rather than faked on CPU.
+- **0e** — compile time and peak memory at production shapes. Do it ahead-of-time
+  (`elkjax.memory.compiled_cost`), never by executing: H+S over 100 k-points at n=3000
+  is 26.8 GiB and this box has ~28 GiB. See CLAUDE.md's "JAX port" section for the full
+  memory/CPU rules, including that `OMP_NUM_THREADS` does **not** govern XLA (measured:
+  40 threads under `OMP_NUM_THREADS=1`; use `taskset`).
+- **κ(S) for a real LAPW overlap has still never been measured**, and §8b's cheap
+  Cholesky-diagonal estimate underestimates a synthetic κ=1e6 by 140x — the dangerous
+  direction, since the tolerance is meant to be an upper bound.
 
 ## 4. Decisions waiting on you
 

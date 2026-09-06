@@ -1173,6 +1173,100 @@ vendored tree:
   folded into Elk's existing modules, so the patch series stays small and easy to re-evaluate against a
   new upstream version.
 
+## JAX port (Workstream B): status, and the memory discipline it runs under
+
+`docs/jax_port.md` (1,623 lines) is the design study, `docs/continue_here.md` §3 the cold-start
+summary, and `docs/jax_port_phase0.md` the running log of what Phase 0 has actually measured. Verdict, in one line: **a research project justified by
+differentiability, not by the GPU** — SIRIUS already does FP-LAPW on CUDA/ROCm with Elk as its
+reference, and Elk's hot spots are already near-peak BLAS-3. Nothing about the port is a plan of
+record; **Phase 0 (§6 of the study) is designed to kill it, not to start it**, and that is what
+is being worked on.
+
+Code lives in `src/elkjax/` — a **sibling package** to `elkpy`, deliberately not `elkpy.jax`.
+Two reasons, both load-bearing: Phase 0 is explicitly "no Elk code", and elkpy's fast unit tests
+must not acquire a `jax` dependency at all (measured: 0.2 s of import time, plus a 40-thread XLA
+pool on the first array operation — see below). Install with
+`python3 -m pip install -e .[jax]`. Tests are `tests/test_jax_*.py` and self-skip when `jax` is
+unimportable, the same pattern `tests/test_structure.py` uses for ASE.
+
+### Memory and CPU discipline — read before running any JAX in this repository
+
+This box: 12 cores, 39 GB RAM (~28 GB available, ~4 GB of swap already in use), **no CUDA
+jaxlib** (`jax.devices()` is `[CpuDevice(id=0)]`). The rules below exist because the study's own
+Phase 0e asks for production shapes that this machine cannot hold.
+
+- **Never allocate production shapes here.** At the study's own production figures
+  ($n_{\rm mat}\approx3000$, $n_{\bf k}\approx100$, complex128) a single k-point's $H$ or $S$ is
+  $3000^2\times16$ B $=144$ MB, so $H+S$ over the k-set is **26.8 GiB before the
+  eigenvectors** (another 13.4 GiB) and before any eigensolver workspace, against ~28 GiB
+  available — it does not fit, and swapping a 39 GB box is how a workstation is lost for an hour. Execute at $n\le1500$, $n_{\bf k}\le4$ and measure the scaling exponent instead.
+- **For Phase 0e, do not execute at all — lower and compile.**
+  `jax.jit(step).lower(*jax.ShapeDtypeStruct(...)).compile()` gives both numbers the item asks
+  for without allocating a byte of the shapes: wall time for compile, and
+  `.memory_analysis()` (verified present in JAX 0.7.1) for
+  `temp_size_in_bytes`/`argument_size_in_bytes`/`output_size_in_bytes`. Extrapolation from an
+  executed small case is a fallback, not the method.
+- **Cap every JAX script and test** with `elkjax.memory.limit_address_space()` (a
+  `resource.setrlimit(RLIMIT_AS, ...)` wrapper, default 16 GB) so a runaway allocation raises
+  `MemoryError`/`XlaRuntimeError` immediately instead of driving the machine into swap. Verified
+  to leave a CPU `eigh` at $n=800$ untouched while turning a 25 TB allocation into a prompt
+  error. `tests/test_jax_projector.py` calls it at module level; do the same in anything new.
+- **`lax.map`/`lax.scan` over the k-axis is the memory default; `vmap(eigh)` is opt-in.** `vmap`
+  materialises every k-point's matrix simultaneously — exactly the 26.8 GiB above. Phase 0d is the
+  design fork that would justify `vmap`, and it **requires a GPU this machine does not have**;
+  it is deferred, not answered. A CPU ratio (1.03x, measured in the study) does not settle it.
+- **`.claude/settings.json`'s `OMP_NUM_THREADS`/`OPENBLAS_NUM_THREADS` pins do NOT govern XLA.**
+  Measured here: a single 1200x1200 `jnp` matmul under `OMP_NUM_THREADS=1` spawns **40 threads**;
+  `XLA_FLAGS=--xla_cpu_multi_thread_eigen=false` changes nothing (still 40). What works is
+  affinity: `taskset -c 0-3 python3 ...` gives 16 threads confined to 4 cores. **Wrap every JAX
+  invocation in `taskset` while the four-core budget stands** — `launcher.py`'s flock semaphore
+  only covers `elk` subprocesses and sees none of this.
+- **`jax_enable_x64` must be set before the first array exists**, and doubles every figure above.
+  `import elkjax` does it (`src/elkjax/__init__.py` calls `jax.config.update`), so import that
+  first and never set it mid-module; `JAX_ENABLE_X64=1` in the environment works too. All of
+  this work is float64/complex128: an all-electron spectrum spans ~2500 Ha, so float32 is not an
+  option (study §1).
+
+### Phase 0 — prove or kill (study §6)
+
+| Item | What it settles | Status |
+|---|---|---|
+| 0b | safe-$K$ projector rule: does the $(f_i-f_j)/(\lambda_i-\lambda_j)$ `custom_jvp` fix the reassembly jitter, and what happens in the padding block | **done at synthetic $S$ — `docs/jax_port_phase0.md`**; item 0b(ii)'s *real* Cholesky-reduced LAPW overlap is Phase 1's first measurement |
+| 0a | reverse-mode implicit diff (`custom_vjp` + GMRES) through an SCF fixed point whose matvec passes through `eigh` at a multiplet | not started |
+| 0a′ | the same at second order — decides the full port over §9.2's hybrid | not started |
+| 0c | `jax.jvp(match)` against `dmatch.f90`'s analytic $d(\texttt{apwalm})/dr$ | not started |
+| 0d | `vmap(eigh)` vs `lax.map` at $n=1000$ on a real GPU | **deferred: no GPU** |
+| 0e | `jit` compile time and peak memory for one traced SCF step at production shapes | AOT-only, per the rules above |
+
+**Use an analytic reference, not finite differences, wherever a degeneracy is in play.** The
+study's own §8(b) measures FD failing at a multiplet — central FD of the *sorted* spectrum
+returns the branch average, so it cannot detect a wrong individual-eigenvalue gradient at all,
+and near a degeneracy it is noise. For the occupied projector the closed form is available and
+costs nothing:
+$dP=\sum_{i\in W,\,j\notin W}\big(|i\rangle\langle i|\,dH\,|j\rangle\langle j| + \text{h.c.}\big)/(\lambda_i-\lambda_j)$,
+gauge-invariant, exact, and valid at any $n$ — that is the reference `docs/continue_here.md` §3
+says is missing, and it is what decides whether the custom rule is needed for a hard integer
+window at all. **Measured, and the answer is yes**: over 3 assemblies x 21 Hermitian directions
+on the disputed spectrum the naive route is wrong by $1.1\times10^{1}$ (forward) and
+$3.4\times10^{0}$ (reverse) relative, against $2.9\times10^{-14}$ with the rule, while central
+FD agrees with the closed form to $3.7\times10^{-8}$ — so FD was *reliable* here and the earlier
+check's one-in-three disagreement was AD error, not FD noise. It saw agreement because it probed
+a single real diagonal direction in reverse mode only; that same direction in forward mode is
+already wrong at $1.3\times10^{-2}$. **Always check forward against reverse** — for a
+scalar-in, scalar-out function they are the same number, so disagreement is proof on its own and
+costs nothing. Also measured: which failure mode appears is the *eigensolver's* choice, since
+LAPACK and XLA split the same engineered pair differently and XLA returns it bitwise equal at
+$n=1000$ (finite garbage at $n=400$, `NaN` at $n=1000$, same code). The mechanism, for the
+record: the two divergent terms are exact negatives and would cancel bitwise *if*
+$A=v^\dagger\,\delta H\,v$ were bitwise Hermitian, and JAX's `_eigh_jvp_rule` forms it with no
+symmetrisation — so $\|A-A^\dagger\|/\delta\lambda\approx0.2$–$0.5$ survives, which is the
+size of the observed failure.
+
+**Stale note in `docs/continue_here.md`**: it says nothing is merged and `master` is at
+`51bab45`. `master` is now at `39de3e4` — `elk-full-coverage` was merged. Everything else in
+that document still holds, including the `ELKPY_F90_LIB` override needed to build Elk here.
+
+
 ## Commands
 
 - Build Elk out-of-tree (copies `vendor/elk/` to `build/elk/`, applies `patches/*.patch` if any, drops
