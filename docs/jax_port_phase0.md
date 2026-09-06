@@ -432,9 +432,14 @@ each, `xc="PW"`:
 | h-BN | 7 | 1402 | (0.1,0.2,0.05) | 5.01e3 | 16.0 | 314x | 15.3 | 57.9 | 6.5e-11 |
 | h-BN | 7 | 1354 | $\Gamma$ | 4.99e3 | 16.0 | 312x | 15.3 | 58.2 | 6.5e-11 |
 | h-BN | 7 | 1409 | (0.5,0.5,0.5) | 4.83e3 | 15.8 | 306x | 15.3 | 57.5 | 6.2e-11 |
+| h-BN | 8 | 2118 | (0.1,0.2,0.05) | 3.53e4 | 18.1 | 1951x | 17.7 | 81.1 | 6.3e-10 |
+| h-BN | 8 | 2112 | $\Gamma$ | 3.29e4 | 18.1 | 1821x | 17.5 | 80.4 | 5.9e-10 |
+| h-BN | 8 | 2061 | (0.5,0.5,0.5) | 3.40e4 | 17.9 | 1894x | 17.5 | 81.1 | 6.1e-10 |
 
 Every row also passes the export self-check — `eigh(H,O)` reproduces Elk's `evalfv` to
-$\le2\times10^{-14}$ — so none of this rests on a mis-parsed matrix. The h-BN rows are
+$\le8\times10^{-14}$, and to $\le2\times10^{-14}$ on every silicon row — so none of this
+rests on a mis-parsed matrix. The whole table takes about 50 minutes on this machine
+(reference BLAS, four cores), essentially all of it in the h-BN ground states. The h-BN rows are
 the only two-species case anywhere in this work, and they confirm for free that the
 export's per-species indexing (`idxis` into `rmt`, `nrmt`, `apword`, and `apword`'s own
 per-$\ell$ variation) is right; bulk Si cannot exercise it.
@@ -446,19 +451,29 @@ tolerance is $\approx1.6\times10^{-11}$ Ha for Si and $6.5\times10^{-11}$ Ha for
 about $10^{-9}$ eV. That is the threshold below which the safe-$K$ rule must refuse
 rather than return a number.
 
-**2. $\kappa(O)$ is set by the cutoff, not by the matrix size.** h-BN's $1402\times1402$
-overlap has the *same* condition number as Si's $161\times161$, to within 1%: nearly nine
-times the dimension, no change. What moves it is `rgkmax` — on Si, $5\times10^3\to
-2.6\times10^4\to2.1\times10^5$ for 7, 8, 9, roughly a factor of 7 per unit — because the
-ill-conditioning is the near-linear-dependence of the augmented basis near the cutoff,
-not an accumulation over rows. Two consequences: the $n\approx1000$ half of 0b(ii)'s
-criterion is the wrong axis to vary, and a production calculation at a converged basis
-will be an order of magnitude worse conditioned than these defaults.
+**2. $\kappa(O)$ is set by the cutoff, not by the matrix size**, and the two systems
+agree at both cutoffs where both were run:
+
+| rgkmax | Si, $n\approx170$–340 | h-BN, $n\approx1350$–2120 |
+|---|---|---|
+| 7 | 5.0e3 – 1.3e4 | 4.8e3 – 5.0e3 |
+| 8 | 2.6e4 – 4.1e4 | 3.3e4 – 3.5e4 |
+| 9 | 2.1e5 – 3.7e5 | — |
+
+A ninefold difference in dimension moves $\kappa$ by less than the spread across
+$k$-points within one system, while one unit of `rgkmax` moves it by a factor of about 7.
+That is what the mechanism predicts — the ill-conditioning is the near-linear-dependence
+of the augmented basis at the cutoff, not an accumulation over rows — but it had not been
+measured. Two consequences: the "$n\approx1000$" half of 0b(ii)'s criterion is the wrong
+axis to vary, and a production calculation at a converged basis will be an order of
+magnitude worse conditioned than these defaults, so the tolerance must be recomputed per
+run rather than hard-coded.
 
 **3. §8(b)'s cheap Cholesky-diagonal estimate must not be used.** It is worse than "a
 lower bound that is 140x low", which is how the study records it. It is *uninformative*:
-across a 74-fold range of $\kappa$ on silicon it moves from 8.05 to 9.25 — 15% — so the
-"low by" factor grows from 618x to 39,000x purely because the true value grew. The
+across a 74-fold range of $\kappa$ on silicon it moves from 8.05 to 9.25 — 15% — and on
+h-BN, where $\kappa$ grows sevenfold between the two cutoffs, it moves from 16.0 to 18.1.
+So the "low by" factor grows from 306x to 39,000x purely because the true value grew. The
 estimate is measuring something else (the spread of the diagonal pivots, which for these
 matrices is dominated by the basis normalisation) and carries essentially no signal
 about $\kappa$. Since it bounds from *below*, using it would set a tolerance orders of
@@ -466,8 +481,9 @@ magnitude too tight and the rule would never refuse.
 
 **4. Use $\lVert\tilde H\rVert$, not $\lVert H\rVert$.** §8(b) writes the tolerance with
 $\lVert H\rVert$, but the matrix whose eigenproblem is differentiated is the reduced
-$\tilde H=L^{-1}HL^{-\dagger}$, and it is consistently larger: 3.1x on Si, 3.8x on h-BN.
-The factor is not large but it is systematic and free to include.
+$\tilde H=L^{-1}HL^{-\dagger}$, and it is consistently larger: 3.1x on Si, 3.8x on h-BN,
+4.6x on h-BN at the higher cutoff. The factor is not large but it is systematic, it grows
+with the cutoff alongside $\kappa$ itself, and it is free to include.
 
 **5. The study's Phase 1 adversarial criterion, as written, never reaches its own
 threshold.** §6 proposes sweeping graphene's `soc_scale` 3000 → 300 → 30 → 3 and

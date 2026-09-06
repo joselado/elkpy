@@ -231,8 +231,10 @@ None of these is in the study, and each cost a wrong answer to find.
   `python3 -m elkjax.phase0b_overlap <workdir>`). κ(O) ≈ 5e3 at the standard
   `rgkmax=7`, giving a tolerance of ~1.6e-11 Ha on Si and 6.5e-11 Ha on h-BN. Three
   results that change how it should be used. It is set by the **cutoff, not the matrix
-  size** — h-BN's 1402x1402 overlap has the same κ as Si's 161x161, while raising
-  `rgkmax` 7→8→9 takes Si from 5e3 to 2.6e4 to 2.1e5. §8b's cheap Cholesky-diagonal
+  size** — at rgkmax=8, Si's 227x227 overlap and h-BN's 2118x2118 have the same κ to
+  within the spread across k-points, while raising `rgkmax` 7→8→9 takes Si from 5e3 to
+  2.6e4 to 2.1e5 and h-BN 7→8 from 5.0e3 to 3.5e4. So the tolerance must be recomputed
+  per run, and 0b(ii)'s "repeat at n~1000" varies the wrong axis. §8b's cheap Cholesky-diagonal
   estimate is not merely a 140x-low lower bound, it is **uninformative**: it moves 8.05
   → 9.25 across a 74-fold range of κ, so the "low by" factor grows to 39,000x purely
   because the truth grew. And the tolerance should use ‖L⁻¹HL⁻ᴴ‖, not ‖H‖ — 3x larger

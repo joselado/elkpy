@@ -1252,9 +1252,11 @@ reproduces the table in `docs/jax_port_phase0.md` §0b(ii). At the standard `rgk
 $\kappa(O)\approx5\times10^3$, so the safe-$K$ tolerance
 $\epsilon\,\kappa\,\lVert\tilde H\rVert$ is $\approx1.6\times10^{-11}$ Ha on Si and
 $6.5\times10^{-11}$ Ha on h-BN. Three things to carry forward. It is set by the **cutoff,
-not the matrix size** — h-BN's $1402\times1402$ overlap has the same $\kappa$ as Si's
-$161\times161$, while `rgkmax` $7\to8\to9$ takes Si from $5\times10^3$ to
-$2.6\times10^4$ to $2.1\times10^5$. The study's §8b Cholesky-diagonal estimate is worse
+not the matrix size** — at `rgkmax=8`, Si's $227\times227$ overlap and h-BN's
+$2118\times2118$ agree to within the spread across $k$-points, while `rgkmax`
+$7\to8\to9$ takes Si from $5\times10^3$ to $2.6\times10^4$ to $2.1\times10^5$ (h-BN
+$7\to8$: $5.0\times10^3\to3.5\times10^4$), so the tolerance must be recomputed per run
+rather than hard-coded. The study's §8b Cholesky-diagonal estimate is worse
 than "a lower bound, 140x low": it is **uninformative**, moving only 8.05→9.25 across a
 74-fold range of $\kappa$, so it must not be used to set a threshold. And the norm in
 that formula should be $\lVert L^{-1}HL^{-\dagger}\rVert$, not $\lVert H\rVert$ — 3x
