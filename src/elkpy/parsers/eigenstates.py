@@ -420,4 +420,79 @@ def parse_lapw_response(tokens):
     reim = np.array(flat).reshape(nmatp * nstfv, 2)
     values = reim[:, 0] + 1j * reim[:, 1]
     out["evecfv"] = values.reshape(nmatp, nstfv, order="F")
+    _parse_lapw_radial(tokens, pos, out)
     return out
+
+
+def _parse_lapw_radial(tokens, pos, out):
+    """The muffin-tin radial integrals and the Gaunt array (patch 0014).
+
+    These are every remaining input of olpfv/hmlfv beyond `apwalm` and the
+    interstitial blocks already parsed above, and they are what lets the JAX
+    port assemble the six muffin-tin blocks of H and O and compare each
+    against Elk's own, one Fortran routine at a time. Adds:
+
+      lmaxo, lmmaxo, nlomax, lolmmax  -- ints, the shapes
+      nlorb          -- (nspecies,) local orbitals per species
+      lorbl          -- list over species of that species' (nlorb,) l values
+      idxlo          -- (lolmmax, nlomax, natmtot) 1-based index of a local
+                        orbital within the lo block, or 0
+      oalo           -- (apwordmax, nlomax, natmtot) <u_APW|u_lo> radial
+                        overlap (olprad.f90)
+      ololo          -- (nlomax, nlomax, natmtot) <u_lo|u_lo>
+      haa            -- (lmmaxo, apwordmax, lmaxapw+1, apwordmax,
+                        lmaxapw+1, natmtot) APW-APW radial Hamiltonian
+                        integrals, indexed haa[lm2, jo, l3, io, l1, ias]
+      hloa           -- (lmmaxo, apwordmax, lmaxapw+1, nlomax, natmtot),
+                        indexed hloa[lm2, io, l3, ilo, ias]
+      hlolo          -- (lmmaxo, nlomax, nlomax, natmtot), indexed
+                        hlolo[lm2, jlo, ilo, ias]
+      gntyry         -- (lmmaxo, lmmaxapw, lmmaxapw) complex, indexed
+                        gntyry[lm2, lm3, lm1] = <Y_{l1 m1}|R_{l2 m2}|Y_{l3 m3}>
+
+    Note the REAL spherical harmonic in gntyry's middle slot: the muffin-tin
+    potential is stored in a real harmonic basis, the wavefunctions in a
+    complex one. All l indices here are 0-based array positions, i.e. Elk's
+    `0:lmaxapw` dimensions become `lmaxapw + 1` long.
+
+    Absent on a binary built before patch 0014, in which case the keys are
+    simply not set -- the fields above are appended after `evecfv`, so
+    everything patch 0013 wrote still parses identically.
+    """
+    if pos >= len(tokens):
+        return
+    head, pos = _take(tokens, pos, 4, int)
+    lmaxo, lmmaxo, nlomax, lolmmax = head
+    out.update(zip(("lmaxo", "lmmaxo", "nlomax", "lolmmax"), head))
+    nspecies = out["nspecies"]
+    natmtot = out["natmtot"]
+    apwordmax = out["apwordmax"]
+    nl = out["lmaxapw"] + 1
+    flat, pos = _take(tokens, pos, nspecies, int)
+    nlorb = np.array(flat)
+    out["nlorb"] = nlorb
+    lorbl = []
+    for is_ in range(nspecies):
+        flat, pos = _take(tokens, pos, int(nlorb[is_]), int)
+        lorbl.append(np.array(flat, dtype=int))
+    out["lorbl"] = lorbl
+
+    def _block(shape, kind):
+        nonlocal pos
+        n = int(np.prod(shape))
+        values, pos = _take(tokens, pos, n, kind)
+        return np.array(values).reshape(shape, order="F")
+
+    out["idxlo"] = _block((lolmmax, nlomax, natmtot), int)
+    out["oalo"] = _block((apwordmax, nlomax, natmtot), float)
+    out["ololo"] = _block((nlomax, nlomax, natmtot), float)
+    out["haa"] = _block(
+        (lmmaxo, apwordmax, nl, apwordmax, nl, natmtot), float)
+    out["hloa"] = _block((lmmaxo, apwordmax, nl, nlomax, natmtot), float)
+    out["hlolo"] = _block((lmmaxo, nlomax, nlomax, natmtot), float)
+    lmmaxapw = out["lmmaxapw"]
+    n = lmmaxo * lmmaxapw * lmmaxapw
+    flat, pos = _take(tokens, pos, 2 * n, float)
+    reim = np.array(flat).reshape(n, 2)
+    out["gntyry"] = (reim[:, 0] + 1j * reim[:, 1]).reshape(
+        (lmmaxo, lmmaxapw, lmmaxapw), order="F")
