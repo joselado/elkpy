@@ -16,7 +16,7 @@ Elk's own `apwalm` by patch 0013, so the first build step is the assembly.
 |---|---|
 | **1a** `olpfv`/`hmlfv`, muffin-tin blocks, forward | **done — machine precision on three fixtures**, six blocks compared separately; assembled pair reproduces Elk's `evalfv` to 9e-15 Ha |
 | **1b** the radial integrals from `genapwfr`/`genlofr`/`hmlrad`/`olprad` | **done, and without Phase 2** (§1k): patch 0015 exports the muffin-tin potential, so the chain $v_s^{\rm MT}\to$ radial functions $\to$ radial integrals $\to H,O\to\varepsilon_j$ closes; every stage machine-precision against Elk |
-| **1c** the interstitial blocks from `gencfun`/`genvsig` | not started; `vsig` needs the interstitial Kohn-Sham potential, i.e. Phase 2 |
+| **1c** the interstitial blocks from `gencfun`/`genvsig` | **half done** (§1l): $\tilde\Theta$ is closed-form geometry and is built, element-wise against Elk's $O^{\rm I}$ to 1e-16; `vsig` needs the interstitial Kohn-Sham potential and is still Phase 2 |
 | **1a′** the assembly as a differentiable function of $k$ | **done — and it found that $d\varepsilon/dk \neq \langle p\rangle$ in a finite LAPW basis** |
 | **1d** gradient vs finite differences on displaced h-BN | **half done** (§1l): the frozen-potential half is done and pinned by a translation sum rule; the other half needs the potential's own response to the displacement, i.e. Phase 2 |
 | **1e** the adversarial `soc_scale` sweep, and the required refusal | **withdrawn as written — `soc_scale` cannot move the first-variational spectrum at all** (§1f); the refusal itself is done, by cutting a real multiplet |
@@ -26,7 +26,7 @@ Elk's own `apwalm` by patch 0013, so the first build step is the assembly.
 | **1i** smeared occupations and the self-consistent Fermi level | **done** — the closed-form kernel inside the JVP makes the tolerance INERT for smeared occupations; whether the near-degenerate branch fires is set by the assembly's roundoff, not by the physics |
 | **1j** second derivatives at a real multiplet | **done** — only `sign_projector` survives; both `eigh`-based routes return `NaN`, and the control at a generic $k$ says the failure is the multiplet, not the order |
 | **1k** the spectrum as a differentiable function of the muffin-tin potential | **done — and the two channels are exactly complementary**: the spherical part of $v_s$ enters ONLY through the basis (frozen-basis derivative exactly zero) and the non-spherical part ONLY through the integrals (basis response 7e-16) |
-| **1l** the position derivative at frozen potential | **done — pinned by a sum rule**: rigid translation leaves the spectrum invariant to 2e-15 Ha, and the forward form of that null is sharper than the gradient form, which is identically satisfied by the wrong assembly on silicon |
+| **1l** the position derivative at frozen potential | **done — pinned by a sum rule**: rigid translation leaves the spectrum invariant to 2e-15 Ha with only the interstitial POTENTIAL's response supplied by hand, $\tilde\Theta$'s being built; and the forward form of that null is sharper than the gradient form, which is identically satisfied by the wrong assembly on silicon |
 
 ---
 
@@ -1305,23 +1305,51 @@ $\tilde\Theta(\mathbf G)\to\tilde\Theta(\mathbf G)e^{-i\mathbf G\cdot
 wrong sign or a wrong factor in `match`'s position dependence breaks the
 invariance and nothing else in `match` can.
 
-Measured at $\boldsymbol\delta=(0.031,-0.017,0.023)$ Bohr:
+### How much of the null is derived: the characteristic function
 
-| | bulk Si | monolayer h-BN |
-|---|---|---|
-| forward, interstitial response supplied | 1.8e-15 Ha | 8.4e-15 Ha |
-| forward, interstitial frozen | 2.9e-4 Ha | 4.3e-4 Ha |
-| gradient, interstitial response supplied | 1.2e-15 | 6.3e-16 |
-| gradient, interstitial frozen | **9.7e-16** | 1.7e-2 |
+$\tilde\Theta$ is closed-form geometry — `gencfun.f90` plus `genffacgp.f90`,
+
+$$\tilde\Theta(\mathbf G) = \delta_{\mathbf G,0}
+ - \sum_\alpha e^{-i\mathbf G\cdot\mathbf r_\alpha}\,\frac{4\pi}{\Omega}\,
+   \frac{\sin(GR_\alpha)-GR_\alpha\cos(GR_\alpha)}{G^3}$$
+
+— so it needs no Phase 2 ingredient at all, and building it
+(`hamiltonian.characteristic_function_matrix`) closes the OVERLAP half of item
+1c. It reproduces Elk's own $O^{\rm I}$ element-wise (5.7e-16 on Si, 1.1e-16 on
+h-BN), which is a transcription check with no free constant in it, and it
+satisfies the covariance identity
+$\tilde\Theta(\mathbf G)\to\tilde\Theta(\mathbf G)e^{-i\mathbf G\cdot
+\boldsymbol\delta}$ to 1.5e-16 — the latter pinning the sign of the exponent
+against the $(i,j)$ ordering of the difference vectors, which agreement at the
+*original* positions cannot check, every position entering there through the
+same unshifted factor.
+
+With it built, the only imported quantity left in the interstitial is the
+Kohn-Sham potential itself, which is genuinely Phase 2. Measured at
+$\boldsymbol\delta=(0.031,-0.017,0.023)$ Bohr, four ways:
+
+| $\tilde\Theta$ | potential's response | forward, Si | forward, h-BN | gradient, Si | gradient, h-BN |
+|---|---|---|---|---|---|
+| built | supplied | **1.8e-15 Ha** | **3.8e-15 Ha** | 6.5e-16 | 2.8e-15 |
+| built | omitted | 2.6e-5 Ha | 1.4e-3 Ha | **5.4e-16** | 1.6e-2 |
+| frozen | supplied | 4.9e-15 Ha | 9.8e-15 Ha | 5.1e-16 | 1.0e-15 |
+| frozen | omitted | 2.9e-4 Ha | 4.3e-4 Ha | **3.5e-16** | 1.7e-2 |
+
+Two things to read off it. Building $\tilde\Theta$ does **not** monotonically
+improve the residual — on h-BN it grows, 4.3e-4 to 1.4e-3 — because the two
+omissions were partly cancelling; only the complete row is exact, and a
+"closer" residual is not evidence of a more correct assembly. And the
+characteristic function's contribution to the single-atom derivative is not
+small: building it moves that number by 7.5% on Si and 35% on h-BN.
 
 ### And the forward form of the null is the sharper one
 
-The bolded entry is the finding. On silicon the *wrong* assembly satisfies the
-gradient null identically, and only the finite-shift comparison separates the
-two. The reason is the scaling: with the interstitial response left out, the
-error goes as $\delta^2$ on Si (measured ratios 4.01 and 4.00 per halving of
-$\delta$) and as $\delta$ on h-BN (1.87, 1.79). A second-order error has no
-first derivative to find.
+The bolded entries are the finding. On silicon the *wrong* assembly satisfies
+the gradient null identically — with either $\tilde\Theta$ — and only the
+finite-shift comparison separates the two. The reason is the scaling: with the
+potential's response left out, the error goes as $\delta^2$ on Si (measured
+ratios 4.01 and 4.00 per halving of $\delta$) and as $\delta$ on h-BN (1.87,
+1.79). A second-order error has no first derivative to find.
 
 This is Phase 0's carried-forward finding — *a green gradient test does not
 validate a transcription* — in its third distinct form in this port, after
@@ -1339,9 +1367,9 @@ the shape of the sweep rather than one number:
 
 | step (Bohr) | bulk Si | monolayer h-BN |
 |---|---|---|
-| $10^{-3}$ | 5.6e-7 | 8.3e-8 |
-| $10^{-4}$ | 3.9e-9 | 7.0e-10 |
-| $10^{-5}$ | 1.1e-8 | 1.0e-8 |
+| $10^{-3}$ | 4.3e-7 | 7.0e-8 |
+| $10^{-4}$ | 4.5e-9 | 5.2e-9 |
+| $10^{-5}$ | 2.5e-8 | 2.7e-8 |
 
 The minimum in the middle is the point: truncation dominates at the large step
 and roundoff at the small one, so the two are converging on each other rather
@@ -1356,8 +1384,9 @@ isolation `docs/jax_port.md` §Phase 4 asks for — the same quantity computed
 with and without `stop_gradient` on `apwalm` — since the moving half now
 exists.
 
-**It does not settle a force**, and the two missing pieces are named: the
-muffin-tin potential's own response to the displacement (Phase 2), and the
-characteristic function's (`gencfun` with the sphere moved, which is a Phase 2
-ingredient for the same reason $H^{\rm I}$ is).
+**It does not settle a force.** One missing piece is now named precisely: the
+interstitial and muffin-tin Kohn-Sham potentials' own response to the
+displacement, which is Phase 2 and nothing else. The characteristic function's
+response, which an earlier version of this section listed alongside it, is
+built.
 

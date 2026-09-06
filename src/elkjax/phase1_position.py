@@ -72,27 +72,46 @@ def _reciprocal(export):
             - np.asarray(export["vkc"])[:, None]).T          # (ngp, 3)
 
 
-def assemble_at_positions(export, atposc, translation=None):
+def assemble_at_positions(export, atposc, translation=None,
+                          interstitial="built"):
     """(H, O) with the atoms at `atposc`, at the exported k-point.
 
-    `translation`, when given, is the rigid displacement whose exact
-    interstitial response is applied as the diagonal phase described in the
-    module docstring.  Leave it `None` for a general displacement, where that
-    response is not available in closed form and the interstitial blocks are
-    simply frozen.
+    ``interstitial="built"`` takes the characteristic function from
+    `hamiltonian.characteristic_function_matrix` -- closed-form geometry, so
+    it follows the atoms -- leaving only the interstitial Kohn-Sham potential
+    imported.  ``"frozen"`` takes both blocks from the export, which is what
+    this module did before `gencfun` was transcribed and is kept as the
+    contrast.
+
+    `translation`, when given, applies the exact response of whatever is still
+    imported to a rigid shift: the same diagonal phase, since
+    :math:`f(\\mathbf r)\\to f(\\mathbf r-\\boldsymbol\\delta)` gives
+    :math:`\\tilde f(\\mathbf G)\\to\\tilde f(\\mathbf G)
+    e^{-i\\mathbf G\\cdot\\boldsymbol\\delta}` for the potential exactly as for
+    :math:`\\Theta`.  With ``interstitial="built"`` that is one imported
+    quantity rather than two, and :math:`\\Theta`'s own response is then
+    DERIVED rather than imposed.
     """
     ngp = int(export["ngp"])
     nmatp = int(export["nmatp"])
     vgkc = jnp.asarray(np.asarray(export["vgpc"])[:, :ngp].T)
     local = dict(export)
     local["apwalm"] = ham.matching_coefficients(export, vgkc, atposc=atposc)
-    h_istl = jnp.asarray(export["hmat_istl"])
-    o_istl = jnp.asarray(export["omat_istl"])
-    if translation is not None:
+    kinetic = 0.5 * (vgkc @ vgkc.T)
+    vsig = jnp.asarray(ham.interstitial_potential_matrix(export))
+    if translation is None:
+        conj = 1.0
+    else:
         gvec = jnp.asarray(_reciprocal(export))
         phase = jnp.exp(-1j * (gvec @ jnp.asarray(translation)))
         conj = phase[:, None] * jnp.conj(phase)[None, :]
-        h_istl, o_istl = h_istl * conj, o_istl * conj
+    if interstitial == "built":
+        o_istl = ham.characteristic_function_matrix(export, atposc=atposc)
+    elif interstitial == "frozen":
+        o_istl = jnp.asarray(export["omat_istl"]) * conj
+    else:
+        raise ValueError(f"unknown interstitial mode {interstitial!r}")
+    h_istl = vsig * conj + kinetic * o_istl
 
     def _pad(block):
         return jnp.zeros((nmatp, nmatp), dtype=complex).at[:ngp, :ngp].add(
@@ -102,45 +121,75 @@ def assemble_at_positions(export, atposc, translation=None):
             ham.muffin_tin_overlap(local) + _pad(o_istl))
 
 
-def spectrum_at_positions(export, atposc, translation=None, nocc=None):
-    h, o = assemble_at_positions(export, atposc, translation=translation)
+def spectrum_at_positions(export, atposc, translation=None, nocc=None,
+                          interstitial="built"):
+    h, o = assemble_at_positions(export, atposc, translation=translation,
+                                 interstitial=interstitial)
     reduced, _ = ham.cholesky_reduce(h, o)
     evals = jnp.linalg.eigvalsh(reduced)
     return evals if nocc is None else evals[:nocc]
 
 
-def band_energy_at_positions(export, atposc, nocc, translation=None):
+def band_energy_at_positions(export, atposc, nocc, translation=None,
+                             interstitial="built"):
     """The occupied-window trace -- a sum, because an individual branch of a
     degenerate group is not differentiable and its trace is."""
     return jnp.sum(spectrum_at_positions(
-        export, atposc, translation=translation, nocc=nocc))
+        export, atposc, translation=translation, nocc=nocc,
+        interstitial=interstitial))
 
 
 def translation_null(export, nocc, delta=(0.031, -0.017, 0.023)):
     """The sum rule: rigid translation cannot move the spectrum.
 
-    Returns the forward statement (eigenvalues at a finite shift against the
-    unshifted ones) and the gradient statement (the derivative in
-    :math:`\\boldsymbol\\delta`, which must vanish), plus the SAME two with the
-    interstitial phase switched off -- without which the null would be a
-    property of the imported blocks rather than of `match`.
+    Four rows, and the point is the contrast between them.  With the
+    characteristic function BUILT, the only imported quantity left is the
+    interstitial Kohn-Sham potential, so ``built + phase`` is the null with
+    just one exact response supplied by hand; ``built`` alone measures what
+    that potential contributes; and the two ``frozen`` rows are what the same
+    test said before `gencfun` was transcribed.
     """
     atposc = np.asarray(export["atposc"])
     shift = np.asarray(delta, dtype=float)
     moved = atposc + shift[:, None]
     base = np.asarray(spectrum_at_positions(export, atposc, nocc=nocc))
     out = {"delta": shift.tolist(), "reference": base}
-    for tag, corrected in (("phase-corrected", True), ("frozen", False)):
+    modes = (("built+phase", "built", True), ("built", "built", False),
+             ("frozen+phase", "frozen", True), ("frozen", "frozen", False))
+    for tag, mode, corrected in modes:
         translation = shift if corrected else None
         shifted = np.asarray(spectrum_at_positions(
-            export, moved, translation=translation, nocc=nocc))
+            export, moved, translation=translation, nocc=nocc,
+            interstitial=mode))
         out[f"forward_{tag}"] = float(np.abs(shifted - base).max())
-        fn = lambda d: band_energy_at_positions(
-            export, atposc + d[:, None], nocc,
-            translation=d if corrected else None)
-        grad = np.asarray(jax.grad(fn)(jnp.zeros(3)))
-        out[f"grad_{tag}"] = grad
+        fn = lambda d, mode=mode, corrected=corrected: (
+            band_energy_at_positions(
+                export, atposc + d[:, None], nocc,
+                translation=d if corrected else None, interstitial=mode))
+        out[f"grad_{tag}"] = np.asarray(jax.grad(fn)(jnp.zeros(3)))
     return out
+
+
+def characteristic_function_covariance(export, delta=(0.031, -0.017, 0.023)):
+    r"""The same sum rule on :math:`\tilde\Theta` alone, with no eigensolve.
+
+    Translating every atom by :math:`\boldsymbol\delta` must multiply
+    :math:`\tilde\Theta(\mathbf G_i-\mathbf G_j)` by
+    :math:`e^{-i(\mathbf G_i-\mathbf G_j)\cdot\boldsymbol\delta}` -- an
+    identity that pins the sign of the exponent against the $(i,j)$ ordering
+    of the difference vectors, which is the one convention in
+    `characteristic_function_matrix` that an agreement with Elk's own
+    `omat_istl` at the ORIGINAL positions cannot check.
+    """
+    atposc = np.asarray(export["atposc"])
+    shift = np.asarray(delta, dtype=float)
+    gvec = np.asarray(_reciprocal(export))
+    phase = np.exp(-1j * (gvec @ shift))
+    base = np.asarray(ham.characteristic_function_matrix(export))
+    moved = np.asarray(
+        ham.characteristic_function_matrix(export, atposc + shift[:, None]))
+    predicted = base * (phase[:, None] * np.conj(phase)[None, :])
+    return float(np.abs(moved - predicted).max()), float(np.abs(base).max())
 
 
 def single_atom(export, nocc, ias=1, seed=5, steps=(1e-3, 1e-4, 1e-5)):
@@ -162,17 +211,15 @@ def single_atom(export, nocc, ias=1, seed=5, steps=(1e-3, 1e-4, 1e-5)):
 
 
 def report(null, single):
-    lines = [f"rigid translation delta = {null['delta']}",
-             f"  forward, phase-corrected  max |d eval| "
-             f"{null['forward_phase-corrected']:.3e} Ha",
-             f"  forward, interstitial frozen             "
-             f"{null['forward_frozen']:.3e} Ha",
-             f"  gradient, phase-corrected {np.array2string(null['grad_phase-corrected'], precision=3)}",
-             f"  gradient, frozen          {np.array2string(null['grad_frozen'], precision=3)}",
-             "",
-             f"single atom {single['atom']} along "
-             f"{np.array2string(single['direction'], precision=4)}",
-             f"  AD {single['ad']: .12e}"]
+    lines = [f"rigid translation delta = {null['delta']}"]
+    for tag in ("built+phase", "built", "frozen+phase", "frozen"):
+        lines.append(f"  {tag:13s} forward {null[f'forward_{tag}']:.3e} Ha"
+                     f"   gradient "
+                     f"{np.array2string(null[f'grad_{tag}'], precision=3)}")
+    lines += ["",
+              f"single atom {single['atom']} along "
+              f"{np.array2string(single['direction'], precision=4)}",
+              f"  AD {single['ad']: .12e}"]
     for h, fd in zip(single["steps"], single["fd"]):
         lines.append(f"  FD h={h:.0e}  {fd: .12e}   rel "
                      f"{abs(fd - single['ad']) / abs(single['ad']):.3e}")

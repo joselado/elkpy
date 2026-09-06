@@ -417,9 +417,15 @@ Weinert Poisson, XC) and two Phase 1 items are reachable without it.
    than a finite difference: **rigid translation of every atom cannot move the
    spectrum**, since the matrix transforms by a diagonal unitary
    $U=\mathrm{diag}(e^{i(\mathbf G_i+\mathbf k)\cdot\boldsymbol\delta})$. Measured
-   1.8e-15 Ha on Si and 8.4e-15 on h-BN with the interstitial's own response supplied
-   (closed form: $\tilde\Theta(\mathbf G)\to\tilde\Theta(\mathbf G)e^{-i\mathbf
-   G\cdot\boldsymbol\delta}$), against 2.9e-4 and 4.3e-4 without it.
+   1.8e-15 Ha on Si and 3.8e-15 on h-BN. $\tilde\Theta$ itself is BUILT
+   (`hamiltonian.characteristic_function_matrix`, closed-form geometry — element-wise
+   against Elk's own $O^{\rm I}$ to 1e-16, which also closes the overlap half of item
+   1c), so the only response supplied by hand is the interstitial Kohn-Sham potential's,
+   $\tilde v(\mathbf G)\to\tilde v(\mathbf G)e^{-i\mathbf G\cdot\boldsymbol
+   \delta}$. Without it: 2.6e-5 Ha and 1.4e-3 Ha. Note building $\tilde\Theta$ does
+   NOT monotonically shrink the residual — on h-BN it grows, the two omissions having
+   partly cancelled — so a smaller residual is not evidence of a more correct assembly.
+   It does move the single-atom derivative by 7.5% (Si) and 35% (h-BN).
 
    **The finding: the FORWARD form of that null is sharper than the gradient form.**
    With the interstitial response left out, the error is $O(\delta^2)$ on Si (ratios
@@ -430,9 +436,8 @@ Weinert Poisson, XC) and two Phase 1 items are reachable without it.
    $4\pi(-i)^\ell$ and §1k's frozen `apwalm`), and every time the check with teeth was
    forward. Treat it as a rule for Phase 2, not three anecdotes.
 
-   **Still missing for a real force**: the muffin-tin potential's own response to the
-   displacement, and the characteristic function's (`gencfun` with the sphere moved).
-   Both are Phase 2. What IS unlocked is the Phase 4 isolation that compares a quantity
+   **Still missing for a real force**: the muffin-tin and interstitial Kohn-Sham
+   potentials' own response to the displacement, which is Phase 2 and nothing else. What IS unlocked is the Phase 4 isolation that compares a quantity
    with and without `stop_gradient` on `apwalm`, since the moving half now exists.
 
 One caution carried from this session for whatever comes next: the AD-vs-`genpmatk`

@@ -14,18 +14,22 @@ terms, and the interstitial characteristic function moves with the sphere too.
 **The check with teeth is a sum rule, not a finite difference.**  Translating
 every atom by the same delta cannot change the spectrum: every basis function
 picks up a phase, the whole matrix transforms as U^dag M U with U diagonal, and
-the eigenvalues are invariant.  The muffin-tin blocks get that right on their
-own through the structure factor; the imported interstitial blocks do not, but
-their true response to a rigid shift is the same phase in closed form
-(Theta(r) -> Theta(r - delta) gives Theta~(G) -> Theta~(G) exp(-i G . delta)),
-which is applied.  A wrong sign or factor in `match`'s position dependence
-breaks the invariance and nothing else in it can.
+the eigenvalues are invariant.
 
-**And the FORWARD form of that null is the sharper one**, which is the
-methodological point worth keeping.  With the interstitial response left out,
-the finite-shift error is 2.9e-4 Ha on Si and 4.3e-4 Ha on h-BN -- but it
-scales as delta^2 on Si (measured ratios 4.01, 4.00 per halving) and only as
-delta on h-BN (1.87, 1.79).  So the GRADIENT null is identically satisfied by
+How much of that is DERIVED depends on how much of the interstitial is built.
+The characteristic function is closed-form geometry
+(`hamiltonian.characteristic_function_matrix`, gencfun + genffacgp), so it
+follows the atoms on its own; the interstitial Kohn-Sham potential is Phase 2
+and stays imported, and for a rigid shift its exact response is the same phase
+(f(r) -> f(r - delta) gives f~(G) -> f~(G) exp(-i G . delta)).  So the null is
+run four ways -- characteristic function built or frozen, crossed with that
+phase applied or not -- and the sharp one supplies exactly one imported
+response by hand.
+
+**And the FORWARD form of the null is the sharper one**, which is the
+methodological point worth keeping.  With the phase left out, the finite-shift
+error scales as delta^2 on Si (measured ratios 4.01, 4.00 per halving) and only
+as delta on h-BN (1.87, 1.79).  So the GRADIENT null is identically satisfied by
 the wrong assembly on silicon, and only the finite-shift comparison separates
 the two on both fixtures.  A gradient check blind to something a forward check
 sees is Phase 0's standing finding, in its third distinct form here.
@@ -60,33 +64,72 @@ def nulls(exports):
 
 
 @pytest.mark.parametrize("case", CASES)
+def test_the_characteristic_function_matches_elk(case, exports):
+    """`gencfun` built here against Elk's own interstitial overlap block.
+
+    O^I_ij is exactly Theta~(G_i - G_j) (olpistl.f90), so this is an
+    element-wise transcription check with no free constant in it.
+    """
+    from elkjax import hamiltonian as ham
+    export = exports[case]
+    got = np.asarray(ham.characteristic_function_matrix(export))
+    ref = np.asarray(export["omat_istl"])
+    assert np.abs(ref).max() > 1e-2
+    assert np.abs(got - ref).max() / np.abs(ref).max() < 1e-13
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_the_characteristic_function_is_translation_covariant(case, exports):
+    """Theta~ alone, with no eigensolve: a rigid shift must multiply
+    Theta~(G_i - G_j) by exp(-i (G_i - G_j) . delta).
+
+    This pins the sign of the exponent against the (i, j) ordering of the
+    difference vectors -- the one convention that agreement with Elk's
+    `omat_istl` at the ORIGINAL positions cannot check, since every position
+    enters there through the same unshifted structure factor.
+    """
+    from elkjax import phase1_position as pos
+    diff, scale = pos.characteristic_function_covariance(
+        exports[case], delta=DELTA)
+    assert scale > 1e-2
+    assert diff / scale < 1e-14, (diff, scale)
+
+
+@pytest.mark.parametrize("case", CASES)
 def test_rigid_translation_leaves_the_spectrum_invariant(case, nulls):
-    """The sum rule, forward and as a gradient."""
+    """The sum rule, forward and as a gradient, with the characteristic
+    function built and the interstitial potential's own response supplied."""
     null = nulls[case]
-    assert null["forward_phase-corrected"] < 1e-13, null
-    assert np.abs(null["grad_phase-corrected"]).max() < 1e-13, null
+    assert null["forward_built+phase"] < 1e-13, null
+    assert np.abs(null["grad_built+phase"]).max() < 1e-13, null
 
 
 @pytest.mark.parametrize("case", CASES)
 def test_the_null_is_not_free(case, nulls):
-    """Dropping the interstitial's own response to the shift must break it,
-    or the test above would be measuring nothing."""
+    """Every incomplete variant must break it, or the test above would be
+    measuring nothing.  Note that building the characteristic function alone
+    does not monotonically improve the residual -- on h-BN it grows, because
+    the two omissions were partly cancelling -- which is why the honest
+    statement is that only the complete one is exact."""
     null = nulls[case]
-    assert null["forward_frozen"] > 1e-5, null
+    for tag in ("built", "frozen", "frozen+phase"):
+        if tag == "frozen+phase":
+            continue          # exact for a different reason: both imposed
+        assert null[f"forward_{tag}"] > 1e-6, (tag, null)
 
 
 def test_the_gradient_null_alone_is_blind_on_silicon(exports, nulls):
     """The methodological point, asserted rather than described.
 
-    Left out, the interstitial's response costs O(delta^2) on silicon and
-    O(delta) on h-BN -- so the wrong assembly satisfies the GRADIENT null
-    exactly on silicon while failing the finite-shift one.  Both scalings are
-    checked directly, since it is the scaling and not the size that decides
-    which check can see the omission.
+    Left out, the interstitial potential's response costs O(delta^2) on
+    silicon and O(delta) on h-BN -- so the wrong assembly satisfies the
+    GRADIENT null exactly on silicon while failing the finite-shift one.  Both
+    scalings are checked directly, since it is the scaling and not the size
+    that decides which check can see the omission.
     """
     from elkjax import phase1_position as pos
-    assert np.abs(nulls["si_apword1"]["grad_frozen"]).max() < 1e-13
-    assert np.abs(nulls["hbn"]["grad_frozen"]).max() > 1e-4
+    assert np.abs(nulls["si_apword1"]["grad_built"]).max() < 1e-13
+    assert np.abs(nulls["hbn"]["grad_built"]).max() > 1e-4
     orders = {}
     for case in CASES:
         export = exports[case]

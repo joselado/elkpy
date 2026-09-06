@@ -441,6 +441,62 @@ def interstitial_potential_matrix(export):
         export["omat_istl"])
 
 
+def characteristic_function_matrix(export, atposc=None):
+    r"""The interstitial overlap block :math:`O^{\rm I}_{ij}=
+    \tilde\Theta(\mathbf G_i-\mathbf G_j)`, built rather than imported.
+
+    :math:`\Theta(\mathbf r)` is 1 in the interstitial and 0 inside every
+    muffin-tin sphere, so its Fourier transform is closed-form -- `gencfun.f90`
+    plus `genffacgp.f90`:
+
+    .. math::
+       \tilde\Theta(\mathbf G) = \delta_{\mathbf G,0}
+         - \sum_\alpha e^{-i\mathbf G\cdot\mathbf r_\alpha}\,
+           \frac{4\pi}{\Omega}\,
+           \frac{\sin(GR_\alpha) - GR_\alpha\cos(GR_\alpha)}{G^3},
+
+    the summand tending to :math:`4\pi R_\alpha^3/3\Omega` as
+    :math:`G\to0`.  Note :math:`R_\alpha` is Elk's `rmt` AFTER `checkmt`'s
+    shrink, which is what the export carries.
+
+    This needs no Phase 2 ingredient -- it is pure geometry -- and it is the
+    half of the interstitial that CAN be built: :math:`H^{\rm I}` additionally
+    needs the interstitial Kohn-Sham potential.  Building it makes the
+    positions' effect on the interstitial explicit rather than frozen, which
+    is what turns the rigid-translation sum rule of `phase1_position` from an
+    imposed phase into a derived one.
+
+    Differentiable in `atposc`.  It is NOT differentiable in the lattice: the
+    G-vectors are held as constants, so the :math:`\sqrt{}` at
+    :math:`\mathbf G=0` never sees a tangent -- a stress derivative would have
+    to reach that branch and would need the same double-`where` treatment the
+    form factor already gets.
+    """
+    ngp = int(export["ngp"])
+    vgpc = np.asarray(export["vgpc"])[:, :ngp].T
+    dg = jnp.asarray(vgpc[:, None, :] - vgpc[None, :, :])      # (ngp, ngp, 3)
+    g = jnp.sqrt(jnp.sum(dg * dg, axis=-1))
+    atposc = (np.asarray(export["atposc"]) if atposc is None
+              else jnp.asarray(atposc))
+    idxis = np.asarray(export["idxis"]) - 1
+    rmt = np.asarray(export["rmt"])
+    omega = float(export["omega"])
+    # `epslat` is Elk's own threshold for "this G-vector is zero"
+    nonzero = g > 1e-6
+    safe = jnp.where(nonzero, g, 1.0)          # double-where: the discarded
+    out = jnp.where(nonzero, 0.0, 1.0) + 0j    # branch must not be a NaN
+    for ias in range(int(export["natmtot"])):
+        radius = float(rmt[int(idxis[ias])])
+        x = safe * radius
+        form = jnp.where(nonzero,
+                         (4.0 * np.pi / omega)
+                         * (jnp.sin(x) - x * jnp.cos(x)) / safe ** 3,
+                         (4.0 * np.pi / (3.0 * omega)) * radius ** 3)
+        phase = jnp.exp(-1j * (dg @ jnp.asarray(atposc)[:, ias]))
+        out = out - form * phase
+    return out
+
+
 def _reciprocal_vectors(export):
     """The pure G-vectors of the basis, i.e. the exported G+k minus k."""
     ngp = int(export["ngp"])

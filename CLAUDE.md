@@ -1523,17 +1523,22 @@ exact identity rather than a finite difference. At frozen potential (rigid muffi
 positions enter only through `match`'s structure factor, and **a rigid translation of
 every atom cannot move the spectrum** — the matrix transforms by the diagonal unitary
 $U=\mathrm{diag}(e^{i(\mathbf G_i+\mathbf k)\cdot\boldsymbol\delta})$, the muffin-tin
-blocks getting that right on their own while the imported interstitial ones need their
-own closed-form response $\tilde\Theta(\mathbf G)\to\tilde\Theta(\mathbf
-G)e^{-i\mathbf G\cdot\boldsymbol\delta}$. Measured 1.8e-15 Ha (Si) and 8.4e-15 (h-BN)
-with it, 2.9e-4 and 4.3e-4 without. **The FORWARD form of that null is sharper than the
+blocks getting that right on their own. $\tilde\Theta$ is BUILT too — closed-form
+geometry (`hamiltonian.characteristic_function_matrix`, `gencfun`+`genffacgp`), matching
+Elk's own $O^{\rm I}$ element-wise to 1e-16 and closing the overlap half of item 1c — so
+the only response supplied by hand is the interstitial Kohn-Sham potential's,
+$\tilde v(\mathbf G)\to\tilde v(\mathbf G)e^{-i\mathbf G\cdot\boldsymbol\delta}$.
+Measured 1.8e-15 Ha (Si) and 3.8e-15 (h-BN) with it, 2.6e-5 and 1.4e-3 without. Building
+$\tilde\Theta$ does NOT monotonically shrink the residual (on h-BN it grows, the two
+omissions having partly cancelled), so a smaller residual is not evidence of a better
+assembly; it does move the single-atom derivative by 7.5%/35%. **The FORWARD form of that null is sharper than the
 gradient form**: without the interstitial response the error is $O(\delta^2)$ on Si and
 $O(\delta)$ on h-BN, so the wrong assembly satisfies the *gradient* null identically on
 silicon. Third distinct instance in this port of "a green gradient test does not validate
 a transcription" (after 0c's $4\pi(-i)^\ell$ and §1k's frozen `apwalm`) — every time the
-check with teeth was forward. **It is NOT a force**: the muffin-tin potential's own
-response to the displacement and the characteristic function's (`gencfun` with the sphere
-moved) are both Phase 2. Also open: smeared occupations **at second order**, which `sign_projector` does not cover
+check with teeth was forward. **It is NOT a force**: the muffin-tin and interstitial
+Kohn-Sham potentials' own response to the displacement is Phase 2, and is now the only
+thing missing. Also open: smeared occupations **at second order**, which `sign_projector` does not cover
 (it is hard-window only; that needs a Chebyshev expansion of the Fermi function, and §1i
 removed the tolerance from the smeared first derivative, not the `eigh` from its JVP); and
 the unrolled Newton-Schulz tape, where `lax.scan` over a two-matmul body is the obvious fix
