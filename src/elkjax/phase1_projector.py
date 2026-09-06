@@ -33,6 +33,9 @@ Four experiments::
   matrix-valued ``jvp`` (every step from ``match`` to the Cholesky reduction is smooth --
   only the projector is not) and is then fed to the closed form.  Central FD of the same
   loss is carried alongside as the control that separates an AD bug from a broken test.
+  This experiment returned ``NaN`` at :math:`\Gamma` when it was first run, which is how
+  ``match``'s two removable poles were found (`docs/jax_port_phase1.md` §1g); it works
+  there now.
 * **D, the tolerance.**  What :math:`\epsilon\,\kappa(O)\,\lVert\tilde H\rVert` actually
   is on these runs, next to the splittings the matrices actually carry.
 

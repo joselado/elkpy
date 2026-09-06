@@ -20,7 +20,8 @@ Elk's own `apwalm` by patch 0013, so the first build step is the assembly.
 | **1a′** the assembly as a differentiable function of $k$ | **done — and it found that $d\varepsilon/dk \neq \langle p\rangle$ in a finite LAPW basis** |
 | **1d** gradient vs finite differences on displaced h-BN | not started |
 | **1e** the adversarial `soc_scale` sweep, and the required refusal | **withdrawn as written — `soc_scale` cannot move the first-variational spectrum at all** (§1f); the refusal itself is done, by cutting a real multiplet |
-| **1f** the Cholesky-reduced eigensolve wired to the safe-$K$ projector rule, on real matrices | **done — the rule is needed and it works**: 3.9e-1 (forward) / `NaN` (reverse) naive against 2.2e-11 safe, at a multiplet Elk's own matrices supply by symmetry |
+| **1f** the Cholesky-reduced eigensolve wired to the safe-$K$ projector rule, on real matrices | **done — the rule is needed and it works**: 6.7e-2 (forward) / `NaN` (reverse) naive against 4.1e-12 safe, at a multiplet Elk's own matrices supply by symmetry |
+| **1g** the two removable poles in `match` | **done — the $k$-derivative now works at $\Gamma$**, and at every $k_z=0$ point of a slab cell, which is where every multiplet is |
 
 ---
 
@@ -380,37 +381,46 @@ $\Gamma$.
 | $n_{\rm mat}$ / $n_{\rm occ}$ | 177 / 4 | 161 / 4 | 906 / 4 |
 | $\kappa(O)$, $\lVert\tilde H\rVert$ | 1.31e4, 17.89 | 4.97e3, 14.25 | 4.91e3, 58.50 |
 | tolerance $\epsilon\kappa\lVert\tilde H\rVert$ | 5.21e-11 Ha | 1.57e-11 Ha | 6.38e-11 Ha |
-| tightest split inside the window | **5.11e-15** | 2.60e-2 | 1.89e-5 |
+| tightest split inside the window | **4.58e-15** | 2.60e-2 | 1.89e-5 |
 | boundary gap | 9.26e-2 | 1.05e-1 | 2.22e-1 |
-| **A** $\lVert\tilde P_{\rm JAX}-\tilde P_{\rm Elk}\rVert_F$ | 5.0e-14 | 2.9e-14 | 9.0e-14 |
-| **B** naive forward / reverse | **3.9e-1 / `NaN`** | 3.8e-13 / 2.3e-13 | 1.1e-10 / 7.0e-11 |
-| **B** safe forward / reverse | 2.2e-11 / 2.2e-11 | 3.0e-13 / 2.3e-13 | 2.9e-13 / 2.9e-13 |
-| **C** derivative in $k$ | `NaN` (see below) | 4.6e-14 | `NaN` |
+| **A** $\lVert\tilde P_{\rm JAX}-\tilde P_{\rm Elk}\rVert_F$ | 5.8e-14 | 2.9e-14 | 8.3e-14 |
+| **B** naive forward / reverse | **6.7e-2 / `NaN`** | 7.9e-14 / 7.5e-14 | 2.0e-10 / 1.3e-11 |
+| **B** safe forward / reverse | 4.8e-12 / 4.1e-12 | 8.0e-14 / 7.8e-14 | 1.1e-13 / 1.1e-13 |
+| **C** naive derivative in $k$ | **`NaN`** | 3.2e-13 | 2.8e-12 |
+| **C** safe derivative in $k$ | 1.7e-12 | 2.6e-13 | 2.2e-12 |
+
+(The numbers are from the current code, i.e. **after** §1g removed `match`'s poles.
+Before it, the whole **C** row read `NaN` at both $\Gamma$ columns — that is how the
+poles were found, and §1g has the before/after. §1g changes rounding only, so the other
+rows moved in their last digits and nowhere else.)
 
 **A** is the study's own Phase 1 forward criterion ($<10^{-8}$), met by six
 orders, and it is a *projector* comparison because `evecfv` is arbitrary inside
 the triplet — comparing columns would fail at $\Gamma$ for a gauge reason and
-mean nothing. Elk's `evalfv` is reproduced to 4.5e-15 Ha at the same time.
+mean nothing. Elk's `evalfv` is reproduced to 5.2e-15 Ha at the same time.
 **B** is the 0b-B experiment with Elk's $\tilde H$ in place of a synthetic one:
 five random Hermitian directions, worst relative error against the
 Daleckii–Krein closed form, with central FD carried alongside as the control
-that separates "AD is broken" from "the test is broken" (it agrees to 7e-7, its
-own truncation error). **C** is the whole pipeline differentiated in $k$, with
+that separates "AD is broken" from "the test is broken" (it agrees to 3.3e-7,
+its own truncation error). **C** is the whole pipeline differentiated in $k$, with
 $d\tilde H/dk$ from a matrix-valued `jvp` fed to the same closed form —
 legitimate because every step from `match` through the Cholesky is analytic in
 $k$, so only the projector is not.
 
 **The rule is needed, and the need is graded by the splitting.** The naive
 route's error tracks $1/\delta\lambda$ across three fixtures spanning ten
-decades of it: 3.8e-13 at a 2.6e-2 Ha gap, 1.1e-10 at 1.9e-5 Ha, and complete
-failure at 5.1e-15 Ha. That is the mechanism Phase 0b identified — JAX's
+decades of it: 7.9e-14 at a 2.6e-2 Ha gap, 2.0e-10 at 1.9e-5 Ha, and complete
+failure at 4.6e-15 Ha. That is the mechanism Phase 0b identified — JAX's
 `_eigh_jvp_rule` forms $A=v^\dagger\delta Hv$ without symmetrising, so the two
 divergent terms fail to cancel by $\lVert A-A^\dagger\rVert$ — and it is
 reproduced here on matrices nobody engineered. Which face the failure wears is
-still the eigensolver's choice: forward mode returns 0.39 relative and reverse
-mode returns `NaN`, on the same matrix in the same process.
+still the eigensolver's choice: forward mode returns 6.7e-2 relative and reverse
+mode returns `NaN`, on the same matrix in the same process. Note too that the naive
+route is fine at h-BN's $\Gamma$ pair and along $k$ there: a symmetry pair split at
+1.9e-5 Ha is not a numerically degenerate one, which is the same distinction Finding 1
+draws from the other side.
 
-The safe route's 2.2e-11 at $\Gamma$ is not machine precision and should not be
+The safe route's 4e-12 at $\Gamma$ is not machine precision and should not be
 quoted as such. Inside a pair split at 5e-15 the individual eigenvectors are
 ill-determined; the projector is not, but $K_{ij}$ *varies* across the split for
 $j$ outside the window, so the ill-determined mixing does not cancel exactly.
@@ -469,9 +479,9 @@ would mean building the second-variational step, i.e. a later phase.
 
 ### Finding 3: the $k$-derivative is unavailable at $\Gamma$, and it is a removable pole
 
-Experiment **C** returns `NaN` at $\Gamma$ on both fixtures, while the *value*
-there is exact (A and B are unaffected) and central FD of the same loss is
-stable across three step sizes. The cause is in `elkjax.lapw.match`, at any
+Experiment **C** returned `NaN` at $\Gamma$ on both fixtures when it was first run,
+while the *value* there was exact (A and B were unaffected) and central FD of the same
+loss was stable across three step sizes. The cause is in `elkjax.lapw.match`, at any
 basis function whose $\mathbf G+\mathbf k$ lies on the $z$-axis, and there are
 **two independent poles** there:
 
@@ -494,15 +504,8 @@ live at high-symmetry points, and that is where the tangent is `NaN`.
 The underlying function is smooth: $j_\ell(gR)\,Y_{\ell m}(\hat g)$ is
 $\propto g^\ell Y_{\ell m}(\hat g)$ near the origin, which is a *regular solid
 harmonic* — a polynomial in the Cartesian components — times an even series in
-$g^2$. So both poles are removable in the transcription. The fix is to run
-`spherical_harmonics`' own recursion with $\cos\theta\to z$,
-$\sin\theta\,e^{i\phi}\to x+iy$ and $\beta\to\beta r^2$ (which returns
-$r^\ell Y_{\ell m}$ exactly), and to pair it with
-$j_\ell^{(i_o)}(x)/x^{\ell-i_o}$ carrying its own small-$x$ series, so that
-neither $\hat g$ nor $\lvert g\rvert$ is ever formed. That is the next step and
-is not done here; the current behaviour is **pinned by a test** that asserts the
-value is finite and the tangent is not, so the fix will announce itself by
-flipping it.
+$g^2$. So both poles are removable in the transcription. **§1g does that**, and
+the `NaN` row of the table above is what it removes.
 
 ### What is NOT settled by this
 
@@ -519,3 +522,106 @@ flipping it.
   3.6 GB at $n_{\rm mat}=906$, from reverse-mode tapes through the full
   assembly at three k-directions. The production shape is not reachable this
   way and was never meant to be (Phase 0e).
+
+---
+
+## 1g. Removing the two poles in `match`
+
+### What was at stake
+
+§1f's third finding, and it is worse than an inconvenience. The $k$-tangent of the
+assembly was `NaN` at $\Gamma$ — and at every reciprocal-lattice point, and across the
+whole $k_z=0$ plane of a slab cell — while the *value* there was exact. Multiplets live
+at high-symmetry points, so the safe-$K$ projector rule §1f had just closed and the
+$k$-derivative §1a′ had just built were usable in **disjoint** places. Neither was much
+use to the other.
+
+### The two poles, and why fixing one is not enough
+
+Elk writes the matching coefficient as a harmonic of a *direction* times a Bessel
+function of a *length*,
+
+$$b_i \;\propto\; \overline{Y_{\ell m}(\widehat{\bf G+k})}\;
+\lvert{\bf G+k}\rvert^{\,i-1} j_\ell^{(i-1)}\!\big(\lvert{\bf G+k}\rvert R_\alpha\big),$$
+
+and **both factors are singular where the vector lies on the $z$-axis**:
+$Y_{\ell m}(\hat v)$ because $\hat v$ is undefined there (for $m\neq0$ the azimuth has no
+derivative, and $\sin\theta=\sqrt{1-\cos^2\theta}$ has an infinite one at the pole), and
+$\lvert{\bf G+k}\rvert$ because $\sqrt{\cdot}$ has no derivative at zero. They are
+independent, and the second is **invisible until the first is fixed** — which is exactly
+the shape of bug this project keeps meeting, so it is recorded rather than quietly
+handled.
+
+### The regrouping
+
+The *product* is not singular. Near the origin $j_\ell(x)\propto x^\ell$, so
+
+$$\overline{Y_{\ell m}(\hat g)}\;g^{i_o}j_\ell^{(i_o)}(gR)
+= \overline{S_{\ell m}({\bf G+k})}\;R^{\,\ell-i_o}\,P_{\ell,i_o}(x),
+\qquad x^2 = R^2\,({\bf G+k})\!\cdot\!({\bf G+k}),$$
+
+with two analytic factors:
+
+- $S_{\ell m}=r^\ell Y_{\ell m}$, the **regular solid harmonic** — a polynomial in
+  $v_x,v_y,v_z$. `solid_harmonics` is `spherical_harmonics`' own recursion with three
+  substitutions, $\cos\theta\to v_z$, $\sin\theta\,e^{i\phi}\to v_x+iv_y$ and
+  $\beta\to\beta r^2$, and the same $S_{\ell,-m}=(-1)^m\overline{S_{\ell m}}$.
+- $P_{\ell,i_o}(x)=j_\ell^{(i_o)}(x)\,x^{i_o-\ell}$, which is **even** in $x$ and
+  therefore a function of $x^2$ alone — and $x^2$ is a polynomial in the Cartesian
+  components. `spherical_bessel_scaled` evaluates it from its own series
+  $\sum_n c_n(\ell)\,(\ell+2n)_{i_o}\,x^{2n}$ below $x=0.1$ and from
+  `spherical_bessel_derivative` divided by $x^{\ell-i_o}$ above it.
+
+So `match` forms **neither $\hat g$ nor $\lvert g\rvert$**, which is why `gkc` is no
+longer one of its arguments: leaving it in the signature would let a call site
+reintroduce the second pole while the first stayed fixed. `spherical_harmonics` and
+`spherical_bessel` are untouched and remain what item 0c checks; `solid_harmonics` is a
+separate function rather than a refactor of the first, deliberately, so that the
+element-wise `apwalm` comparison keeps testing the same code it always did.
+
+The identity is exact, so this changes rounding and nothing else.
+
+### Result
+
+| check | before | after |
+|---|---|---|
+| `solid_harmonics` $/\,r^\ell$ vs `spherical_harmonics`, off-axis | — | 1.3e-15 |
+| `spherical_bessel_scaled` vs the $\ell=0$ closed form, orders 0/1/2 | — | 2.7e-15 |
+| the same across its own branch cut, orders 0/1/2 | — | 2e-15 / 2e-13 / 1.5e-11 |
+| `jvp(match)` in $k$ at a basis with ${\bf G+k}=0$ | `NaN` | finite, and central FD to $<10^{-6}$ |
+| element-wise vs Elk's `apwalm`, generic $k$ | machine precision | 3.7e-15 |
+| element-wise vs Elk's `apwalm`, $\Gamma$ | *never checked* | 5.6e-16 |
+| the `dmatch` identity, forward and reverse | 7e-16 | unchanged |
+| all six assembly blocks vs Elk, three fixtures | machine precision | unchanged |
+| **C: $dP/dk$ at $\Gamma$ through the multiplet** | **`NaN`** | **1.4e-14, 3.8e-15, 1.7e-12** |
+
+The branch-cut row is the one worth reading twice. The comparison had to be made where
+*both* routes are accurate, because below $x\sim10^{-3}$ the recurrence-and-divide route
+is the wrong one — measured, it is off by 100% at $\ell=6$, $i_o=2$, $x=10^{-6}$, where
+it forms $j_6''\sim10^{-27}$ and divides by $x^4$. That is the entire reason the series
+branch exists, and it means the new route is *more* accurate near the origin than the old
+one was, not merely defined there. The growing error across orders (2e-15 → 1.5e-11) is
+`jax.jacfwd`-through-Miller's, not the series'.
+
+Both `apwalm` rows are at `apword=1` on the Si fixture; the export test's own
+two-parameter fixture (APW orders 1 and 2) still passes its 1e-11 bound at both.
+The $\Gamma$ row matters more than it looks: Elk handles ${\bf G+k}=0$ in its
+own way (`sbessel` returns $j_\ell(0)=\delta_{\ell0}$, `genylmv` picks $+z$ at the
+origin), so reproducing its array *there* is a real check on the solid-harmonic route
+rather than a restatement of the generic-$k$ one. Phase 0's first carried-forward
+finding is that a green gradient test does not validate a transcription, and this is the
+forward half standing beside the finite tangent.
+
+### What this does and does not unlock
+
+It does not make the naive eigensolve work at $\Gamma$: with the poles gone, the *naive*
+projector's $k$-derivative through the $\Gamma_{25'}$ triplet is still `NaN` in all three
+directions tried, which is asserted by its own test so that "we fixed the pole" cannot be
+mistaken for "the $k$-derivative is fine now". The two fixes are independent and both are
+needed — §1f's rule for the eigensolve, §1g's regrouping for the assembly — and only
+together do they give a projector derivative at a high-symmetry point.
+
+Still untouched: `spherical_harmonics` is *still* singular on the $z$-axis, which is
+correct for a `genylmv` transcription and is still pinned by its own test. Anything else
+that consumes it directly — Phase 4's stress moves ${\bf G+p}$ itself — has the same
+problem and the same fix available.

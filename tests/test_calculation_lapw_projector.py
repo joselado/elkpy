@@ -233,18 +233,23 @@ def test_naive_ad_fails_at_the_real_multiplet_and_not_at_the_control(silicon):
 # ------------------------------------------------------- C: the k-derivative
 
 
-def test_k_gradient_through_the_projector(silicon):
-    """The whole pipeline differentiated in k, at the generic point.
+@pytest.mark.parametrize("case", ["generic", "gamma"])
+def test_k_gradient_through_the_projector(silicon, case):
+    """The whole pipeline differentiated in k, at both points.
 
     The reference composes two exact pieces: dH~/dk from a matrix-valued `jvp`
     -- legitimate because every step from `match` through the Cholesky is
     analytic in k, so its tangent carries no degeneracy -- fed to the closed
     form for dP. Central FD of the same loss is the independent control.
 
-    Gamma is NOT used here, and the reason is a measured limitation of the
-    assembly rather than of the projector: see the pin below.
+    Gamma is the case that could not be run at all until `match` was rewritten
+    through solid harmonics: its basis contains G+k = 0, where the harmonic's
+    direction is undefined and |G+k| is sqrt' at zero. It is also the only case
+    that exercises what this whole file is about, since the multiplet is here
+    -- an INDIVIDUAL eigenvalue's k-derivative does not exist inside the
+    Gamma_25' triplet, while the occupied projector's does.
     """
-    export = silicon["generic"]
+    export = silicon[case]
     nocc = export["_nocc"]
     kc = np.asarray(export["vkc"])
     reduced, _, tol = _reduced(export)
@@ -259,6 +264,7 @@ def test_k_gradient_through_the_projector(silicon):
     dk = np.array([0.3, -0.5, 0.8])
     dk /= np.linalg.norm(dk)
     dh = np.asarray(jax.jvp(reduced_at, (jnp.asarray(kc),), (jnp.asarray(dk),))[1])
+    assert np.isfinite(dh).all()
     dh = 0.5 * (dh + dh.conj().T)
     exact = ref.directional_derivative(reduced, dh, m, occ, tol=tol)
 
@@ -283,36 +289,40 @@ def test_k_gradient_through_the_projector(silicon):
     assert _rel(fd, exact) < 1e-4
 
 
-def test_the_k_derivative_is_not_available_at_gamma(silicon):
-    """Pinned rather than left to be discovered: the assembly's k-tangent is
-    NaN at Gamma, while its VALUE there is exact.
+def test_the_naive_route_also_fails_on_the_k_derivative_at_gamma(silicon):
+    """The rule is what makes the Gamma k-derivative work, not just the pole fix.
 
-    Two poles, both in `elkjax.lapw.match` and both at a basis function whose
-    G+k lies on the z-axis -- which Gamma always has, since G = 0 is in every
-    basis, and which the whole k_z = 0 plane of a slab cell has as well. The
-    harmonics carry one (`Y_lm` has no derivative where the direction is
-    undefined; `spherical_harmonics`' own docstring pins it in isolation) and
-    |G+k| carries the other (sqrt' at 0). The underlying function is smooth --
-    j_l(gR) Y_lm(g^) is a polynomial in the Cartesian components times an even
-    series -- so this is a removable pole of the transcription, not of the
-    physics, and central FD of the same loss is stable across three steps.
-
-    This is the reason the test above uses the generic k, and it matters more
-    than it looks: multiplets live at high-symmetry points, so the safe-K rule
-    and the k-derivative are currently usable in disjoint places. When `match`
-    is rewritten through solid harmonics this assertion flips to a finite one.
+    Removing `match`'s two poles made the TANGENT of the assembly finite at
+    Gamma; it did nothing about the eigensolve downstream of it. Along a real
+    k-direction, through the real multiplet, the naive projector still fails --
+    which is what stops "we fixed the pole" from being mistaken for "the
+    k-derivative is now fine".
     """
     export = silicon["gamma"]
+    nocc = export["_nocc"]
     kc = np.asarray(export["vkc"])
-    assert np.linalg.norm(kc) == 0.0
+    reduced, _, tol = _reduced(export)
+    n = reduced.shape[0]
+    m = _observable(n)
+    occ = ref.hard_occupations(n, nocc)
+    mj = jnp.asarray(m)
 
     def reduced_at(kvec):
         return ham.cholesky_reduce(*ham.eigenproblem_at(export, kvec))[0]
 
-    value, tangent = jax.jvp(reduced_at, (jnp.asarray(kc),),
-                             (jnp.asarray([0.3, -0.5, 0.8]),))
-    assert np.isfinite(np.asarray(value)).all(), "the VALUE at Gamma is fine"
-    assert not np.isfinite(np.asarray(tangent)).all()
+    dk = np.array([0.3, -0.5, 0.8])
+    dk /= np.linalg.norm(dk)
+    dh = np.asarray(jax.jvp(reduced_at, (jnp.asarray(kc),), (jnp.asarray(dk),))[1])
+    exact = ref.directional_derivative(
+        reduced, 0.5 * (dh + dh.conj().T), m, occ, tol=tol)
+
+    def naive(t):
+        p = pj.naive_hard_window_projector(
+            reduced_at(jnp.asarray(kc) + t * jnp.asarray(dk)), nocc)
+        return jnp.real(jnp.trace(p @ mj))
+
+    value = float(jax.grad(naive)(0.0))
+    assert (not np.isfinite(value)) or _rel(value, exact) > 1e-3
 
 
 # ------------------------------------------------------------- D: the refusal

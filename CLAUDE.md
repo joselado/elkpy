@@ -1345,22 +1345,33 @@ crossing, and is withdrawn as written; its content is delivered by cutting a rea
 multiplet instead. (iii) **The $k$-tangent is `NaN` at $\Gamma$** while the value there
 is exact — see the next paragraph.
 
-**The Phase 1 blocker is now a removable pole in `match`, and there are two of them.**
-At any basis function with $\mathbf G+\mathbf k$ on the $z$-axis, $Y_{\ell m}(\hat v)$
-has no derivative (the direction is undefined) and $\lvert\mathbf G+\mathbf k\rvert$ is
-$\sqrt\cdot$ at zero; fixing only the first leaves the second, which is invisible until
-it is. $\mathbf G=0$ is in every basis, so this is every reciprocal-lattice point, and
-in a slab cell $\mathbf G=(0,0,\pm2\pi/c)$ is too, so it is the **entire $k_z=0$
-plane** — all of a 2D material's physics, the $K$ point included. Combined with (i),
-the safe-$K$ rule and the $k$-derivative are currently usable in DISJOINT places, since
-multiplets live at high-symmetry points. Both poles are removable:
-$j_\ell(gR)Y_{\ell m}(\hat g)$ is a regular solid harmonic (a polynomial in the
-Cartesian components) times an even series in $g^2$, so running
-`spherical_harmonics`' own recursion with $\cos\theta\to z$,
-$\sin\theta e^{i\phi}\to x+iy$, $\beta\to\beta r^2$ gives $r^\ell Y_{\ell m}$ exactly,
-and pairing it with $j_\ell^{(i_o)}(x)/x^{\ell-i_o}$ means neither $\hat g$ nor
-$\lvert g\rvert$ is ever formed. Two tests pin the broken behaviour and must FLIP
-rather than be deleted.
+**That third finding was a real blocker, and it is fixed (§1g).** At any basis function
+with $\mathbf G+\mathbf k$ on the $z$-axis, $Y_{\ell m}(\hat v)$ has no derivative (the
+direction is undefined) and $\lvert\mathbf G+\mathbf k\rvert$ is $\sqrt\cdot$ at zero —
+**two independent poles, and fixing only the first leaves the second, which is invisible
+until it is**. $\mathbf G=0$ is in every basis, so this was every reciprocal-lattice
+point, and in a slab cell $\mathbf G=(0,0,\pm2\pi/c)$ is too, so it was the entire
+$k_z=0$ plane — all of a 2D material's physics, the $K$ point included — which combined
+with (i) left the safe-$K$ rule and the $k$-derivative usable in DISJOINT places, since
+multiplets live at high-symmetry points. The product is smooth even though its factors
+are not, so `match` now regroups it as a **regular solid harmonic** $r^\ell Y_{\ell m}$
+(`elkjax.lapw.solid_harmonics` — `spherical_harmonics`' own recursion with
+$\cos\theta\to z$, $\sin\theta e^{i\phi}\to x+iy$, $\beta\to\beta r^2$, hence a
+polynomial in the Cartesian components) times $j_\ell^{(i_o)}(x)x^{i_o-\ell}$
+(`spherical_bessel_scaled` — even in $x$, hence a function of
+$x^2=R^2(\mathbf G+\mathbf k)\cdot(\mathbf G+\mathbf k)$ with its own small-$x$ series),
+and forms neither $\hat g$ nor $\lvert g\rvert$; `gkc` is therefore **no longer an
+argument of `match`**, since leaving it in the signature would let a call site
+reintroduce the second pole. `spherical_harmonics`/`spherical_bessel` are untouched and
+remain what item 0c checks. The identity is exact, so forward values are unchanged:
+Elk's `apwalm` element-wise at generic $k$ **and now at $\Gamma$** (a real check, since
+Elk handles $\mathbf G+\mathbf k=0$ its own way), the `dmatch` identity, and all six
+assembly blocks are still green; $dP/dk$ at $\Gamma$ through the multiplet goes from
+`NaN` to 1.4e-14. The new route is also *more* accurate near the origin than the old
+one, which loses 100% at $\ell=6,i_o=2,x=10^{-6}$ by forming $j_6''\sim10^{-27}$ and
+dividing by $x^4$. **The two fixes are independent**: with the poles gone, the *naive*
+projector's $k$-derivative at $\Gamma$ is still `NaN`, which its own test asserts so
+that "we fixed the pole" cannot be mistaken for "the $k$-derivative is fine".
 
 **Still open in Phase 1**: the radial integrals are inputs, not outputs (building them
 needs `genapwfr`/`genlofr`/`hmlrad`/`olprad` and through `vsmt` the muffin-tin potential

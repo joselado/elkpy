@@ -118,13 +118,17 @@ def test_the_continuity_check_catches_a_transposed_derivative_matrix(setup):
 
 
 def test_the_harmonic_gradient_is_nan_on_the_z_axis_and_finite_off_it(setup):
-    """Pinned so the behaviour is known rather than discovered in Phase 4.
+    """`genylmv`'s own singularity, pinned in isolation.
 
     For m != 0 the phase e^{i m phi} has no derivative where phi is undefined, and
     sin(theta) = sqrt(1 - cos^2 theta) has an infinite one at the pole.  The result is
     NaN, which is the GOOD outcome -- audible rather than a plausible finite number.
-    Item 0c never differentiates with respect to the direction of G+p, so this bites
-    Phase 4's stress and not this item, but a G-vector along z is not exotic.
+
+    This is still the honest behaviour of `spherical_harmonics`, which stays the
+    transcription of `genylmv` that item 0c checks.  It is no longer the behaviour of
+    `match`: Phase 1f measured this pole taking down the k-derivative of the whole
+    assembly at Gamma, so `match` now goes through `solid_harmonics` instead, and the
+    two tests below are the ones that pin the fixed path.
     """
     harmonic = lambda v: jnp.real(lapw.spherical_harmonics(2, v, t4pil=False)[
         lapw.lm_index(1, 1)])
@@ -180,3 +184,98 @@ def test_at_the_full_g_plus_k_set():
     assert phase0c.experiment_matching_condition(big) < 1e-10
     for row in phase0c.experiment_dmatch(big):
         assert row["error"] < 1e-13
+
+
+# ---------------------------------------------------------------------------
+# The two removable poles, and the route that avoids them (Phase 1f)
+# ---------------------------------------------------------------------------
+
+
+def test_solid_harmonics_are_the_spherical_ones_times_r_to_the_l(setup):
+    """Ties the new function to the already-verified one, off-axis where both hold.
+
+    `solid_harmonics` is a separate function rather than a refactor of
+    `spherical_harmonics`, deliberately: that one is what item 0c and the element-wise
+    `apwalm` comparison check, and reordering its products would move its last bits for
+    nothing. This identity is what stands in for having refactored them together.
+    """
+    lmax = 6
+    rng = np.random.default_rng(0)
+    worst = 0.0
+    for scale in (1e-3, 1.0, 30.0):
+        for _ in range(6):
+            v = jnp.asarray(rng.normal(size=3) * scale)
+            radius = float(jnp.linalg.norm(v))
+            spherical = np.asarray(lapw.spherical_harmonics(lmax, v))
+            solid = np.asarray(lapw.solid_harmonics(lmax, v))
+            powers = np.concatenate(
+                [np.full(2 * l + 1, radius ** l) for l in range(lmax + 1)])
+            reference = spherical * powers
+            worst = max(worst,
+                        np.abs(solid - reference).max() / np.abs(reference).max())
+    assert worst < 1e-14
+
+
+def test_the_scaled_bessel_agrees_with_the_recurrence_where_both_are_accurate():
+    """P_{l,io}(x) = j_l^(io)(x) x^(io-l), across its own branch cut.
+
+    The comparison has to be made where BOTH routes are good. Below x ~ 1e-3 the
+    recurrence-and-divide route is the inaccurate one -- measured, it is wrong by 100%
+    at l=6, order=2, x=1e-6, because it forms j_6'' ~ 1e-27 and divides by x^4 -- which
+    is the entire reason the series branch exists. So the series is checked against the
+    recurrence at moderate x (by raising its own threshold so it is used there), and
+    against the l=0 closed form.
+    """
+    lmax = 6
+    for order in (0, 1, 2):
+        for x in (0.2, 0.5, 1.0, 2.0, 3.0):
+            series = np.asarray(lapw.spherical_bessel_scaled(
+                lmax, jnp.asarray(x ** 2), order, threshold=5.0, terms=30))
+            recurrence = np.asarray(lapw.spherical_bessel_scaled(
+                lmax, jnp.asarray(x ** 2), order))
+            assert np.abs(series - recurrence).max() / np.abs(recurrence).max() < 1e-10
+
+    x = 0.37
+    sine, cosine = np.sin(x), np.cos(x)
+    closed = {0: sine / x,
+              1: (cosine / x - sine / x ** 2) * x,
+              2: (-sine / x - 2 * cosine / x ** 2 + 2 * sine / x ** 3) * x ** 2}
+    for order, expected in closed.items():
+        got = float(np.asarray(lapw.spherical_bessel_scaled(
+            lmax, jnp.asarray(x ** 2), order, threshold=5.0, terms=30))[0])
+        assert got == pytest.approx(expected, rel=1e-13)
+
+
+def test_match_is_differentiable_in_k_at_a_zero_length_basis_vector():
+    """The fix, at the configuration that broke: a basis containing G+k = 0.
+
+    Both poles are exercised at once. The origin is on the z-axis (so the harmonic's
+    direction is undefined) AND has |G+k| = 0 (so sqrt' is infinite), and the second is
+    invisible until the first is fixed -- which is why this asserts a finite tangent
+    rather than merely a finite harmonic. Central finite differences of the same
+    function are the control: `match` is genuinely smooth here, so they converge.
+    """
+    lmax, rmt, omega = 4, 2.0, 270.0
+    gvec = jnp.asarray([[0.0, 0.0, 0.0],          # both poles
+                        [0.0, 0.0, 0.61],         # z-axis, nonzero length
+                        [0.61, 0.0, 0.0],
+                        [-0.3, 0.42, -0.61]])
+    matrices = [jnp.asarray(phase0c.radial_derivative_matrix(l, 2 if l <= 2 else 1, rmt))
+                for l in range(lmax + 1)]
+    atposc = jnp.asarray([0.7, -1.1, 0.4])
+    direction = jnp.asarray([0.3, -0.5, 0.8])
+
+    def coefficients(kc):
+        return lapw.match(lmax, gvec + kc[None, :], atposc, matrices, rmt, omega)
+
+    origin = jnp.zeros(3)
+    value, tangent = jax.jvp(coefficients, (origin,), (direction,))
+    assert np.isfinite(np.asarray(value)).all()
+    assert np.isfinite(np.asarray(tangent)).all()
+    assert np.abs(np.asarray(tangent)).max() > 1e-6
+
+    for step in (1e-4, 1e-5):
+        difference = (np.asarray(coefficients(origin + step * direction))
+                      - np.asarray(coefficients(origin - step * direction))) / (2 * step)
+        error = np.abs(difference - np.asarray(tangent)).max()
+        assert error < 1e-6 * np.abs(np.asarray(tangent)).max()

@@ -86,6 +86,11 @@ def exported(request, _module_tmp):
         _module_tmp / f"si_apword{apword}", xc="PW", ngridk=(4, 4, 4))
     with calculation.eigenstate_session() as session:
         data = session.lapw_problem(KPOINT)
+        # Gamma rides along under a key of its own: it is the k-point whose
+        # basis contains G+k = 0, where `match`'s two removable poles live
+        # (docs/jax_port_phase1.md section 1f), and the element-wise
+        # comparison has to be made THERE as well as at a generic point.
+        data["_gamma"] = session.lapw_problem((0.0, 0.0, 0.0))
     assert data["apwordmax"] == apword
     return data
 
@@ -207,10 +212,44 @@ def test_jax_match_reproduces_elks_apwalm(exported):
         derivative_matrices = [
             jnp.asarray(m, dtype=jnp.complex128) for m in exported["dmat"][atom]]
         computed = np.asarray(match(
-            exported["lmaxapw"], vgkc, gkc,
+            exported["lmaxapw"], vgkc,
             jnp.asarray(exported["atposc"][:, atom]), derivative_matrices,
             float(exported["rmt"][species]), float(exported["omega"])))
         reference = exported["apwalm"][:, :, :, atom]
+        scale = np.abs(reference).max()
+        assert np.abs(computed - reference).max() < 1e-11 * scale
+
+
+def test_jax_match_reproduces_elks_apwalm_at_gamma(exported):
+    """The same element-wise comparison at the k-point that has G+k = 0 in it.
+
+    Elk handles the zero-length basis vector in its own way -- `sbessel` returns
+    j_l(0) = delta_{l0} and `genylmv` picks the +z direction at the origin -- so
+    reproducing its array there is a real check on the solid-harmonic route, not a
+    restatement of the generic-k one. It is also the forward half that has to stand
+    beside the finite k-tangent asserted in tests/test_jax_lapw.py: Phase 0's first
+    carried-forward finding is that a green gradient test does not validate a
+    transcription.
+    """
+    pytest.importorskip("jax")
+    import jax.numpy as jnp
+
+    import elkjax  # noqa: F401
+    from elkjax.lapw import match
+
+    gamma = exported["_gamma"]
+    ngp = gamma["ngp"]
+    vgkc = jnp.asarray(np.ascontiguousarray(gamma["vgpc"][:, :ngp].T))
+    assert np.abs(np.asarray(vgkc)).sum(axis=1).min() == 0.0     # G+k = 0 is in it
+    for atom in range(gamma["natmtot"]):
+        species = gamma["idxis"][atom] - 1
+        derivative_matrices = [
+            jnp.asarray(m, dtype=jnp.complex128) for m in gamma["dmat"][atom]]
+        computed = np.asarray(match(
+            gamma["lmaxapw"], vgkc,
+            jnp.asarray(gamma["atposc"][:, atom]), derivative_matrices,
+            float(gamma["rmt"][species]), float(gamma["omega"])))
+        reference = gamma["apwalm"][:, :, :, atom]
         scale = np.abs(reference).max()
         assert np.abs(computed - reference).max() < 1e-11 * scale
 

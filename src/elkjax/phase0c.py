@@ -93,7 +93,7 @@ def radial_derivative_matrix(l, order, rmt):
 
 def apwalm(setup, atposc=None, t4pil=True):
     """``match`` at this setup, optionally at a displaced atomic position."""
-    return lapw.match(setup["lmax"], setup["vgkc"], setup["gkc"],
+    return lapw.match(setup["lmax"], setup["vgkc"],
                       setup["atposc"] if atposc is None else atposc,
                       setup["matrices"], setup["rmt"], setup["omega"], t4pil)
 

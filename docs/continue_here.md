@@ -10,8 +10,9 @@ exists and points at an older commit; deleting it is safe.
 checked against Elk element-wise (`docs/jax_port_phase1.md`, patch 0014), the assembly
 is differentiable in $k$, and the eigensolve is now wired to the safe-$K$ projector rule
 and measured at a real multiplet (§1f). The only open Phase 0 item is still 0d's timing,
-which needs a GPU. **The Phase 1 blocker is now a removable pole in `match`** — the
-$k$-tangent is `NaN` at $\Gamma$ and across every $k_z=0$ plane; see §3's ranked item 2.
+which needs a GPU. Doing that turned up a removable pole in `match` that made the
+$k$-tangent `NaN` at $\Gamma$ and across every $k_z=0$ plane; **that is fixed too**
+(§1g), so the projector derivative now works where the multiplets are.
 
 ```
 NEW      Wire the eigensolve to the safe-K projector rule      src/elkjax/phase1_projector.py
@@ -240,39 +241,51 @@ Weinert Poisson, XC) and two Phase 1 items are reachable without it.
 
 1. **~~Wire the Cholesky-reduced eigensolve to the safe-$K$ projector rule.~~ DONE**
    (`docs/jax_port_phase1.md` §1f). The rule is needed and it works on Elk's own
-   matrices: at bulk Si's $\Gamma_{25'}$ triplet the naive route is wrong by 3.9e-1 in
-   forward mode and returns `NaN` in reverse, against 2.2e-11 for the safe one; at a
-   generic $k$ both agree to 2e-13, which is what makes it a measurement of the rule
-   rather than of the fixture. The refusal is in (`occupied_window`), and the
-   projector reproduces Elk's own occupied subspace to 5e-14.
+   matrices: at bulk Si's $\Gamma_{25'}$ triplet the naive route is wrong by 6.7e-2 in
+   forward mode and returns `NaN` in reverse, against 4.1e-12 for the safe one; at a
+   generic $k$ both agree to 8e-14, which is what makes it a measurement of the rule
+   rather than of the fixture. The refusal is `occupied_window`, and the projector
+   reproduces Elk's own occupied subspace to 6e-14.
 
-2. **Remove the two poles in `elkjax.lapw.match`.** This is now the blocker, and it
-   was found by (1): the $k$-tangent of the assembly is `NaN` at $\Gamma$ — and at
-   **every $k_z=0$ point of a slab cell**, since $\mathbf G=(0,0,\pm2\pi/c)$ is then in
-   the basis — while the value there is exact. Two independent causes, both at a basis
-   function with $\mathbf G+\mathbf k$ on the $z$-axis: $Y_{\ell m}(\hat v)$ has no
-   derivative where the direction is undefined, and $\lvert\mathbf G+\mathbf k\rvert$
-   is $\sqrt\cdot$ at zero. **Fixing only the first leaves the second**, and the second
-   is invisible until it is. Both are removable — $j_\ell(gR)Y_{\ell m}(\hat g)$ is a
-   regular solid harmonic times an even series in $g^2$ — by running
-   `spherical_harmonics`' own recursion with $\cos\theta\to z$,
-   $\sin\theta e^{i\phi}\to x+iy$, $\beta\to\beta r^2$ (which yields
-   $r^\ell Y_{\ell m}$ exactly) and pairing it with $j_\ell^{(i_o)}(x)/x^{\ell-i_o}$
-   carrying its own small-$x$ series. Keep `spherical_harmonics` as the `genylmv`
-   transcription the 0c tests check; add `solid_harmonics` beside it. The checks that
-   must go with it: `solid/r^l == spherical` off-axis; the existing element-wise
-   `apwalm` comparison against Elk still green **and repeated at $\Gamma$**; the
-   `dmatch` identity untouched; `jvp(match)` in $k$ at $\Gamma$ finite and agreeing
-   with central FD of the matrix elements. Two tests currently pin the broken
-   behaviour and must flip rather than be deleted
-   (`test_calculation_lapw_projector.py::test_the_k_derivative_is_not_available_at_gamma`
-   and the $z$-axis pin in `test_jax_lapw.py`).
+2. **~~Remove the two poles in `elkjax.lapw.match`.~~ DONE** (§1g). The $k$-tangent of
+   the assembly was `NaN` at $\Gamma$ — and at **every $k_z=0$ point of a slab cell**,
+   since $\mathbf G=(0,0,\pm2\pi/c)$ is then in the basis — while the value there was
+   exact. Two independent causes, both at a basis function with $\mathbf G+\mathbf k$ on
+   the $z$-axis: $Y_{\ell m}(\hat v)$ has no derivative where the direction is undefined,
+   and $\lvert\mathbf G+\mathbf k\rvert$ is $\sqrt\cdot$ at zero. Fixing only the first
+   leaves the second, which is invisible until it is. `match` now regroups the product as
+   a regular solid harmonic (`solid_harmonics`, a polynomial in the Cartesian components)
+   times $j_\ell^{(i_o)}(x)x^{i_o-\ell}$ (`spherical_bessel_scaled`, a function of $x^2$
+   alone), and forms neither $\hat g$ nor $\lvert g\rvert$ — which is why `gkc` is no
+   longer an argument of `match`. `spherical_harmonics`/`spherical_bessel` are untouched
+   and still what item 0c checks. Forward values are unchanged: Elk's `apwalm`
+   element-wise at generic $k$ **and now at $\Gamma$**, the `dmatch` identity, and all
+   six assembly blocks are all still green. $dP/dk$ at $\Gamma$ through the multiplet
+   goes from `NaN` to 1.4e-14.
 
-   Why it matters more than it looks: multiplets live at high-symmetry points, so
-   after (1) the safe-$K$ rule and the $k$-derivative are usable in **disjoint**
-   places.
+   One caution: the *naive* projector's $k$-derivative at $\Gamma$ is **still** `NaN`.
+   The two fixes are independent, and only together give a projector derivative at a
+   high-symmetry point.
 
-3. **~~The adversarial `soc_scale` sweep.~~ WITHDRAWN as written** — `soc_scale`
+3. **Next: smeared occupations, on a real metallic LAPW matrix.** Everything in §1f is
+   a hard integer window, and for one of those the tolerance turns out to be **inert**:
+   both branches of the kernel are identically zero for a same-side pair ($f_i-f_j=0$
+   exactly, and $f'=0$), so §1f's plateau says nothing. With Fermi-Dirac occupations
+   $f_i-f_j$ is a genuine small number and the branch matters — which makes a metal the
+   only place the threshold is actually load-bearing. `smeared_projector` exists and is
+   checked at synthetic $S$ (0b-E, 0b-F); it has never seen an Elk matrix. Needs a
+   metallic fixture and nothing else — no new Fortran, no Phase 2. Note the fixed-$\mu$
+   caveat: the self-consistent Fermi level adds a second constraint whose rule §8b gives
+   in closed form, $d\mu/d\varepsilon_i = w_if'_i/\sum_j w_jf'_j$, still untested.
+
+4. **Then: second derivatives on a real LAPW matrix.** `hard_window_projector`'s JVP
+   calls `eigh` itself, so a second derivative falls back on JAX's default rule;
+   `sign_projector` (0a′) is the eigensolver-free route and has only ever run on the
+   toy. On an all-electron matrix its Newton–Schulz step count is set by the **deepest
+   state in the window**, not by the valence bandwidth, so this is as much a cost
+   measurement as a correctness one. Also self-contained.
+
+5. **~~The adversarial `soc_scale` sweep.~~ WITHDRAWN as written** — `soc_scale`
    cannot move the first-variational spectrum at all. `socfr` enters only
    `eveqnsv`; it appears zero times in `hmlfv`/`olpfv`/`hmlaa`/`hmlalo`/`hmllolo`/
    `olpaa`/`olpalo`/`olplolo`/`eveqnfv`/`hmlrad`/`olprad` (grep-verified). The
@@ -282,7 +295,7 @@ Weinert Poisson, XC) and two Phase 1 items are reachable without it.
    cutting Si's $\Gamma_{25'}$ triplet instead, with no extra ground state.
    Reinstating a continuous sweep needs the second-variational step.
 
-4. **Not yet: the position derivative.** It is the study's stated Phase 1 gradient
+6. **Not yet: the position derivative.** It is the study's stated Phase 1 gradient
    criterion, but moving an atom moves the muffin-tin potential and hence the radial
    integrals, which `hamiltonian.py` imports — so an honest $d\varepsilon/d\mathbf R$
    needs Phase 2's `hmlrad`/`olprad`, not just AD plumbing. The $k$-derivative was

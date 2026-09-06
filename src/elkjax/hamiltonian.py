@@ -458,7 +458,6 @@ def matching_coefficients(export, vgkc):
     """
     from . import lapw
 
-    gkc = jnp.linalg.norm(vgkc, axis=1)
     idxis = np.asarray(export["idxis"]) - 1
     atposc = np.asarray(export["atposc"])
     rmt = np.asarray(export["rmt"])
@@ -468,7 +467,7 @@ def matching_coefficients(export, vgkc):
     for ias in range(int(export["natmtot"])):
         dmat = [jnp.asarray(m, dtype=complex) for m in export["dmat"][ias]]
         per_atom.append(lapw.match(
-            lmaxapw, vgkc, gkc, jnp.asarray(atposc[:, ias]), dmat,
+            lmaxapw, vgkc, jnp.asarray(atposc[:, ias]), dmat,
             float(rmt[int(idxis[ias])]), omega))
     return jnp.stack(per_atom, axis=-1)     # (ngp, ordmax, lmmaxapw, natmtot)
 
