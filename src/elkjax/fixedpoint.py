@@ -43,7 +43,8 @@ import jax.numpy as jnp
 __all__ = ["implicit_fixed_point", "iterate", "adjoint_residual"]
 
 
-def iterate(step, theta, v0, *, mixing=0.5, tol=1e-12, maxiter=500, history=0):
+def iterate(step, theta, v0, *, mixing=0.5, tol=1e-12, maxiter=500, history=0,
+            ridge=1e-10):
     r"""Solve :math:`v=F(v;\theta)` by damped iteration, or Anderson if ``history>0``.
 
     ``mixing`` is Elk's ``beta0`` in spirit: :math:`v\leftarrow(1-\beta)v+\beta F(v)`.
@@ -67,13 +68,13 @@ def iterate(step, theta, v0, *, mixing=0.5, tol=1e-12, maxiter=500, history=0):
         if len(iterates) > keep:
             iterates, residuals = iterates[-keep:], residuals[-keep:]
         if history and len(iterates) > 1:
-            v = _anderson(iterates, residuals, mixing)
+            v = _anderson(iterates, residuals, mixing, ridge)
         else:
             v = v + mixing * residual
     return v, maxiter, norm
 
 
-def _anderson(iterates, residuals, mixing):
+def _anderson(iterates, residuals, mixing, ridge=1e-10):
     r"""Least-squares extrapolation over the stored ``(x_k, r_k)`` pairs.
 
     Minimise :math:`\|\sum_k\alpha_kr_k\|` subject to :math:`\sum_k\alpha_k=1`, then take
@@ -85,7 +86,7 @@ def _anderson(iterates, residuals, mixing):
     x = jnp.stack(iterates, axis=1)
     gram = r.T @ r
     scale = jnp.trace(gram) / gram.shape[0]
-    weights = jnp.linalg.solve(gram + 1e-10 * scale * jnp.eye(gram.shape[0]),
+    weights = jnp.linalg.solve(gram + ridge * scale * jnp.eye(gram.shape[0]),
                                jnp.ones(gram.shape[0]))
     weights = weights / jnp.sum(weights)
     return x @ weights + mixing * (r @ weights)

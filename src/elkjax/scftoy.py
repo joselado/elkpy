@@ -26,7 +26,11 @@ level is exactly two-fold — which is what spin degeneracy in an ``nspinor=1`` 
 and the reason the study says "crystal symmetry makes degeneracy the normal case".
 Tuning a parameter to make two levels cross would not survive the SCF moving :math:`v`;
 a symmetry does.  ``rotate=False`` leaves it block-diagonal and therefore *bitwise*
-degenerate; ``rotate=True`` splits it at :math:`\epsilon\|h\|` like a real assembly.
+degenerate.  ``rotate=True`` was meant to split it at :math:`\epsilon\|h\|` like a real
+assembly, and does so at some sizes and not others: measured here, XLA's ``eigh``
+returns a splitting of 1.9e-16 at :math:`m=6`, 3.9e-16 at :math:`m=12`, and **exactly
+zero** at :math:`m=8`.  So the "rotated" and "bitwise" cases are not a controlled
+distinction — which is the same backend-dependence Phase 0b measures directly.
 
 **Whether the perturbation respects that symmetry decides everything.**  With
 ``break_symmetry=True`` the parameter couples to a general Hermitian :math:`W` on the
@@ -67,7 +71,8 @@ class ScfToy:
     rotation: np.ndarray = None   # (gm, gm) unitary, used when degeneracy > 1
     tol: float = 1e-11
     smearing: tuple = None        # (mu, width) for Fermi-Dirac, else a hard window
-    rule: str = "safe"            # "naive" swaps in the plain transcription, as a control
+    rule: str = "safe"            # "naive" is the control; "sign" the eigensolver-free route
+    sign_steps: int = 30          # Newton-Schulz iterations when rule == "sign"
     w_full: np.ndarray = None     # a SYMMETRY-BREAKING perturbation, on the doubled space
     m_full: np.ndarray = None     # ... and a symmetry-breaking observable
 
@@ -116,6 +121,9 @@ class ScfToy:
         if self.smearing is None:
             if self.rule == "naive":
                 return pj.naive_hard_window_projector(h, self.degeneracy * self.nocc)
+            if self.rule == "sign":
+                return pj.sign_projector(h, self.degeneracy * self.nocc,
+                                         steps=self.sign_steps)
             return pj.hard_window_projector(h, self.degeneracy * self.nocc, self.tol)
         mu, width = self.smearing
         if self.rule == "naive":
@@ -246,7 +254,8 @@ class ScfToy:
 
 
 def build(size=8, nocc=3, seed=0, degeneracy=1, rotate=True, coupling=0.25,
-          smearing=None, gap=1.0, tol=1e-11, rule="safe", break_symmetry=False):
+          smearing=None, gap=1.0, tol=1e-11, rule="safe", break_symmetry=False,
+          sign_steps=30):
     """A reproducible instance with a gapped window and a convergent fixed point.
 
     ``gap`` is pushed into the *unperturbed* block so the occupied window has somewhere
@@ -277,4 +286,5 @@ def build(size=8, nocc=3, seed=0, degeneracy=1, rotate=True, coupling=0.25,
         m_full = ref.random_hermitian_direction(big, seed + 12) * np.sqrt(big)
     return ScfToy(h0=h0, w=w, kernel=kernel, observable=m, nocc=nocc,
                   degeneracy=degeneracy, rotation=rotation, tol=tol,
-                  smearing=smearing, rule=rule, w_full=w_full, m_full=m_full)
+                  smearing=smearing, rule=rule, w_full=w_full, m_full=m_full,
+                  sign_steps=sign_steps)

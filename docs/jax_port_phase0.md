@@ -19,7 +19,7 @@ it, and `XLA_FLAGS=--xla_cpu_multi_thread_eigen=false` changes nothing). Peak RS
 |---|---|
 | 0b — safe-$K$ projector rule | **settled at synthetic $S$, below.** The rule is necessary and it works; item 0b(ii)'s *real* Cholesky-reduced LAPW overlap is still Phase 1's first measurement |
 | 0a — reverse-mode implicit diff through the SCF fixed point | **settled, below.** It works, and it needs 0b's rule |
-| 0a′ — the same at second order | **settled, below.** Blocked by the degeneracy, not by the fixed point |
+| 0a′ — the same at second order | **settled, below.** Blocked with an `eigh`-based projector; **works** with an eigensolver-free one |
 | 0c — `jax.jvp(match)` vs `dmatch.f90` | not started |
 | 0d — `vmap(eigh)` vs `lax.map` on a GPU | deferred: no GPU on this machine |
 | 0e — compile time and peak memory at production shapes | AOT-only (`elkjax.memory.compiled_cost`) |
@@ -48,10 +48,13 @@ self-consistency is doing real work, not supplying a perturbative correction.
 The degeneracy is engineered by **doubling**, $\mathcal L[h]=Q(\mathbb 1_2\otimes h)Q^\dagger$,
 so every level is exactly two-fold. That is what spin degeneracy in an `nspinor=1` code
 is, and unlike tuning two levels to cross it survives the SCF moving $v$. Four spectra
-are run: none, doubled and rotated, doubled and block-diagonal (bitwise degenerate), and
-doubled with a **symmetry-breaking** $W$ that couples the partners — the last being what
-a displacement or a strain lowering a crystal symmetry does, i.e. the forces-and-phonons
-case.
+are run: none, doubled and rotated, doubled and block-diagonal, and doubled with a
+**symmetry-breaking** $W$ that couples the partners — the last being what a displacement
+or a strain lowering a crystal symmetry does, i.e. the forces-and-phonons case.
+(The rotated and block-diagonal rows were meant to separate a roundoff-split degeneracy
+from a bitwise one. They do not: XLA's `eigh` returns splittings of 1.9e-16 at $m=6$ and
+3.9e-16 at $m=12$ but **exactly zero** at $m=8$, which is the size used in the table
+below — the backend-dependence §0b measures directly, showing up again.)
 
 The reference is a dense implicit-function-theorem solve in NumPy from the closed-form
 projector derivative: no autodiff, LU instead of GMRES. Central FD of the converged
@@ -89,8 +92,21 @@ shape of mistake as 0b's single-diagonal-direction check. Pinned as
 
 ### The three properties that need no reference value
 
-- **Mixer independence.** $F$ is defined without the mixer, so the gradient must not see
-  it. Linear mixing and Anderson reach points 3.7e-13 apart and gradients 2.5e-13 apart.
+- **Mixer independence — and what it is worth.** Linear mixing and Anderson reach points
+  3.7e-13 apart and implicit gradients 2.5e-13 apart. But that agreement is structural,
+  not evidence: the `custom_vjp` backward pass is handed only $(\theta, v^*)$, so it
+  *cannot* see the mixer. It pins $v^*$. The test with teeth is study §8(a)'s own —
+  compare two **unrolled** mixers — and there the effect is far larger than §8(a)'s
+  measured 1e-3. Unrolled linear mixing converges normally (relative gradient error
+  3.8e-5 at 160 steps, 7.7e-13 at 320). Unrolled **Anderson** reaches a forward value
+  good to 1.8e-13 while its gradient is wrong by $10^{17}$ to $10^{32}$ relative, and
+  that survives a five-decade sweep of the mixer's internal ridge, so it is not a
+  regularisation artefact: the extrapolation is self-correcting forwards and expanding
+  in its linearisation, and reverse mode multiplies a few hundred of those Jacobians.
+  **This is the objection that matters for Elk**, whose default `mixtype=3` is a Broyden
+  scheme built on the same shape of `dgetrf`/`dgetri` history solve. Stated as measured
+  with this Anderson implementation; a QR-based or restarted variant might differ, but
+  the implicit route is indifferent by construction.
 - **Exactness only *at* a fixed point.** The gradient error against the fully converged
   answer tracks the SCF residual linearly — 2.3e-4, 2.4e-6, 2.3e-8, 2.4e-10, 2.0e-12 at
   residuals 8.9e-5 … 9.0e-13 — while agreeing with the IFT solve *at whatever point was
@@ -110,35 +126,85 @@ electron number adds a second constraint with its own closed-form rule
 
 ## 0a′. Second order
 
-**Blocked by the degeneracy, not by the fixed point** — which localises the work rather
-than killing it.
+**It works — but not through an `eigh`-based projector.** The blocker turned out to be
+one localised piece of machinery, and replacing it answers the item.
 
-| route | no degeneracy | doubled |
-|---|---|---|
-| `grad(grad)` (reverse-over-reverse) | $-0.030860631613$ | `NaN` |
-| `jacrev(jacrev)` | $-0.030860631613$ | `NaN` |
-| `jax.hessian`, `jacfwd(grad)` | `TypeError` | `TypeError` |
-| central FD of $dL/d\theta$ | $-0.030860620514$ | $-0.029246157241$ |
+### Where it is blocked, and where it is not
 
-Three readings, in order of importance:
+All on the symmetry-broken fixed point unless the column says otherwise; FD at
+$h=10^{-5}$.
 
-1. **Reverse-over-reverse through the `custom_vjp` fixed point works**, matching FD of
+| route | no degeneracy | doubled, `eigh` rule | doubled, sign projector |
+|---|---|---|---|
+| `grad(grad)` (reverse-over-reverse) | $-0.030860631613$ | `NaN` | $-0.878932465536$ |
+| `jacrev(jacrev)` | $-0.030860631613$ | `NaN` | $-0.878932465536$ |
+| `jax.hessian`, `jacfwd(grad)` | `TypeError` | `TypeError` | `TypeError` |
+| central FD of $dL/d\theta$ | $-0.030860631609$ | $-0.878932466358$ | $-0.878932466580$ |
+
+1. **Reverse-over-reverse through the `custom_vjp` fixed point works** — matching FD of
    the first derivative to 3.6e-7 (FD truncation at $h=10^{-3}$). The implicit-diff
-   machinery is twice differentiable.
-2. **What fails is the safe-$K$ rule's own second derivative.** Its JVP body calls
-   `jnp.linalg.eigh`, so differentiating it again falls back on JAX's default eigenvector
-   rule and meets the multiplet. The second derivative *exists* — FD returns a finite
-   number — so this is a fixable implementation gap, not an ill-posed quantity. The fix
-   is a rule whose JVP body is itself custom-ruled.
-3. **`jax.hessian` raising `TypeError` is a JAX limitation and not a result.** It is
-   `jacfwd(jacrev)`, and a `custom_vjp` function cannot be forward-differentiated at all
-   — the same shape of trap as the study's own warning about `lax.custom_root` raising
-   `NotImplementedError`. Reporting it as a kill would be wrong. A `custom_jvp` on the
-   fixed point, or a forward-over-forward Hessian, would sidestep it.
+   machinery is twice differentiable; the fixed point is not the problem.
+2. **What failed is the safe-$K$ rule's own second derivative.** Its JVP body calls
+   `jnp.linalg.eigh`, so differentiating it again falls back on JAX's default
+   eigenvector rule and meets the multiplet — `NaN` at the size where the spectrum comes
+   back bitwise degenerate, and a wrong finite number (3.3% at $m=6$) where it does not.
+   The second derivative demonstrably *exists*: FD returns a finite, convergent number.
+3. **`jax.hessian` raising `TypeError` is a JAX limitation, not a result.** It is
+   `jacfwd(jacrev)`, and a `custom_vjp` cannot be forward-differentiated at all — the
+   same shape of trap as the study's warning about `lax.custom_root` raising
+   `NotImplementedError`. Use `grad(grad)`; reporting the `TypeError` as a kill would
+   be wrong.
 
-Study §6 calls 0a′ "the item that actually decides the full port over the hybrid". On
-this evidence it is not decided either way yet: the blocker is one identified, local
-piece of missing machinery.
+### The fix: a projector with no eigensolve in it
+
+For a hard window with a gapped boundary,
+
+$$
+P = \tfrac12\big(\mathbb 1 - \mathrm{sign}(H-\mu\mathbb 1)\big),
+$$
+
+with $\mu$ anywhere in the gap and the matrix sign from Newton-Schulz iteration
+$X\leftarrow\tfrac12(3X-X^3)$ started at $X_0=(H-\mu)/\|H-\mu\|_2$
+(`elkjax.projector.sign_projector`). This is a chain of matrix products: no
+eigendecomposition, therefore no gauge to be arbitrary and no $1/(\lambda_i-\lambda_j)$
+anywhere, and JAX differentiates it natively to any order.
+
+Two shortcuts in it are **exact rather than approximations**: $P$ is locally constant in
+$\mu$ while the gap stays open, so taking $\mu$ from a `stop_gradient`-ed spectrum loses
+nothing (and keeps the ill-posed derivative of an individual eigenvalue out of the graph);
+and $\mathrm{sign}(A/s)=\mathrm{sign}(A)$, so the normalisation is `stop_gradient`-ed too.
+
+Measured, on the same exactly-degenerate, symmetry-broken fixed point:
+
+- $\|P_{\rm sign}-P_{\rm eigh}\|=2.0\times10^{-15}$, converged in 10 Newton-Schulz steps
+  at this gap-to-norm ratio.
+- Its **first** derivative equals the safe-$K$ rule's to 1e-10 — which makes it a *third*,
+  eigensolver-free code path confirming §0b, not a restatement of it. The naive rule
+  disagrees with both by 31% on the same matrices.
+- Its **second** derivative through the implicit fixed point is $-0.878932465536$ against
+  central FD's $-0.878932466580$, a relative agreement of 1.2e-9 where the `eigh`-based
+  rule gives `NaN`. On the smaller instance the FD step was swept: relative error
+  5.5e-4, 5.5e-6, 5.5e-8, 5.6e-10 for $h=10^{-2}\ldots10^{-5}$ — textbook $O(h^2)$, i.e.
+  FD converging onto the AD value rather than the reverse.
+- §0b's padding trap, $H_{\rm pad}=E_{\rm big}\mathbb 1$, goes through unchanged: the
+  first derivative matches the closed form exactly and the second is finite, where the
+  naive rule returns `NaN`. The pad block is far from $\mu$ and the sign function does
+  not care that it is degenerate.
+
+### What this costs, and what it does not cover
+
+The Newton-Schulz loop is unrolled — roughly $\log(\|H\|/\Delta)/\log(3/2)$ iterations
+for a gap $\Delta$, so an all-electron spectrum spanning 2500 Ha with a 1 eV gap would
+need order 30 and each is three $n^3$ matmuls. That is a real cost against one
+diagonalisation, and it is exactly the unrolled tape the study warns about at production
+shapes; whether it is affordable is Phase 0e's question, not this one. **Hard windows
+only**: smeared occupations would need a Chebyshev expansion of the Fermi function
+instead, which is separate work.
+
+So study §6's "the item that actually decides the full port over the hybrid" is answered
+in the affirmative — second derivatives through the SCF fixed point are available — with
+the qualification that they need a projector built for the purpose, and that this has
+been shown on a toy, not on an LAPW Hamiltonian.
 
 ---
 
@@ -306,8 +372,9 @@ Berry curvature (CLAUDE.md §13): window the whole degenerate group together.
 
 - **The rule is first-order only.** Its JVP body calls `jnp.linalg.eigh`, so
   differentiating it a second time falls back on JAX's default eigenvector rule and the
-  hazard returns. Measured in 0a′ above: reverse-over-reverse returns `NaN` on a
-  degenerate spectrum while the second derivative demonstrably exists.
+  hazard returns. Measured in 0a′ above; the answer there is to use `sign_projector`
+  instead when a second derivative is wanted, at the cost of an unrolled Newton-Schulz
+  loop and hard windows only.
 - **$\mu$ is held fixed** in the smeared projector. The self-consistent Fermi level has
   its own closed-form rule ($d\mu/d\varepsilon_i = w_if'_i/\sum_j w_jf'_j$, §8b) and
   belongs to Phase 0a, where the electron-number constraint enters.

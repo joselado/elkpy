@@ -60,7 +60,7 @@ def gradient(toy, theta=0.0, quantity="loss", **kwargs):
 
 
 def unrolled_gradient(toy, theta=0.0, quantity="loss", mixing=0.4, iterations=200,
-                      history=0):
+                      history=0, ridge=1e-10):
     r"""Differentiate through a FIXED number of mixer steps instead of the fixed point.
 
     Study §8(a) corrects the received view here: unrolling is not particularly
@@ -83,7 +83,7 @@ def unrolled_gradient(toy, theta=0.0, quantity="loss", mixing=0.4, iterations=20
             if len(iterates) > keep:
                 iterates, residuals = iterates[-keep:], residuals[-keep:]
             if history and len(iterates) > 1:
-                v = fixedpoint._anderson(iterates, residuals, mixing)
+                v = fixedpoint._anderson(iterates, residuals, mixing, ridge)
             else:
                 v = v + mixing * residual
         return observable(v, th)
@@ -211,7 +211,9 @@ def experiment_second_order(quantity="loss"):
     cases = [("no degeneracy", dict(degeneracy=1)),
              ("doubled, rotated", dict(degeneracy=2, rotate=True)),
              ("doubled, symmetry-broken", dict(degeneracy=2, rotate=True,
-                                               break_symmetry=True))]
+                                               break_symmetry=True)),
+             ("symmetry-broken, sign rule", dict(degeneracy=2, rotate=True,
+                                                 break_symmetry=True, rule="sign"))]
     routes = (("grad(grad)", lambda f: jax.grad(jax.grad(f))),
               ("jacrev(jacrev)", lambda f: jax.jacrev(jax.jacrev(f))),
               ("jax.hessian", jax.hessian),
@@ -229,11 +231,39 @@ def experiment_second_order(quantity="loss"):
                 out[name] = float(transform(value)(0.0))
             except Exception as exc:        # noqa: BLE001 - the failure IS the result
                 out[name] = f"{type(exc).__name__}: {str(exc).splitlines()[0][:70]}"
-        step = 1e-3
         first = lambda th: float(jax.grad(value)(th))
-        out["central FD"] = (first(step) - first(-step)) / (2 * step)
+        for step in (1e-3, 1e-5):
+            out[f"central FD h={step:.0e}"] = (first(step) - first(-step)) / (2 * step)
         rows.append(out)
     return rows
+
+
+def experiment_unrolled_mixers(quantity="loss",
+                               counts=(20, 40, 60, 80, 120, 160, 240, 320)):
+    r"""Mixer dependence with teeth: **unrolled** linear versus **unrolled** Anderson.
+
+    The implicit gradient cannot depend on the mixer for a structural reason — the
+    ``custom_vjp`` backward pass sees only :math:`(	heta, v^*)` — so agreeing there
+    pins :math:`v^*`, not the machinery.  The test that carries information is study
+    §8(a)'s own: two *unrolled* mixers at matched forward accuracy reach different
+    gradients (measured there, :math:`1.9215	imes10^3` vs :math:`1.9252	imes10^3`
+    for a quantity whose true value is :math:`1.9281	imes10^3`), while the implicit
+    route returns one number for both.
+    """
+    toy = scftoy.build(size=SIZE, nocc=NOCC, seed=0, coupling=COUPLING,
+                       degeneracy=2, rotate=True, break_symmetry=True)
+    exact = gradient(toy, quantity=quantity, tol=1e-13)
+    converged_value = float((toy.loss if quantity == "loss" else toy.band_energy)(
+        jnp.asarray(exact["v"]), 0.0))
+    rows = []
+    for history in (0, 5):
+        for count in counts:
+            grad, value = unrolled_gradient(toy, quantity=quantity, iterations=count,
+                                            history=history)
+            rows.append(dict(history=history, iterations=count, grad=grad,
+                             value_error=_rel(value, converged_value),
+                             grad_error=_rel(grad, exact["reference"])))
+    return dict(implicit=exact["grad"], reference=exact["reference"], rows=rows)
 
 
 # --------------------------------------------------------------------------- main
@@ -283,6 +313,15 @@ def main():
     print(f"  radius {g['radius']:.4f}  SCF residual {g['scf_residual']:.1e}  "
           f"AD {g['grad']:.12f}  reference {g['reference']:.12f}  "
           f"rel {_rel(g['grad'], g['reference']):.2e}  adjoint residual {g['adjoint_residual']:.1e}")
+
+    print("\n== E2. mixer dependence of the UNROLLED gradient (study §8a's own test) ==")
+    u = experiment_unrolled_mixers()
+    print(f"  implicit {u['implicit']:.12f} for either mixer; dense reference {u['reference']:.12f}")
+    print(f"  {'mixer':>10} {'steps':>6} {'|value error|':>14} {'|grad error|':>13}")
+    for r in u["rows"]:
+        name = "Anderson" if r["history"] else "linear"
+        print(f"  {name:>10} {r['iterations']:>6} {r['value_error']:>14.2e} "
+              f"{r['grad_error']:>13.2e}")
 
     print("\n== H. second order through the fixed point (Phase 0a-prime) ==")
     for row in experiment_second_order():

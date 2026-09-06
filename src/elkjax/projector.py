@@ -53,6 +53,7 @@ import jax
 import jax.numpy as jnp
 
 __all__ = [
+    "sign_projector",
     "divided_difference_kernel",
     "hard_window_projector",
     "naive_hard_window_projector",
@@ -157,3 +158,55 @@ def naive_smeared_projector(h, mu, width):
     evals, evecs = jnp.linalg.eigh(h)
     occ, _ = fermi_dirac(evals, mu, width)
     return _projector(evecs, occ)
+
+
+# ------------------------------------------------------- the eigensolver-free route
+
+
+def sign_projector(h, nocc, *, steps=30, mu=None):
+    r"""The occupied projector as a **matrix sign function**, built from matmuls only.
+
+    For a hard window with a gapped boundary,
+
+    .. math::
+
+        P = \tfrac12\big(\mathbb 1 - \mathrm{sign}(H-\mu\mathbb 1)\big),
+
+    with :math:`\mu` anywhere in the gap, and the sign is obtained by Newton-Schulz
+    iteration :math:`X\leftarrow\tfrac12(3X-X^3)` from
+    :math:`X_0=(H-\mu)/\|H-\mu\|_2`.
+
+    **Why this exists: it is differentiable to any order.**  The safe-:math:`K` rule of
+    :func:`hard_window_projector` is first-order only, because its own JVP body calls
+    ``eigh`` — so a second derivative falls back on JAX's default eigenvector rule and
+    returns ``NaN`` at a multiplet (measured, ``docs/jax_port_phase0.md`` §0a′).  This
+    route contains no eigendecomposition at all, so there is no gauge to be arbitrary
+    and no :math:`1/(\lambda_i-\lambda_j)` anywhere; JAX differentiates a chain of
+    matrix products natively, however many times it is asked.
+
+    Two shortcuts here are **exact, not approximations**.  :math:`P` is locally constant
+    in :math:`\mu` while the gap stays open, so :math:`dP/d\mu=0` and taking :math:`\mu`
+    from a ``stop_gradient``-ed spectrum loses nothing — which also keeps the ill-posed
+    derivative of an individual eigenvalue out of the graph entirely.  Likewise
+    :math:`\mathrm{sign}(A/s)=\mathrm{sign}(A)` for :math:`s>0`, so the normalisation is
+    ``stop_gradient``-ed too.
+
+    Cost and limits.  Convergence needs roughly
+    :math:`\log(\|H\|/\Delta)/\log(3/2)` iterations for a gap :math:`\Delta`, so a
+    hard case wants more ``steps``; the iteration is unrolled, which is exactly the tape
+    the study warns about at production shapes.  **Hard windows only** — smeared
+    occupations would need a Chebyshev expansion of the Fermi function instead, which is
+    a different piece of work.
+    """
+    n = h.shape[-1]
+    eye = jnp.eye(n, dtype=h.dtype)
+    frozen = jax.lax.stop_gradient(h)
+    if mu is None:
+        evals = jnp.linalg.eigvalsh(frozen)
+        mu = 0.5 * (evals[nocc - 1] + evals[nocc])
+    shifted = h - mu * eye
+    scale = jnp.linalg.norm(jax.lax.stop_gradient(shifted), 2)
+    x = shifted / scale
+    for _ in range(steps):
+        x = 1.5 * x - 0.5 * (x @ x @ x)
+    return 0.5 * (eye - x)

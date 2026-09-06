@@ -1236,10 +1236,18 @@ Phase 0e asks for production shapes that this machine cannot hold.
 |---|---|---|
 | 0b | safe-$K$ projector rule: does the $(f_i-f_j)/(\lambda_i-\lambda_j)$ `custom_jvp` fix the reassembly jitter, and what happens in the padding block | **done at synthetic $S$ — `docs/jax_port_phase0.md`**; item 0b(ii)'s *real* Cholesky-reduced LAPW overlap is Phase 1's first measurement |
 | 0a | reverse-mode implicit diff (`custom_vjp` + GMRES) through an SCF fixed point whose matvec passes through `eigh` at a multiplet | **done — it works**, ≤1e-14 against a dense IFT reference on four spectra including an exactly degenerate one; the naive rule fails on the same machinery |
-| 0a′ | the same at second order — decides the full port over §9.2's hybrid | **done — blocked, and localised.** Reverse-over-reverse through the fixed point is fine; the safe-$K$ rule's own second derivative is not (`NaN`), and `jax.hessian` is refused outright because a `custom_vjp` cannot be forward-differentiated |
+| 0a′ | the same at second order — decides the full port over §9.2's hybrid | **done — it works**, via `projector.sign_projector` (matrix sign by Newton-Schulz: no eigensolve, so differentiable to any order); `grad(grad)` through the fixed point agrees with central FD to 1.2e-9 where the `eigh`-based rule gives `NaN`. Use `grad(grad)`, never `jax.hessian` — a `custom_vjp` cannot be forward-differentiated |
 | 0c | `jax.jvp(match)` against `dmatch.f90`'s analytic $d(\texttt{apwalm})/dr$ | not started |
 | 0d | `vmap(eigh)` vs `lax.map` at $n=1000$ on a real GPU | **deferred: no GPU** |
 | 0e | `jit` compile time and peak memory for one traced SCF step at production shapes | AOT-only, per the rules above |
+
+**Two mixers, one caveat about Elk's own.** Unrolling the SCF instead of differentiating
+it implicitly is not merely inaccurate: measured, unrolled *Anderson* reaches a forward
+value good to 1.8e-13 while its gradient is wrong by $10^{17}$–$10^{32}$ relative, across
+a five-decade sweep of the mixer's internal ridge, where unrolled *linear* mixing
+converges normally. Elk's default `mixtype=3` is a Broyden scheme of the same shape. The
+implicit route is indifferent by construction — which also means "implicit agrees between
+mixers" proves nothing on its own, since its backward pass only ever sees $(\theta,v^*)$.
 
 **Two traps that a badly chosen test walks straight past**, both measured here rather
 than reasoned about. A *direction* that is a single real diagonal entry makes the naive

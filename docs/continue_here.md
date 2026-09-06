@@ -197,13 +197,23 @@ protecting a degeneracy hides the bug completely — 1.5e-14 with the naive rule
 versus 4.7e-1 symmetry-broken, on the same Hamiltonian. Same shape as 0b's
 single-direction mistake. Test along general directions and break the symmetry.
 
-**0a′ is blocked, and the blocker is localised.** Reverse-over-reverse through the fixed
-point is fine (matches FD without a degeneracy); what returns `NaN` is the safe-K rule's
-own second derivative, since its JVP body calls `jnp.linalg.eigh`. The second derivative
-demonstrably exists — FD gives a finite number — so this is missing machinery, not an
-ill-posed quantity: the rule needs a JVP body that is itself custom-ruled.
-`jax.hessian` raising `TypeError` is separate and is a JAX limitation, not a result —
-a `custom_vjp` cannot be forward-differentiated at all.
+**0a′ works too, but only with a projector built for it.** Reverse-over-reverse through
+the fixed point was never the problem; what returned `NaN` was the safe-K rule's own
+second derivative, since its JVP body calls `jnp.linalg.eigh`. The fix is
+`projector.sign_projector`: `P = (1 - sign(H - mu))/2` with the matrix sign by
+Newton-Schulz, i.e. a chain of matmuls with no eigendecomposition, no gauge and no
+`1/(lambda_i - lambda_j)`. Its first derivative equals the safe-K rule's (a third,
+independent confirmation of 0b), and `grad(grad)` through the fixed point agrees with
+central FD to 1.2e-9 where the eigh-based rule gives `NaN`. Costs an unrolled
+Newton-Schulz loop (~30 steps at an all-electron gap-to-span ratio) and covers hard
+windows only — smeared occupations would need a Chebyshev Fermi function.
+Use `grad(grad)`, never `jax.hessian`: it is `jacfwd(jacrev)` and a `custom_vjp` cannot
+be forward-differentiated at all, so its `TypeError` is a JAX limitation, not a result.
+
+**Do not unroll a Pulay-type mixer.** Measured: unrolled Anderson reaches a forward value
+good to 1.8e-13 while its gradient is wrong by 1e17 to 1e32 relative, across five decades
+of the mixer's internal ridge; unrolled linear mixing converges normally. Elk's default
+`mixtype=3` is a Broyden scheme of the same shape.
 
 ### Still open in Phase 0
 

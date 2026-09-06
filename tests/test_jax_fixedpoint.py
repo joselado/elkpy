@@ -107,13 +107,41 @@ def test_band_energy_is_differentiable_too():
 def test_gradient_does_not_depend_on_the_mixer():
     """`F` is defined without the mixer, so the gradient must not see it (study §8a).
 
-    Needs no reference value, which makes it the sharpest check available here.
+    Note what this does and does not show.  The implicit gradient CANNOT depend on the
+    mixer, structurally: the `custom_vjp` backward pass is handed only `(theta, v*)`.
+    So this pins `v*` to 1e-13, not the machinery.  The version with teeth is
+    `test_unrolling_a_pulay_mixer_destroys_the_gradient` below.
     """
     toy = _small()
     linear = phase0a.gradient(toy, tol=1e-12, mixing=0.4, history=0)
     anderson = phase0a.gradient(toy, tol=1e-12, mixing=0.4, history=5)
     assert np.linalg.norm(linear["v"] - anderson["v"]) < 1e-10
     assert _rel(linear["grad"], anderson["grad"]) < 1e-10
+
+
+def test_the_sign_projector_agrees_with_the_safe_k_rule():
+    """A third, eigensolver-free code path for Phase 0b's rule.
+
+    `sign_projector` reaches P through Newton-Schulz matrix products with no
+    eigendecomposition at all -- no gauge, no 1/(lambda_i - lambda_j) -- so agreement
+    with the safe-K rule's first derivative is independent confirmation, not a
+    restatement.  The naive rule disagrees with both.
+    """
+    from elkjax import projector as pj, reference as ref
+
+    toy = _small()
+    h = toy.hamiltonian(jnp.zeros(toy.size), 0.0)
+    nocc = toy.degeneracy * toy.nocc
+    m = toy.observable_full()
+    d = jnp.array(ref.random_hermitian_direction(h.shape[0], 3))
+    loss = lambda p: jnp.real(jnp.trace(p @ m))
+    sign = float(jax.grad(lambda t: loss(pj.sign_projector(h + t * d, nocc, steps=40)))(0.0))
+    safe = float(jax.grad(lambda t: loss(pj.hard_window_projector(h + t * d, nocc, 1e-11)))(0.0))
+    naive = float(jax.grad(lambda t: loss(pj.naive_hard_window_projector(h + t * d, nocc)))(0.0))
+    assert np.linalg.norm(np.asarray(pj.sign_projector(h, nocc, steps=40)
+                                     - pj.hard_window_projector(h, nocc, 1e-11))) < 1e-12
+    assert _rel(sign, safe) < 1e-10
+    assert _rel(naive, safe) > 1e-2
 
 
 def test_smearing_at_fixed_chemical_potential():
@@ -148,6 +176,50 @@ def test_implicit_is_independent_of_the_iteration_count_and_unrolling_is_not():
 
 
 @SLOW
+def test_second_order_works_with_the_eigensolver_free_projector():
+    """Phase 0a-prime, unblocked.
+
+    `sign_projector` is a chain of matrix products, so JAX differentiates it to any
+    order natively.  Through the same implicit fixed point, `grad(grad)` then matches
+    central FD of the (already validated) first derivative with textbook O(h^2)
+    truncation -- measured 5.5e-4, 5.5e-6, 5.5e-8, 5.6e-10 as h goes 1e-2 to 1e-5,
+    which is FD converging onto the AD value rather than the other way round.
+    """
+    toy = _small(rule="sign", sign_steps=25)
+    solve = fixedpoint.implicit_fixed_point(
+        toy.step, solver_kwargs=dict(mixing=0.4, tol=1e-13, maxiter=4000))
+    v0 = jnp.zeros(toy.size)
+    value = lambda th: toy.loss(solve(th, v0), th)
+    second = float(jax.grad(jax.grad(value))(0.0))
+    assert np.isfinite(second)
+    errors = []
+    for step in (1e-3, 1e-4):
+        first = lambda th: float(jax.grad(value)(th))
+        fd = (first(step) - first(-step)) / (2 * step)
+        errors.append(_rel(second, fd))
+    assert errors[1] < errors[0] / 50          # O(h^2): a decade in h is 100x in error
+    assert errors[1] < 1e-6
+
+
+@SLOW
+def test_unrolling_a_pulay_mixer_destroys_the_gradient():
+    """Study §8(a)'s mixer objection, and it is much worse than §8(a) measured.
+
+    Unrolled linear mixing converges normally.  Unrolled Anderson reaches a forward
+    value good to 1e-13 while its gradient is wrong by 1e17 or more -- the extrapolation
+    is self-correcting forwards and expanding in its linearisation.  Elk's default
+    `mixtype=3` is a Broyden scheme of exactly this shape.
+    """
+    result = phase0a.experiment_unrolled_mixers()
+    converged = [r for r in result["rows"] if r["value_error"] < 1e-9]
+    linear = [r for r in converged if not r["history"]]
+    anderson = [r for r in converged if r["history"]]
+    assert linear and anderson                      # both DO converge forwards
+    assert min(r["grad_error"] for r in linear) < 1e-8
+    assert min(r["grad_error"] for r in anderson) > 1e6
+
+
+@SLOW
 def test_second_order_is_blocked_by_the_degeneracy_not_by_the_fixed_point():
     """Phase 0a-prime, pinned as it actually stands.
 
@@ -161,11 +233,16 @@ def test_second_order_is_blocked_by_the_degeneracy_not_by_the_fixed_point():
     plain = rows["no degeneracy"]
     assert np.isfinite(plain["grad(grad)"])
     assert abs(plain["grad(grad)"] - plain["jacrev(jacrev)"]) < 1e-12
-    assert _rel(plain["grad(grad)"], plain["central FD"]) < 1e-5
+    assert _rel(plain["grad(grad)"], plain["central FD h=1e-05"]) < 1e-5
     for label in ("doubled, rotated", "doubled, symmetry-broken"):
         degenerate = rows[label]
-        assert not np.isfinite(degenerate["grad(grad)"]), label
-        assert np.isfinite(degenerate["central FD"]), label   # the derivative EXISTS
+        # NaN, or merely wrong -- the eigensolver picks the face (Phase 0b)
+        assert (not np.isfinite(degenerate["grad(grad)"])
+                or _rel(degenerate["grad(grad)"], degenerate["central FD h=1e-05"]) > 1e-3), label
+        assert np.isfinite(degenerate["central FD h=1e-05"]), label   # it EXISTS
+    # ... and the eigensolver-free route gets it right on the same spectrum
+    sign = rows["symmetry-broken, sign rule"]
+    assert _rel(sign["grad(grad)"], sign["central FD h=1e-05"]) < 1e-6
     for row in rows.values():
         assert isinstance(row["jax.hessian"], str) and "TypeError" in row["jax.hessian"]
 
