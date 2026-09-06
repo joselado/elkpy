@@ -661,7 +661,8 @@ xc.py          items 2a/2b: xc_pwca and PBE.  Energy densities only for
                PBE -- the potential is what jax.grad is for.  The rho -> 0
                guard is written so the GRADIENT survives
 grid.py        the interstitial FFT grid: G-vectors at each slot, spectral
-               gradient and Laplacian, and trimrfg's |G| <= 2 kmax low-pass
+               gradient and Laplacian, and trimrfg's |G| <= 2 kmax low-pass.
+               Also rbsht/rfsht, the muffin-tin angular transform (item 2d)
 integrate.py   item 2c: rfint/rfinp -- the cell integral and inner product
 radial.py      item 1k: hmlrad/olprad -- the muffin-tin radial integrals, from
                the potential.  The vsmt packing is the load-bearing part
@@ -690,7 +691,8 @@ PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
     tests/test_calculation_lapw_potential.py \
     tests/test_calculation_lapw_position.py \
     tests/test_calculation_xc.py tests/test_calculation_poisson.py \
-    tests/test_calculation_integrate.py -q
+    tests/test_calculation_integrate.py \
+    tests/test_calculation_muffin_tin_xc.py -q
 ```
 
 **`taskset` is not decoration.** `.claude/settings.json`'s `OMP_NUM_THREADS=1` does not

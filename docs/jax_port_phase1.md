@@ -27,6 +27,7 @@ Elk's own `apwalm` by patch 0013, so the first build step is the assembly.
 | **1j** second derivatives at a real multiplet | **done** — only `sign_projector` survives; both `eigh`-based routes return `NaN`, and the control at a generic $k$ says the failure is the multiplet, not the order |
 | **1k** the spectrum as a differentiable function of the muffin-tin potential | **done — and the two channels are exactly complementary**: the spherical part of $v_s$ enters ONLY through the basis (frozen-basis derivative exactly zero, because the radial equation has eliminated it) and the non-spherical part ONLY through the integrals. The genuine basis relaxation is **0.30%** of the derivative for a valence-shaped perturbation and 29% for white noise |
 | **1l** the position derivative at frozen potential | **done — pinned by a sum rule**: rigid translation leaves the spectrum invariant to 2e-15 Ha with only the interstitial POTENTIAL's response supplied by hand, $\tilde\Theta$'s being built; and the forward form of that null is sharper than the gradient form, which is identically satisfied by the wrong assembly on silicon |
+| **1m** the Newton-Schulz tape as a `lax.scan` | **done** (§1m): the unrolled tape costs 230x the instructions and 142x the compile time at 80 steps and second order, where `scan`'s count is flat in the tape (197 to 199 over a 32-fold range). It saves the graph, NOT the memory (10%), and it is not bitwise — 6e-16, since XLA reassociates inside each fused region |
 
 ---
 
@@ -1416,3 +1417,88 @@ displacement, which is Phase 2 and nothing else. The characteristic function's
 response, which an earlier version of this section listed alongside it, is
 built.
 
+
+---
+
+## 1m. The Newton-Schulz tape as a `lax.scan`
+
+### What was at stake
+
+§1j left `sign_projector`'s iteration written as a Python `for` loop, i.e. **unrolled**
+into the graph — and flagged that as the one thing about it that would not scale. Phase
+0e had already measured why: compile time is *flat* in the tensor extents and
+**superlinear in HLO op count**, exponent $\approx1.85$, so a graph whose op count is
+proportional to `steps` costs more than proportionally to compile. §1j's own cost figure
+made that concrete: the step count is set by the top of the basis rather than the valence
+bandwidth (norm-to-gap ratio 190 on bulk Si, predicted count 13, 10 steps not converged
+and 20 converged), and it does not shrink as the problem grows.
+
+`lax.scan` emits the body once. The question is whether it costs anything — a
+compile-time optimisation that perturbs a second derivative at a degeneracy is not one
+worth having, since surviving that is the entire reason `sign_projector` exists.
+
+### What was built
+
+`projector.sign_projector` now takes `unroll=False` (the default) and drives the
+iteration with `lax.scan`; `unroll=True` keeps the old form. Both call the same
+`_newton_schulz_step`, factored out so a comparison between them is about the graph shape
+and not about two transcriptions of one formula. `src/elkjax/phase1_scan.py` is the
+measurement, `tests/test_jax_scan.py` the pins. Neither needs the Elk binary.
+
+### The cost, at $n=64$
+
+Compile time and optimised-HLO instruction count, unrolled relative to scanned:
+
+| order | 10 steps | 20 | 40 | 80 |
+|---|---|---|---|---|
+| value | 1.2x / 1.7x | 1.2x / 2.7x | 1.3x / 4.7x | 1.6x / 8.6x |
+| `grad` | 1.3x / 4.9x | 2.8x / 14x | 13x / 47x | **58x / 170x** |
+| `grad(grad)` | 2.1x / 5.7x | 6.5x / 18x | 32x / 62x | **142x / 230x** |
+
+In absolute terms the second-order compile at 80 steps is 0.21 s scanned against 30.0 s
+unrolled. The scanned instruction count is *flat* in the tape — 197, 197, 199, 199, 199,
+199 across `steps` = 5 to 160 — which is the structural claim, measured rather than
+asserted from the API.
+
+Two qualifications, both of which matter more than the headline.
+
+**The differentiation order multiplies the exponent, it does not merely add to it.**
+Reverse mode roughly triples the unrolled op count (each step's residual and its
+transpose), and second order triples it again, so the same 80-step tape goes 8.6x → 170x
+→ 230x. This is why the leftover was worth closing now rather than at production shapes:
+`sign_projector` exists *for* the second derivative, which is the order that pays most.
+
+**`scan` does not save the memory.** `temp_size_in_bytes` at 80 steps and second order is
+21.3 MB scanned against 23.7 MB unrolled — 10%, not a factor. The backward pass of a
+`scan` stores one residual per iteration exactly as the unrolled tape does; what is saved
+is the *graph*, not the tape. Anyone reaching for `scan` to fit a production shape in
+memory should reach for something else.
+
+### The rewrite is not bitwise, and that is the finding
+
+The tempting assertion is exact equality: the same function, the same number of times, in
+the same order. It is false. The projector itself differs by $2.8\times10^{-16}$
+($6\times10^{-16}$ relative), and the observable and its two derivatives by
+$9\times10^{-16}$, $1.5\times10^{-16}$ and $4.5\times10^{-15}$ relative. Calling a
+function the same number of times does not fix the arithmetic — XLA fuses a `scan` body
+and an unrolled chain into different regions and is free to reassociate inside each.
+
+So the tests assert a relative tolerance, and a *second* test asserts that the difference
+is nonzero, so that if a compiler change ever does make the two identical the loose
+tolerance gets tightened rather than sitting there for a reason that has stopped applying.
+
+### One bad observable, caught by its own value
+
+The first version differentiated $\sum_{ij}P_{ij}^2$. That is $\mathrm{tr}(P^2)=
+\mathrm{tr}(P)=n_{\rm occ}$ — **constant** while the gap stays open. Its first derivative
+came back $7\times10^{-16}$ and its second $1.6\times10^{-14}$, and the two branches
+"agreed" on both, which is a comparison of two noise floors around zero and would have
+reported success whatever the rewrite did. The fix is $\mathrm{tr}(PW)$ for a fixed
+symmetric $W$; the test now asserts the observable's own magnitude before comparing
+anything, so the failure mode cannot come back silently.
+
+This is the same family as the rules in §1k and §1l — a check that passes for a reason
+unrelated to what it claims to check — but a different member of it: not a gradient
+agreeing because both sides are wrong, a gradient agreeing because there is nothing
+there to get wrong. **Assert that the quantity under test is nonzero before asserting
+anything about its accuracy.**

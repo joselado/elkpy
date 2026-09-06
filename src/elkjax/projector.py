@@ -371,7 +371,19 @@ def check_fermi_level_determined(h, nelec, width, steps=100, tol=1e-8):
 # ------------------------------------------------------- the eigensolver-free route
 
 
-def sign_projector(h, nocc, *, steps=30, mu=None):
+def _newton_schulz_step(x):
+    r"""One Newton-Schulz step, :math:`X\leftarrow\tfrac12(3X-X^3)`.
+
+    Factored out so the unrolled and scanned branches of :func:`sign_projector`
+    cannot drift apart: a measurement comparing them is only about the graph
+    shape if the arithmetic is literally the same object.  Note that this is
+    necessary and not sufficient -- the two still differ at roundoff, XLA fusing
+    the two shapes into different regions (`elkjax.phase1_scan`).
+    """
+    return 1.5 * x - 0.5 * (x @ x @ x)
+
+
+def sign_projector(h, nocc, *, steps=30, mu=None, unroll=False):
     r"""The occupied projector as a **matrix sign function**, built from matmuls only.
 
     For a hard window with a gapped boundary,
@@ -405,8 +417,8 @@ def sign_projector(h, nocc, *, steps=30, mu=None):
     level, not by the valence bandwidth** -- with core states 1000+ Ha below
     :math:`\mu` and a 1 eV gap that ratio is :math:`\sim3\times10^4`, so ~25-30
     steps.  Keeping the core out of the second-variational block, as Elk does, cuts
-    it to ~10.  The iteration is unrolled, which is exactly the tape the study warns
-    about at production shapes.
+    it to ~10.  The iteration is a ``lax.scan`` by default; see ``unroll`` below for
+    what the unrolled tape the study warns about actually costs.
 
     Two limits.  **Hard windows only** -- smeared occupations would need a Chebyshev
     expansion of the Fermi function instead.  And if :math:`\mu` lands *outside* the
@@ -414,6 +426,20 @@ def sign_projector(h, nocc, *, steps=30, mu=None):
     sides of a boundary, this returns a wrong projector **silently** -- nothing in
     the Newton-Schulz iteration notices.  :func:`check_sign_window` is the host-side
     guard, in the spirit of ``elkpy.parsers.symmetry.check_window_gap``.
+
+    ``unroll`` selects how the iteration is written into the graph.  The default
+    ``lax.scan`` emits the two-matmul body **once**; ``unroll=True`` emits it ``steps``
+    times, which is what the study warns about — Phase 0e measured compile time as
+    superlinear (exponent ~1.85) in HLO op count, so the unrolled tape's cost grows
+    faster than the work does.  The two produce **bitwise identical** values and
+    derivatives, the arithmetic being the same in the same order; the choice is a
+    compile-time one only, and it is a large one: at 80 steps the unrolled
+    ``grad(grad)`` emits 230x the instructions and takes 142x as long to compile
+    (`elkjax.phase1_scan`).  The two agree to roundoff rather than bitwise --
+    calling the same function the same number of times does not fix the
+    arithmetic, XLA being free to reassociate inside each fused region.
+    ``unroll=True`` is kept because it is what that measurement compares against,
+    not as a fallback.
     """
     n = h.shape[-1]
     eye = jnp.eye(n, dtype=h.dtype)
@@ -424,8 +450,12 @@ def sign_projector(h, nocc, *, steps=30, mu=None):
     shifted = h - mu * eye
     scale = jnp.linalg.norm(jax.lax.stop_gradient(shifted), 2)
     x = shifted / scale
-    for _ in range(steps):
-        x = 1.5 * x - 0.5 * (x @ x @ x)
+    if unroll:
+        for _ in range(steps):
+            x = _newton_schulz_step(x)
+    else:
+        x, _ = jax.lax.scan(lambda c, _: (_newton_schulz_step(c), None),
+                            x, None, length=steps)
     return 0.5 * (eye - x)
 
 
