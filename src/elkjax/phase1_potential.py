@@ -95,18 +95,27 @@ def perturbation_theory_reference(export, direction, nocc):
     r"""The frozen-basis derivative in closed form: :math:`\sum_n c_n^\dagger\,
     \delta H\,c_n` over the occupied window, with Elk's own `evecfv`.
 
-    At fixed basis the overlap does not respond, so this is exactly first-order
-    perturbation theory, and it is an oracle for the frozen-basis AD branch
-    that involves no finite difference and no eigensolve of a perturbed
-    matrix.
+    At fixed basis the overlap does not respond to the potential at all, so
+    this is exactly first-order perturbation theory for the generalised
+    eigenproblem -- an oracle involving no finite difference and no eigensolve
+    of a perturbed matrix.
+
+    **The map from the potential to the radial integrals is AFFINE, not
+    linear**, and getting that wrong is the whole difficulty here.  Its
+    constant part is the $\ell_2=0$ element, which is
+    $\int u(\hat Hu)r^2dr$ and contains no potential -- `hmlrad` computes it
+    from `apwfr`'s second component, which `genapwfr` has already applied the
+    radial Hamiltonian to.  So $\delta H$ is the integrals built from
+    `direction` **with their $\ell_2=0$ slice zeroed**; keeping it carries the
+    unperturbed kinetic block into the derivative, and measured on bulk Si
+    that is not a small error -- it flips the sign.
     """
     dv = radial.potential_arrays(export, jnp.asarray(direction))
-    zero = [jnp.zeros_like(v) for v in dv]
-    integrals = radial.integrals_from_export(export, potential=dv)
-    # olpfv does not see the potential at all, so dH is the muffin-tin
-    # Hamiltonian built from the perturbation's own radial integrals; the
-    # interstitial block is held fixed and contributes nothing.
-    del zero
+    integrals = dict(export)
+    haa, hloa, hlolo = radial.hamiltonian_integrals(export, potential=dv)
+    integrals.update(haa=haa.at[0].set(0.0),
+                     hloa=hloa.at[0].set(0.0),
+                     hlolo=hlolo.at[0].set(0.0))
     dh = ham.muffin_tin_hamiltonian(integrals)
     nmatp = int(export["nmatp"])
     dh_full = jnp.zeros((nmatp, nmatp), dtype=complex).at[
@@ -124,44 +133,87 @@ def central_difference(fn, packed, direction, step):
     return float((plus - minus) / (2.0 * step))
 
 
-def run(export, nocc=None, seed=17, steps=(1e-4, 1e-5, 1e-6)):
-    """AD against central FD of the same function, both branches, plus the
-    closed form and the basis-response term."""
-    nocc = int(export["nstfv"]) // 2 if nocc is None else nocc
-    packed = jnp.asarray(np.asarray(export["vsmt"]))
+def split_directions(export, seed=17):
+    r"""A random direction in packed-potential space, and its spherical and
+    non-spherical halves.
+
+    The split is what turns the basis response from a number into a
+    structural statement.  `genapwfr` and `genlofr` integrate the radial
+    equation in the **spherical part of the potential alone** -- `vsmt`'s
+    $\ell=0$ coefficient, the first entry of each radial point's block -- so
+    a perturbation with no $\ell=0$ component cannot move the radial
+    functions at all, and the full and frozen-basis derivatives must then
+    agree EXACTLY rather than closely.  Conversely the derivative is linear
+    in the direction, so the two halves must add back to the whole.
+    """
+    idxis = np.asarray(export["idxis"]) - 1
+    nrmt = np.asarray(export["nrmt"])
+    nrmti = np.asarray(export["nrmti"])
+    lmmaxi, lmmaxo = int(export["lmmaxi"]), int(export["lmmaxo"])
+    packed = np.asarray(export["vsmt"])
     rng = np.random.default_rng(seed)
-    direction = jnp.asarray(rng.normal(size=packed.shape))
-    direction = direction * (packed != 0.0)      # stay inside the packing
-    out = {"nocc": nocc}
+    full = rng.normal(size=packed.shape) * (packed != 0.0)
+    spherical = np.zeros_like(full)
+    for ias in range(int(export["natmtot"])):
+        is_ = int(idxis[ias])
+        nr, nri = int(nrmt[is_]), int(nrmti[is_])
+        stop = lmmaxi * nri
+        spherical[ias, 0:stop:lmmaxi] = full[ias, 0:stop:lmmaxi]
+        end = stop + lmmaxo * (nr - nri)
+        spherical[ias, stop:end:lmmaxo] = full[ias, stop:end:lmmaxo]
+    return {"random": jnp.asarray(full),
+            "spherical": jnp.asarray(spherical),
+            "non-spherical": jnp.asarray(full - spherical)}
+
+
+def derivatives(export, direction, nocc, steps=()):
+    """Both branches' AD, the closed form, and optionally central FD."""
+    packed = jnp.asarray(np.asarray(export["vsmt"]))
+    out = {}
     for tag, frozen in (("frozen", True), ("full", False)):
         fn = lambda p, frozen=frozen: band_energy(export, p, nocc, frozen)
-        grad = float(jax.jvp(fn, (packed,), (direction,))[1])
-        out[f"ad_{tag}"] = grad
-        out[f"fd_{tag}"] = [central_difference(fn, packed, direction, h)
-                            for h in steps]
+        out[f"ad_{tag}"] = float(jax.jvp(fn, (packed,), (direction,))[1])
+        if steps:
+            out[f"fd_{tag}"] = [central_difference(fn, packed, direction, h)
+                                for h in steps]
     out["closed_form"] = perturbation_theory_reference(export, direction, nocc)
     out["basis_response"] = out["ad_full"] - out["ad_frozen"]
     out["steps"] = list(steps)
     return out
 
 
+def run(export, nocc=None, seed=17, steps=(1e-4, 1e-5, 1e-6)):
+    """The three directions, with finite differences on the first."""
+    nocc = int(export["nstfv"]) // 2 if nocc is None else nocc
+    directions = split_directions(export, seed)
+    out = {"nocc": nocc, "directions": {}}
+    for name, direction in directions.items():
+        out["directions"][name] = derivatives(
+            export, direction, nocc, steps=steps if name == "random" else ())
+    return out
+
+
 def report(result):
-    lines = [f"occupied window: lowest {result['nocc']} first-variational bands",
-             "",
-             f"  frozen-basis AD      {result['ad_frozen']: .12e}",
-             f"  first-order PT       {result['closed_form']: .12e}",
-             f"    relative           "
-             f"{abs(result['ad_frozen'] - result['closed_form']) / abs(result['closed_form']):.3e}",
-             ""]
-    for tag in ("frozen", "full"):
-        lines.append(f"  {tag} AD vs central FD")
-        for h, fd in zip(result["steps"], result[f"fd_{tag}"]):
-            rel = abs(fd - result[f"ad_{tag}"]) / abs(result[f"ad_{tag}"])
-            lines.append(f"    h = {h:.0e}   FD {fd: .12e}   rel {rel:.3e}")
-    lines += ["",
-              f"  basis response       {result['basis_response']: .12e}"
-              f"   ({abs(result['basis_response']) / abs(result['ad_full']):.3%}"
-              " of the full derivative)"]
+    lines = [f"occupied window: lowest {result['nocc']} first-variational "
+             f"bands", ""]
+    for name, row in result["directions"].items():
+        lines.append(f"  direction: {name}")
+        lines.append(f"    frozen-basis AD    {row['ad_frozen']: .12e}")
+        lines.append(f"    first-order PT     {row['closed_form']: .12e}"
+                     f"   rel "
+                     f"{abs(row['ad_frozen'] - row['closed_form']) / max(abs(row['closed_form']), 1e-300):.3e}")
+        lines.append(f"    full AD            {row['ad_full']: .12e}")
+        share = abs(row["basis_response"]) / max(abs(row["ad_full"]), 1e-300)
+        lines.append(f"    basis response     {row['basis_response']: .12e}"
+                     f"   ({share:.3%} of the full derivative)")
+        for tag in ("frozen", "full"):
+            if f"fd_{tag}" not in row:
+                continue
+            for h, fd in zip(row["steps"], row[f"fd_{tag}"]):
+                rel = abs(fd - row[f"ad_{tag}"]) / abs(row[f"ad_{tag}"])
+                lines.append(f"    {tag:6s} FD h={h:.0e}  {fd: .12e}"
+                             f"   rel {rel:.3e}")
+        lines.append("")
     return "\n".join(lines)
 
 

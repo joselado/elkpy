@@ -15,7 +15,7 @@ Elk's own `apwalm` by patch 0013, so the first build step is the assembly.
 | item | result |
 |---|---|
 | **1a** `olpfv`/`hmlfv`, muffin-tin blocks, forward | **done — machine precision on three fixtures**, six blocks compared separately; assembled pair reproduces Elk's `evalfv` to 9e-15 Ha |
-| **1b** the radial integrals from `genapwfr`/`genlofr`/`hmlrad`/`olprad` | not started; needs the muffin-tin potential, i.e. Phase 2 |
+| **1b** the radial integrals from `genapwfr`/`genlofr`/`hmlrad`/`olprad` | **done, and without Phase 2** (§1k): patch 0015 exports the muffin-tin potential, so the chain $v_s^{\rm MT}\to$ radial functions $\to$ radial integrals $\to H,O\to\varepsilon_j$ closes; every stage machine-precision against Elk |
 | **1c** the interstitial blocks from `gencfun`/`genvsig` | not started; `vsig` needs the interstitial Kohn-Sham potential, i.e. Phase 2 |
 | **1a′** the assembly as a differentiable function of $k$ | **done — and it found that $d\varepsilon/dk \neq \langle p\rangle$ in a finite LAPW basis** |
 | **1d** gradient vs finite differences on displaced h-BN | not started |
@@ -23,6 +23,9 @@ Elk's own `apwalm` by patch 0013, so the first build step is the assembly.
 | **1f** the Cholesky-reduced eigensolve wired to the safe-$K$ projector rule, on real matrices | **done — the rule is needed and it works**: 6.7e-2 (forward) / `NaN` (reverse) naive against 4.1e-12 safe, at a multiplet Elk's own matrices supply by symmetry |
 | **1g** the two removable poles in `match` | **done — the $k$-derivative now works at $\Gamma$**, and at every $k_z=0$ point of a slab cell, which is where every multiplet is |
 | **1h** the negative test at an exact degeneracy (required to fail) | **done — on graphene at K**, and it corrected the study's own fixture suggestion: a time-reversal-invariant point cannot show the disagreement, however degenerate |
+| **1i** smeared occupations and the self-consistent Fermi level | **done** — the closed-form kernel inside the JVP makes the tolerance INERT for smeared occupations; whether the near-degenerate branch fires is set by the assembly's roundoff, not by the physics |
+| **1j** second derivatives at a real multiplet | **done** — only `sign_projector` survives; both `eigh`-based routes return `NaN`, and the control at a generic $k$ says the failure is the multiplet, not the order |
+| **1k** the spectrum as a differentiable function of the muffin-tin potential | **done — and the two channels are exactly complementary**: the spherical part of $v_s$ enters ONLY through the basis (frozen-basis derivative exactly zero) and the non-spherical part ONLY through the integrals (basis response 4e-16) |
 
 ---
 
@@ -1056,3 +1059,179 @@ unrolled, which at $n=177$ is free and at production shapes is exactly the tape 
 measured compile time against — `lax.scan` over the Newton-Schulz steps is the obvious
 answer and has not been tried, since scanning a step whose body is two matmuls is the
 textbook case for it.
+
+---
+
+## 1k. The potential: the radial functions, the radial integrals, and the derivative
+
+### What was at stake
+
+Through §1j, `hamiltonian.py` **imported** the five muffin-tin radial integrals
+`haa`, `hloa`, `hlolo`, `oalo`, `ololo`. Everything Phase 1 measured — the
+assembly, the $k$-derivative, the projector rule at a multiplet, smeared
+occupations, second derivatives — was a statement about the machinery *above*
+them. Below them sat Elk, and the plan (`docs/jax_port.md` §6, item 1b) put
+building them in Phase 2 on the grounds that they need the muffin-tin
+potential.
+
+They do, and the potential is an SCF output. But it is also just an **input** to
+this half of the calculation, and a converged one can be exported and held fixed
+exactly as `STATE.OUT` already is. Patch **0015** does that, so the forward chain
+
+$$v_s^{\rm MT} \;\longrightarrow\; u_{q\ell},\,v^{\rm lo}_p
+ \;\longrightarrow\; h^{\alpha}_{qq';\ell\ell'\ell''m''},\,o^{\alpha}_{qp}
+ \;\longrightarrow\; H,\,O \;\longrightarrow\; \varepsilon_j$$
+
+can be closed and differentiated now, with no Phase 2 ingredient at all. What
+remains imported is the interstitial pair (which genuinely does need the
+*interstitial* potential) and the linearisation energies.
+
+### What was built
+
+`src/elkjax/radial.py` transcribes `hmlrad.f90` and `olprad.f90` —
+pure quadrature, one weighted sum over the radial mesh per integral.
+`src/elkjax/radial_functions.py` transcribes `rschrodint.f90`, `genapwfr.f90`
+and `genlofr.f90` — the scalar-relativistic radial equation in Koelling-Harmon
+form,
+
+$$\frac{dP_\ell}{dr} = 2MQ_\ell + \frac{P_\ell}{r},\qquad
+\frac{dQ_\ell}{dr} = -\frac{Q_\ell}{r}
+ + \left[\frac{\ell(\ell+1)}{2Mr^2} + V - E\right]P_\ell,\qquad
+M = 1 + \frac{E-V}{2c^2},$$
+
+integrated outward on Elk's own logarithmic mesh by its own predictor-corrector:
+a 3-point extrapolation of the derivative, then eight fixed-point corrections in
+which the function is recovered by integrating the cubic through the last four
+derivative samples. **The scheme is transcribed, not improved.** A Runge-Kutta
+step or `jax.experimental.ode` would converge to the same continuum solution and
+disagree with Elk at the mesh's own truncation error, four or five decades above
+the roundoff this is checked at; an element-wise comparison against `apwfr` is
+only available if the arithmetic is the same arithmetic.
+
+Element-wise against Elk, on the three §1a fixtures:
+
+| quantity | worst relative disagreement |
+|---|---|
+| `oalo`, `ololo` | 2.4e-16 |
+| `haa`, `hloa`, `hlolo` | 3.3e-17 – 2.0e-16 |
+| `apwfr`, `apwdfr` | 1.3e-14 |
+| `lofr` | 7e-15 |
+| `evalfv` from the potential alone | < 1e-8 Ha |
+
+### The export was inconsistent with itself, and the split by potential found it
+
+The first run of `hmlrad` in JAX reproduced Elk to $2.6\times10^{-16}$ on every
+integral that does **not** touch the potential and was off by
+$3\times10^{-10}$ on every one that does. That is not a transcription bug and it
+is not roundoff: `gndstate.f90` calls `genapwlofr` at the *top* of an SCF
+iteration and `potks`/`mixerifc` at the *bottom*, so on exit the radial
+functions and integrals belong to the potential of the **previous** iteration
+while `vsmt` is the current one. Nothing before patch 0015 could see this,
+because nothing before it exported the potential.
+
+Patch 0015 therefore calls `genapwlofr` before building anything. The lesson is
+the split, not the fix: an aggregate "`haa` is off by 3e-10" would have read as a
+subtle indexing error, and the two-way split named the cause in one run.
+
+### The two channels of the potential are exactly complementary
+
+The point of building the integrals rather than importing them is the
+derivative, and the derivative separates into two pieces that can be computed
+independently:
+
+* **frozen basis** — hold `apwfr`/`lofr` fixed, let only the radial integrals
+  respond. The overlap does not depend on the potential at all then, so
+  first-order perturbation theory for the generalised eigenproblem collapses to
+  $\delta\varepsilon_n = c_n^\dagger\,\delta H\,c_n$ with
+  $c_n^\dagger Oc_n=1$: a closed form, computable from Elk's own `evecfv`, with
+  no finite difference and no perturbed eigensolve in it.
+* **full** — let the perturbation reach the radial functions, which `genapwfr`
+  re-solves in the perturbed potential at the same linearisation energies.
+
+Their difference is the **basis response**, the term any frozen-basis argument
+drops. Splitting a random direction into its spherical ($\ell=0$) and
+non-spherical halves turns that from a number into a structural statement, and
+the two halves come out **exactly complementary** — on bulk Si, at
+$k=(0.1,0.2,0.05)$, over the four occupied first-variational bands:
+
+| direction | frozen-basis AD | full AD | basis response |
+|---|---|---|---|
+| spherical | **0** (exactly) | 9.8917e-2 | **100%** |
+| non-spherical | 2.6258e-2 | 2.6258e-2 | **0** (4.2e-16 absolute) |
+| random (their sum) | 2.6258e-2 | 1.2517e-1 | 79% |
+
+Both zeros are structural, not numerical, and each has a one-line cause.
+
+**The spherical potential never appears in a radial integral.** `hmlrad`'s
+$\ell_2=0$ element is $\int u_{q\ell}(\hat Hu_{q'\ell})r^2dr$, and `genapwfr`
+has already applied $\hat H$ — the radial functions *are* that operator's
+solutions. This is the LAPW construction itself: the spherical potential is
+absorbed into the basis, and only the non-spherical remainder survives as an
+explicit matrix element. So a Hellmann-Feynman-shaped treatment of the
+muffin-tin potential does not lose a small correction in the spherical channel;
+**it loses the entire term.**
+
+**The non-spherical potential never reaches the radial equation.**
+`genapwfr`/`genlofr` integrate in the spherical part alone, so the basis cannot
+respond and the two branches agree to $4\times10^{-16}$ absolute.
+
+The random direction's 79% is then just the mixture, and is quoted only to say
+that the effect is not a corner case of the split.
+
+### AD against finite differences of the same function
+
+On the random direction, central FD of the identical JAX function:
+
+| step | frozen branch | full branch |
+|---|---|---|
+| $10^{-4}$ | 2.0e-9 | 3.9e-10 |
+| $10^{-5}$ | 4.8e-9 | 5.2e-9 |
+| $10^{-6}$ | 7.4e-8 | 4.0e-8 |
+
+The disagreement **grows** as the step shrinks, which is the $1/h$ signature of
+roundoff in the difference and not of a wrong gradient — the criterion
+`docs/jax_port.md` states for Phase 1 and Phase 4 alike. The closed form is the
+sharper check anyway: it pins the frozen branch to $1.2\times10^{-15}$ with no
+step size in it.
+
+### One thing the closed form got wrong first, and it is worth remembering
+
+The map from the potential to the radial integrals is **affine, not linear**.
+Building "the integrals of $\delta V$" and calling the result $\delta H$ carries
+the $\ell_2=0$ block — which is the constant part, $\langle u|\hat Hu\rangle$ —
+into the derivative at full strength. On bulk Si that does not merely degrade
+the reference: it changes its sign ($-2.27\times10^{-1}$ against a true
+$+2.63\times10^{-2}$). The fix is to zero the $\ell_2=0$ slice, which is the
+same fact as the first zero in the table above, met from the other side.
+
+### What this settles, and what it does not
+
+Phase 1's item 1b is done, and done without Phase 2. The first-variational
+spectrum is a differentiable function of the muffin-tin Kohn-Sham potential,
+checked forward element-wise against Elk at every intermediate stage and
+backward against both a closed form and finite differences.
+
+**It is not the position derivative.** Moving an atom moves the potential
+inside its sphere, and where that potential comes from is Phase 2. What is now
+available that was not is the *frozen-potential* position derivative — the
+`apwalm` structure factor alone — and the isolation `docs/jax_port.md` §Phase 4
+asks for (the same force computed with and without `stop_gradient` on
+`apwalm`), because the other half of that comparison now exists.
+
+**The linearisation energies are held fixed** throughout, and are exported
+rather than re-solved. Letting them float means differentiating `linengy`,
+which finds them by bisection on the logarithmic derivative at $R_{\rm MT}$ —
+a different object, and one Elk's own forces do not carry either.
+
+**The interstitial blocks are still imported**, so this is a derivative with
+respect to the muffin-tin potential only. $H^{\rm I}$ needs $V_s$ in the
+interstitial region, which is genuinely Phase 2.
+
+**A warning for Phase 2's own gradient criteria.** `docs/jax_port.md` asks for
+$v_{xc}$ from `jax.grad` of $\varepsilon_{xc}$ against Elk's hand-coded
+$v_{xc}$ pointwise. That is a check on the functional, and it is worth having,
+but the table above says it would not catch the failure mode that matters here:
+a Phase 2 chain that produced a perfectly correct $\delta v_s$ and then fed it
+to a frozen LAPW basis would return **zero** for the spherical channel while
+looking entirely healthy.
+
