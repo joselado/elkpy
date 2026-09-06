@@ -22,6 +22,7 @@ Elk's own `apwalm` by patch 0013, so the first build step is the assembly.
 | **1e** the adversarial `soc_scale` sweep, and the required refusal | **withdrawn as written — `soc_scale` cannot move the first-variational spectrum at all** (§1f); the refusal itself is done, by cutting a real multiplet |
 | **1f** the Cholesky-reduced eigensolve wired to the safe-$K$ projector rule, on real matrices | **done — the rule is needed and it works**: 6.7e-2 (forward) / `NaN` (reverse) naive against 4.1e-12 safe, at a multiplet Elk's own matrices supply by symmetry |
 | **1g** the two removable poles in `match` | **done — the $k$-derivative now works at $\Gamma$**, and at every $k_z=0$ point of a slab cell, which is where every multiplet is |
+| **1h** the negative test at an exact degeneracy (required to fail) | **done — on graphene at K**, and it corrected the study's own fixture suggestion: a time-reversal-invariant point cannot show the disagreement, however degenerate |
 
 ---
 
@@ -512,7 +513,10 @@ the `NaN` row of the table above is what it removes.
 - **Smeared occupations.** Everything here is a hard integer window. The
   metallic case is `smeared_projector`, whose tolerance branch is genuinely
   live (a hard window's kernel is zero on both branches for a same-side pair),
-  and Phase 0b's plateau sweep for it is still synthetic.
+  and Phase 0b's plateau sweep for it is still synthetic. This is the next
+  reachable item.
+- **The negative test at a degeneracy** *(closed by §1h)*, which needed §1g
+  first: the fixtures for it are all high-symmetry points.
 - **Second derivatives.** `hard_window_projector`'s JVP calls `eigh` itself, so
   a second derivative falls back on JAX's default rule. Phase 0a′'s
   `sign_projector` is the eigensolver-free route and has not been run on a real
@@ -592,8 +596,13 @@ The identity is exact, so this changes rounding and nothing else.
 | element-wise vs Elk's `apwalm`, generic $k$ | machine precision | 3.7e-15 |
 | element-wise vs Elk's `apwalm`, $\Gamma$ | *never checked* | 5.6e-16 |
 | the `dmatch` identity, forward and reverse | 7e-16 | unchanged |
-| all six assembly blocks vs Elk, three fixtures | machine precision | unchanged |
+| all six assembly blocks vs Elk, three fixtures | machine precision | unchanged *(and cannot see this: they take `apwalm` from the export)* |
 | **C: $dP/dk$ at $\Gamma$ through the multiplet** | **`NaN`** | **1.4e-14, 3.8e-15, 1.7e-12** |
+
+The rows that actually exercise the new `match` end to end are **A** (5.8e-14, through
+`eigenproblem_at`, which rebuilds `apwalm`) and **C**; the six-block comparison is listed
+for completeness but takes `apwalm` from the export and could not have detected a change
+here either way.
 
 The branch-cut row is the one worth reading twice. The comparison had to be made where
 *both* routes are accurate, because below $x\sim10^{-3}$ the recurrence-and-divide route
@@ -625,3 +634,73 @@ Still untouched: `spherical_harmonics` is *still* singular on the $z$-axis, whic
 correct for a `genylmv` transcription and is still pinned by its own test. Anything else
 that consumes it directly — Phase 4's stress moves ${\bf G+p}$ itself — has the same
 problem and the same fix available.
+
+---
+
+## 1h. The negative test, and the fixture the study names for it
+
+### What was at stake
+
+The study's Phase 1 list closes with a criterion that is *required to fail*: at a
+$k$-point where two occupied bands are exactly degenerate, AD, central finite
+differences and one-sided finite differences of an **individual** eigenvalue must
+**disagree**, and the multiplet trace must agree across all three. Without it, §8(b)'s
+degeneracy caveat is a comment rather than a signal — and this file's own
+`first_variational_eigenvalues` carries a warning about exactly that while
+`occupied_projector` does not.
+
+It became reachable only after §1g: the natural fixtures are all high-symmetry points.
+
+### The fixture the study names does not work, and neither does the obvious one
+
+The study says "h-BN at $\Gamma$, or graphene at K with `soc_scale=0`". **The first is
+wrong**, and so is bulk Si at $\Gamma$, for the same reason. At any time-reversal-invariant
+momentum every branch is *even* in $\mathbf k$, so the sorted branches do **not** exchange
+places between $+t$ and $-t$; AD and central FD then agree with each other and with the
+true derivative, which is **zero**. Measured on Si's $\Gamma_{25'}$ triplet, along a
+general direction: AD returns $10^{-17}$ to $10^{-14}$ and central FD $10^{-12}$ to
+$10^{-11}$, for every band of the multiplet. The multiplet is every bit as degenerate as
+graphene's — what is missing is a *linear* splitting.
+
+One-sided FD is the only one that moves there, $-4.7\times10^{-4}$ at step $10^{-4}$, and
+it moves for an entirely ordinary reason: $(\varepsilon(t)-\varepsilon(0))/t\approx
+\tfrac12\varepsilon''t$ at a critical point. It shrinks by a factor of 10 per decade of
+step ($-4.68\times10^{-4}$, $-5.00\times10^{-3}$, $-4.98\times10^{-2}$ at $10^{-4}$,
+$10^{-3}$, $10^{-2}$), which is what separates truncation error from a degeneracy signal
+— and asserting that is why this is a test rather than a comment. A version of this test
+built on Si would otherwise have *passed*, on a disagreement that has nothing to do with
+the multiplet.
+
+### Graphene at K, where the branches cross linearly
+
+2 atoms, 20 Bohr of vacuum, `rgkmax=6`, $6\times6\times1$ — $n_{\rm mat}=610$ and under
+two minutes including the ground state, so it runs by default. Writing the two branches
+as $\varepsilon_0\mp v\lvert t\rvert$, each route is wrong in its own way rather than
+noisy: central FD of the **sorted** spectrum returns the branch average $0$, because the
+branches exchange; one-sided FD returns the extreme branch $-v$; and AD returns the
+diagonal of $v^\dagger\,\delta H\,v$ in whatever basis the eigensolver picked inside the
+multiplet, which is neither.
+
+| along $\delta k\propto(0.3,-0.5,0)$ | AD | central FD | one-sided FD |
+|---|---|---|---|
+| band 4 (lower Dirac branch) | $+0.18377$ | $+0.00086$ | $-0.37610$ |
+| band 5 (upper Dirac branch) | $-0.18377$ | $-0.00087$ | $+0.37608$ |
+| **their sum** | $-1.93\times10^{-7}$ | $-2.01\times10^{-7}$ | $-1.67\times10^{-5}$ |
+
+(1-based band numbering; the pair is split by $3.4\times10^{-7}$ Ha.) The three individual
+values differ by more than 10% of the scale from each other; the trace agrees to
+$5\times10^{-7}$ of it between AD and central FD, and to $4\times10^{-5}$ one-sided, whose
+own $O(\text{step})$ truncation is the residue. The fixture carries its own control: the
+$\sigma$ doublet at K (bands 1-2, split $1.3\times10^{-9}$ Ha) is just as degenerate but
+does not split linearly along this direction, and there AD and central FD **agree**
+($-5.37\times10^{-6}$ vs $-5.28\times10^{-6}$).
+
+### What this settles
+
+`first_variational_eigenvalues` is safe for a **trace** and unsafe for an individual band
+inside a multiplet, and that is now asserted rather than documented. It is also the sharpest
+available statement of why `occupied_projector` exists: on the same fixture, in the same
+code path, the projector's derivative is well defined where the individual eigenvalue's is
+not. And the fixture correction is worth carrying: *degeneracy is not enough* — the
+disagreement needs branches that cross, so a TRI point cannot show it however degenerate it
+is.

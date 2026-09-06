@@ -15,7 +15,9 @@ $k$-tangent `NaN` at $\Gamma$ and across every $k_z=0$ plane; **that is fixed to
 (§1g), so the projector derivative now works where the multiplets are.
 
 ```
-NEW      Wire the eigensolve to the safe-K projector rule      src/elkjax/phase1_projector.py
+4a4090f  Remove the two poles that made the k-tangent NaN at Gamma  elkjax/lapw.py
+bcc21f8  Write up the projector rule at a real multiplet
+60980ab  Wire the eigensolve to the safe-K projector rule      elkjax/phase1_projector.py
 8bf83b5  Give the continuation document a single ranked entry point
 7b2c157  Write up the k-derivative and the Hellmann-Feynman gap it measured
 a37a726  Differentiate the LAPW spectrum in k                  elkjax/hamiltonian.py
@@ -267,7 +269,15 @@ Weinert Poisson, XC) and two Phase 1 items are reachable without it.
    The two fixes are independent, and only together give a projector derivative at a
    high-symmetry point.
 
-3. **Next: smeared occupations, on a real metallic LAPW matrix.** Everything in §1f is
+3. **~~The negative test at an exact degeneracy.~~ DONE** (§1h), and it corrected the
+   study's own fixture suggestion. "h-BN at $\Gamma$" cannot work and neither can Si at
+   $\Gamma$: at a time-reversal-invariant momentum every branch is even in $\mathbf k$, so
+   the sorted branches never exchange and AD and central FD both correctly return zero.
+   Degeneracy is not enough — the branches must cross LINEARLY. Graphene at $K$ (2 atoms,
+   `rgkmax=6`, under two minutes with the ground state) gives AD $\pm0.184$, central FD
+   $\pm0.0009$ and one-sided $\mp0.376$ on the Dirac pair, agreeing only in the trace.
+
+4. **Next: smeared occupations, on a real metallic LAPW matrix.** Everything in §1f is
    a hard integer window, and for one of those the tolerance turns out to be **inert**:
    both branches of the kernel are identically zero for a same-side pair ($f_i-f_j=0$
    exactly, and $f'=0$), so §1f's plateau says nothing. With Fermi-Dirac occupations
@@ -278,14 +288,14 @@ Weinert Poisson, XC) and two Phase 1 items are reachable without it.
    caveat: the self-consistent Fermi level adds a second constraint whose rule §8b gives
    in closed form, $d\mu/d\varepsilon_i = w_if'_i/\sum_j w_jf'_j$, still untested.
 
-4. **Then: second derivatives on a real LAPW matrix.** `hard_window_projector`'s JVP
+5. **Then: second derivatives on a real LAPW matrix.** `hard_window_projector`'s JVP
    calls `eigh` itself, so a second derivative falls back on JAX's default rule;
    `sign_projector` (0a′) is the eigensolver-free route and has only ever run on the
    toy. On an all-electron matrix its Newton–Schulz step count is set by the **deepest
    state in the window**, not by the valence bandwidth, so this is as much a cost
    measurement as a correctness one. Also self-contained.
 
-5. **~~The adversarial `soc_scale` sweep.~~ WITHDRAWN as written** — `soc_scale`
+6. **~~The adversarial `soc_scale` sweep.~~ WITHDRAWN as written** — `soc_scale`
    cannot move the first-variational spectrum at all. `socfr` enters only
    `eveqnsv`; it appears zero times in `hmlfv`/`olpfv`/`hmlaa`/`hmlalo`/`hmllolo`/
    `olpaa`/`olpalo`/`olplolo`/`eveqnfv`/`hmlrad`/`olprad` (grep-verified). The
@@ -295,7 +305,7 @@ Weinert Poisson, XC) and two Phase 1 items are reachable without it.
    cutting Si's $\Gamma_{25'}$ triplet instead, with no extra ground state.
    Reinstating a continuous sweep needs the second-variational step.
 
-6. **Not yet: the position derivative.** It is the study's stated Phase 1 gradient
+7. **Not yet: the position derivative.** It is the study's stated Phase 1 gradient
    criterion, but moving an atom moves the muffin-tin potential and hence the radial
    integrals, which `hamiltonian.py` imports — so an honest $d\varepsilon/d\mathbf R$
    needs Phase 2's `hmlrad`/`olprad`, not just AD plumbing. The $k$-derivative was
@@ -405,7 +415,11 @@ phase1_projector.py  item 1f: the rule wired to the eigensolve, on real matrices
 PYTHONPATH=src taskset -c 0-3 python3 -m elkjax.phase0b   # and phase0a, phase0c, phase0e
 ELKPY_RUN_SLOW_TESTS=1 PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
     tests/test_jax_projector.py tests/test_jax_fixedpoint.py \
-    tests/test_jax_compile_cost.py tests/test_jax_lapw.py -q      # 38 tests, ~6 min
+    tests/test_jax_compile_cost.py tests/test_jax_lapw.py -q      # ~6 min
+# needs the elk binary too -- the Phase 1 pair, ~2 min with ground states cached
+PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
+    tests/test_calculation_lapw_assembly.py \
+    tests/test_calculation_lapw_projector.py -q
 ```
 
 **`taskset` is not decoration.** `.claude/settings.json`'s `OMP_NUM_THREADS=1` does not
@@ -441,9 +455,11 @@ step was `hmlfv`/`olpfv`, and that is done too. The G+k set, `atposc` and `rmt` 
 taken from the export rather than regenerated (`gengkvec`'s ordering, `tshift`'s origin
 shift and `checkmt`'s radius shrink are three separate ways to get a correct-looking
 transcription that cannot be compared element-wise) — `hamiltonian.py` takes every one
-of them from the export and never regenerates any. And the projector tolerance must be
+of them from the export and never regenerates any. ~~And the projector tolerance must be
 computed per run from a real κ, since it is a cutoff property and §8(b)'s cheap estimate
-is useless; that bites at the Cholesky-reduced `eigh`, which is the next forward step.
+is useless; that bites at the Cholesky-reduced `eigh`, which is the next forward step.~~
+Done — `hamiltonian.projector_tolerance` measures it per run from a dense `eigvalsh` of
+$O$ and the reduced norm (§1f).
 
 **Workstream A** (unchanged from the previous session)
 

@@ -1373,12 +1373,29 @@ dividing by $x^4$. **The two fixes are independent**: with the poles gone, the *
 projector's $k$-derivative at $\Gamma$ is still `NaN`, which its own test asserts so
 that "we fixed the pole" cannot be mistaken for "the $k$-derivative is fine".
 
+**The study's negative test is done too (§1h), and it corrected the study's own fixture
+suggestion.** The criterion is that AD, central FD and one-sided FD of an INDIVIDUAL
+eigenvalue must *disagree* at an exact degeneracy while the multiplet trace agrees. The
+study names "h-BN at $\Gamma$", and that cannot work — nor can Si at $\Gamma$: at any
+time-reversal-invariant momentum every branch is EVEN in $\mathbf k$, so the sorted
+branches never exchange between $+t$ and $-t$ and AD and central FD both correctly return
+zero (measured $10^{-17}$–$10^{-11}$ on Si's $\Gamma_{25'}$ triplet). Degeneracy is not
+enough; the branches must cross LINEARLY. On graphene at $K$ (2 atoms, `rgkmax=6`, under
+two minutes including the ground state) the Dirac pair gives AD $\pm0.184$, central FD
+$\pm0.0009$ (the branch average, since the branches exchange) and one-sided
+$\mp0.376$ (the extreme branch), while their trace agrees across all three to
+$5\times10^{-7}$ of that scale — with the $\sigma$ doublet at the same $K$, equally
+degenerate but not linearly split, as the in-fixture control where AD and central FD do
+agree. So `first_variational_eigenvalues` is safe for a trace and unsafe for an
+individual band inside a multiplet, asserted rather than documented.
+
 **Still open in Phase 1**: the radial integrals are inputs, not outputs (building them
 needs `genapwfr`/`genlofr`/`hmlrad`/`olprad` and through `vsmt` the muffin-tin potential
 — Phase 2); the POSITION derivative $d\varepsilon_j/d\mathbf R$ on displaced h-BN, which
 is harder than the $k$ one because moving an atom moves the radial integrals; smeared
-occupations (everything in §1f is a hard integer window); and second derivatives on a
-real LAPW matrix, which need `sign_projector` rather than the first-order rule.
+occupations (everything in §1f is a hard integer window, for which the tolerance branch is
+inert — a metal is the only place it bites); and second derivatives on a real LAPW matrix,
+which need `sign_projector` rather than the first-order rule.
 
 **$\kappa(O)$ for a real LAPW overlap is measured, and the cheap estimate is
 useless.** Patch 0013 (§33) supplies real $H$ and $O$; `python3 -m elkjax.phase0b_overlap`

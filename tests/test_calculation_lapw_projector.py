@@ -377,7 +377,13 @@ def test_the_refusal_detects_unresolvability_and_not_symmetry(silicon):
     evals = np.asarray(jnp.linalg.eigvalsh(reduced))
 
     assert evals[3] - evals[2] < tol            # refused, below the resolution
-    assert evals[2] - evals[1] > 10 * tol       # accepted, and still degenerate
+
+    # The accepted half is a property of THIS build's rounding, not of the
+    # physics: a different BLAS may resolve the whole triplet below tol, in
+    # which case the limitation is real but cannot be demonstrated here.
+    if evals[2] - evals[1] <= tol:
+        pytest.skip("this build splits the whole triplet below the tolerance; "
+                    "the accepted-but-degenerate half cannot be shown")
     accepted_tol, gap = ham.occupied_window(export, kc, 2)
     assert gap == pytest.approx(float(evals[2] - evals[1]), rel=1e-9)
     assert gap > accepted_tol
@@ -407,3 +413,116 @@ def test_the_tolerance_is_measured_on_this_run_not_assumed(silicon):
         np.asarray(export["hmat"]), 2)
     assert tol == pytest.approx(
         np.finfo(np.float64).eps * kappa * np.linalg.norm(reduced, 2), rel=1e-12)
+
+
+# ------------------------- E: the study's negative test (required to fail)
+
+
+GRAPHENE_A = 4.6511                       # a = 2.461 Angstrom
+GRAPHENE_AVEC = [(GRAPHENE_A, 0.0, 0.0),
+                 (-GRAPHENE_A / 2, GRAPHENE_A * 3 ** 0.5 / 2, 0.0),
+                 (0.0, 0.0, 20.0)]
+K_POINT = (1 / 3, 1 / 3, 0.0)
+
+
+@pytest.fixture(scope="module")
+def graphene(tmp_path_factory):
+    """Graphene exported at K, where the Dirac pair crosses LINEARLY.
+
+    This fixture exists because Si at Gamma cannot serve, for a reason the study
+    itself gets wrong -- see the two tests below. Cheap: 2 atoms and a coarse
+    cutoff converge in well under two minutes.
+    """
+    from elkpy.calculation import Calculation
+
+    workdir = tmp_path_factory.mktemp("lapw_dirac") / "graphene"
+    calculation = Calculation(
+        structure=Structure(avec=GRAPHENE_AVEC,
+                            species={"C": [(0.0, 0.0, 0.0), (1 / 3, 2 / 3, 0.0)]}),
+        workdir=workdir, ngridk=(6, 6, 1), rgkmax=6.0)
+    calculation.ensure_ground_state()
+    with calculation.eigenstate_session() as session:
+        return session.lapw_problem(K_POINT)
+
+
+def _three_derivatives(export, pick, dk, step=1e-4):
+    """AD, central FD and one-sided FD of one scalar function of the spectrum."""
+    kc = np.asarray(export["vkc"])
+
+    def scalar(t):
+        return pick(ham.first_variational_eigenvalues(
+            export, jnp.asarray(kc) + t * jnp.asarray(dk)))
+
+    plus, minus, here = float(scalar(step)), float(scalar(-step)), float(scalar(0.0))
+    return dict(ad=float(jax.grad(scalar)(0.0)),
+                central=(plus - minus) / (2 * step),
+                onesided=(plus - here) / step)
+
+
+def test_an_individual_eigenvalue_derivative_disagrees_at_a_dirac_crossing(graphene):
+    """The study's Phase 1 "gradient, negative (required to fail)" criterion.
+
+    At a k-point where two occupied bands are exactly degenerate, AD, central FD
+    and one-sided FD of an INDIVIDUAL eigenvalue must *disagree*, while the
+    multiplet trace agrees across all three. That turns study section 8(b)'s
+    degeneracy caveat into an asserted signal instead of a silent pass, and it is
+    why `first_variational_eigenvalues` carries the warning it does while
+    `occupied_projector` does not.
+
+    Each of the three is wrong in its own way, not noisy. Writing the two
+    branches as e0 -+ v|t|: central FD of the SORTED spectrum returns the branch
+    average, 0, because the branches exchange places between +t and -t;
+    one-sided FD returns the extreme branch, -v; and AD returns the diagonal of
+    v* dH v in whatever basis the eigensolver picked inside the multiplet, which
+    is neither. Only their sum is basis-independent -- it is Tr[P dH].
+
+    Measured here: AD +-0.18, central FD +-0.0009, one-sided +-0.38.
+    """
+    export = graphene
+    dk = np.array([0.3, -0.5, 0.0])
+    dk /= np.linalg.norm(dk)
+    evals = np.asarray(ham.first_variational_eigenvalues(
+        export, jnp.asarray(export["vkc"])))
+    assert evals[4] - evals[3] < 1e-5, "the Dirac point is no longer degenerate"
+
+    lower = _three_derivatives(export, lambda w: w[3], dk)
+    upper = _three_derivatives(export, lambda w: w[4], dk)
+    scale = max(abs(lower["ad"]), abs(lower["onesided"]))
+    assert scale > 1e-2, "the crossing is not linear along this direction"
+    assert abs(lower["ad"] - lower["central"]) > 0.1 * scale
+    assert abs(lower["ad"] - lower["onesided"]) > 0.1 * scale
+    assert abs(lower["central"] - lower["onesided"]) > 0.1 * scale
+
+    # and the pair trace agrees across all three, on the same scale
+    summed = _three_derivatives(export, lambda w: w[3] + w[4], dk)
+    assert abs(lower["ad"] + upper["ad"] - summed["ad"]) < 1e-6 * scale
+    for route in ("central", "onesided"):
+        assert abs(summed[route] - summed["ad"]) < 1e-3 * scale
+
+
+def test_a_time_reversal_invariant_multiplet_cannot_show_the_disagreement(silicon):
+    """Why Si at Gamma is NOT the fixture above, and neither is h-BN at Gamma.
+
+    The study names both, and both are wrong for the same reason. At any
+    time-reversal-invariant momentum every branch is EVEN in k, so the sorted
+    branches do not exchange between +t and -t: AD and central FD then agree
+    with each other and with the true derivative, which is zero. The multiplet
+    is just as degenerate as graphene's -- what is missing is a LINEAR splitting.
+
+    One-sided FD is the only one that moves, and it moves for an ordinary
+    reason: (e(t) - e(0))/t is about e''t/2 at a critical point. Asserting that
+    it shrinks with the step is what separates that from a degeneracy signal, and
+    is the reason this test exists rather than a comment.
+    """
+    export = silicon["gamma"]
+    dk = np.array([0.3, -0.5, 0.8])
+    dk /= np.linalg.norm(dk)
+    for band in (1, 2, 3):                       # the Gamma_25' triplet
+        got = _three_derivatives(export, lambda w, b=band: w[b], dk)
+        assert abs(got["ad"]) < 1e-8
+        assert abs(got["central"]) < 1e-8
+
+    coarse = _three_derivatives(export, lambda w: w[1], dk, step=1e-3)
+    fine = _three_derivatives(export, lambda w: w[1], dk, step=1e-4)
+    assert abs(fine["onesided"]) > 1e-6          # it is not zero
+    assert abs(fine["onesided"]) < 0.2 * abs(coarse["onesided"])   # and it is O(step)

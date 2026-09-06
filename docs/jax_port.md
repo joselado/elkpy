@@ -959,18 +959,32 @@ gap at which its own refusal is meant to fire; it needs extending below `soc_sca
   compare a multiplet-summed quantity ($\sum_{j\in{\rm occ}}\varepsilon_j$) everywhere else.
   **A step-size-independent disagreement is a wrong gradient**; a step-size-dependent one is
   truncation error.
-- **Gradient, adversarial:** the same on graphene with `soc_scale` swept 3000 → 300 → 30 → 3
+- **Gradient, adversarial:** ~~the same on graphene with `soc_scale` swept 3000 → 300 → 30 → 3
   (patch 0001 makes the Dirac gap a continuous knob from $\sim$1.4 eV to $\sim\mu$eV). Require
   relative agreement $<10^{-6}$ on the multiplet-summed quantity at every value, **and** require
   an explicit refusal (not a returned number) once the sampled gap falls below the tolerance
-  §8(b) derives from $\epsilon\kappa(S)\|H\|$. "Agreement or a clean refusal" without a threshold
-  at which refusal is *required* is unfalsifiable. This is the only test in the suite
-  that reaches the near-degenerate regime where B1 actually bites.
+  §8(b) derives from $\epsilon\kappa(S)\|H\|$.~~ **Withdrawn as written — `soc_scale` cannot
+  move the first-variational spectrum at all.** Spin-orbit coupling enters Elk only through
+  `eveqnsv`: `socfr` appears zero times in `hmlfv`, `olpfv`, `hmlaa`, `hmlalo`, `hmllolo`,
+  `olpaa`, `olpalo`, `olplolo`, `eveqnfv`, `hmlrad` and `olprad` (grep-verified against
+  `build/elk/src/`), so patch 0001 scales a term Phase 1's matrices never see and the
+  first-variational Dirac point is exactly degenerate at *every* scale. The sweep degenerates
+  into "refuse always" rather than a threshold crossing. The requirement that survives — that
+  refusal be *required* to fire at a stated threshold, without which "agreement or a clean
+  refusal" is unfalsifiable — is delivered instead by cutting a real multiplet: bulk Si's
+  $\Gamma_{25'}$ triplet is refused at $n_{\rm occ}=3$ and accepted at $n_{\rm occ}=4$, on one
+  ground state and with no `soc_scale`. See `docs/jax_port_phase1.md` §1f, which also records
+  why a $k\to K$ approach cannot substitute: the gap floors at the assembly's own
+  symmetry-breaking noise, one to four orders *above* the tolerance.
 - **Gradient, negative (required to fail):** at a k-point where two occupied bands are exactly
-  degenerate (h-BN at $\Gamma$, or graphene at K with `soc_scale=0`), require that AD, central FD
-  and one-sided FD of an **individual** eigenvalue *disagree*, and that the multiplet trace agrees
-  across all three. This turns §8(b)'s degeneracy caveat into an asserted signal instead of a
-  silent pass.
+  degenerate, require that AD, central FD and one-sided FD of an **individual** eigenvalue
+  *disagree*, and that the multiplet trace agrees across all three. This turns §8(b)'s degeneracy
+  caveat into an asserted signal instead of a silent pass. **Note the fixture requirement, which
+  this bullet gets wrong:** "h-BN at $\Gamma$" does not work, and neither does Si at $\Gamma$.
+  At any time-reversal-invariant momentum every branch is *even* in $\mathbf k$, so the sorted
+  branches do not exchange between $+t$ and $-t$ and AD, central FD and the true derivative all
+  correctly return **zero** — measured, `docs/jax_port_phase1.md` §1h. The disagreement needs
+  branches that split *linearly*, i.e. graphene at $K$.
 
 ### Phase 2 — the density and potential half (2–3 months)
 
