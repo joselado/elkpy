@@ -252,10 +252,20 @@ None of these is in the study, and each cost a wrong answer to find.
   local orbitals, so only the half Elk evaluates may be used — invisible on silicon,
   1.3e-2 Ha on h-BN's nitrogen. And any element-wise comparison against Elk's $H$ has a
   ~1e-12 floor from `hmlaa`/`hmlalo`'s own `zaxpy` guard, measured, not assumed.
-- **Every Phase 1 gradient criterion is open.** Nothing assembled has been
-  differentiated. `apwalm` differentiates exactly (0c) and $Z$ is a fixed contraction,
-  so the position-derivative path is short — but Phase 0's standing finding cuts both
-  ways, and a green forward check validates no gradient.
+- **~~Nothing assembled has been differentiated.~~ The $k$-derivative is done**
+  (`eigenproblem_at`, `first_variational_eigenvalues`). $V_s$ is recovered as a matrix
+  from the two exported interstitial blocks, so the whole spectrum is a differentiable
+  function of $k$ with no new Fortran; AD agrees with central FD of the same function to
+  1e-9. **The finding to carry forward**: against `genpmatk` the two agree only to
+  0.2-1.4%, and that gap is FLAT in `rgkmax` while shrinking 4x with `apword` — it is
+  the muffin-tin linearisation, not the plane-wave cutoff, because Hellmann-Feynman
+  needs a $k$-independent basis and LAPW's is not one. So `genpmatk` is not a
+  machine-precision oracle for a band velocity (this is why §22's own test needs
+  `rel=2e-2`), and the remaining gradient criteria must FD the same code path.
+- **The POSITION derivative is still open**, and is harder than the $k$ one: moving an
+  atom moves the muffin-tin potential and hence the radial integrals, which are imported.
+  So is the adversarial `soc_scale` sweep, and the negative test at a degeneracy —
+  nothing here is wired to `projector.py`'s safe-$K$ rule or a per-run $\kappa(O)$.
 - **0d's timing needs a GPU instance.** Do not fake it on CPU; the study's own 1.03x CPU
   number settles nothing. The memory half is already answered and points the other way.
   **This is now the only open Phase 0 item.**

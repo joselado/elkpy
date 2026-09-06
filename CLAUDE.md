@@ -1285,12 +1285,41 @@ Gaunt-contracted $z_1$ below 1e-12 (the `zaxpy` guard); reproducing it takes h-B
 two, so the guard is documented rather than copied — and any element-wise comparison
 against Elk has a ~1e-12 floor because of it.
 
+**The assembly is now a function of $k$, and it has been differentiated.** Two
+observations remove the need for any new Fortran: $O$'s interstitial block IS the
+characteristic function and is $k$-independent, and $H$'s is that plus an explicit
+kinetic term — so $V_s$, the one Phase 2 ingredient involved, is recovered as a MATRIX
+by subtracting the two exported blocks elementwise, with no Fourier index mapping.
+`apwalm` comes from `elkjax.lapw.match`, closed with a Cholesky-reduced `eigvalsh`.
+Back at the exported $k$ it reproduces Elk's $H$, $O$ and `evalfv` (9.8e-15 / 2.7e-15 /
+5.0e-15 on Si), and `jax.grad` agrees with central FD of the same function to 1e-9.
+
+**And it found that $d\varepsilon/dk \neq \langle p\rangle$ in a finite LAPW basis.**
+Against `genpmatk` (§22's `MOMENTUM`, an independent Fortran path) the two agree in sign
+and to 0.2-1.4%, NOT to machine precision — and the gap is **flat in `rgkmax`** (2.336e-3,
+2.339e-3, 2.340e-3 at 7, 8, 9 for band 0) while the eigenvalue converges, so it is not
+the plane-wave cutoff. It is the **muffin-tin linearisation**: `apword` 1→2 (augmenting
+with $\dot u$ as well as $u$) cuts it up to 4x, most for the high band where it was
+largest. Hellmann-Feynman needs a $k$-INDEPENDENT basis and LAPW's is not one, so AD
+returns $v^\dagger(\partial_kH-\varepsilon\,\partial_kO)v$ while `genpmatk` returns
+$\langle\psi|-i\nabla|\psi\rangle$. **Two consequences**: `genpmatk` is not a
+machine-precision reference for a band velocity — which is the mechanism behind
+`tests/test_calculation_momentum.py`'s own Hellmann-Feynman check needing `rel=2e-2` —
+and any remaining gradient criterion must finite-difference the *same* code path. The
+test asserts the direction of the effect rather than a tolerance, and requires the two
+NOT to agree exactly so its premise cannot lapse silently. Separately: `apword=2`'s
+matrices inherit `match`'s ill-conditioned general branch (1.3e-12 vs 9.8e-15) but the
+SPECTRUM does not (3.8e-15 either way) — a near-null-space rotation inside the APW order
+space, which eigenvalues are blind to.
+
 **Still open in Phase 1**: the radial integrals are inputs, not outputs (building them
 needs `genapwfr`/`genlofr`/`hmlrad`/`olprad` and through `vsmt` the muffin-tin potential
-— Phase 2); the Cholesky-reduced `eigh` the port is meant to own; and **every** gradient
-criterion (displaced h-BN against central FD at three step sizes, the adversarial
-`soc_scale` sweep with a *required* refusal, the negative test at an exact degeneracy).
-Nothing here has been differentiated.
+— Phase 2); the POSITION derivative $d\varepsilon_j/d\mathbf R$ on displaced h-BN, which
+is harder than the $k$ one because moving an atom moves the radial integrals; the
+adversarial `soc_scale` sweep with a *required* refusal (0b(ii): must extend below
+`soc_scale = 1`); and the negative test at an exact degeneracy. Nothing here is wired to
+`projector.py`'s safe-$K$ rule or to a per-run $\kappa(O)$, so at a multiplet this
+pipeline fails exactly the way 0b describes.
 
 **$\kappa(O)$ for a real LAPW overlap is measured, and the cheap estimate is
 useless.** Patch 0013 (§33) supplies real $H$ and $O$; `python3 -m elkjax.phase0b_overlap`
