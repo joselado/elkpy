@@ -6,7 +6,12 @@ kernel is *inert*.  Both branches of a same-side pair are identically zero
 (:math:`f_i-f_j=0` exactly and :math:`f'=0`), so §1f's plateau in ``tol`` measures
 nothing.  With Fermi-Dirac occupations the branch value is :math:`f'(\bar\lambda)`,
 which at a half-filled level is :math:`-1/4w` -- large, not zero -- so the threshold is
-load-bearing for the first time.
+load-bearing for the first time.  **That is the history rather than the current state**:
+what the measurements below showed is that a threshold was the wrong instrument, and
+:func:`elkjax.projector.smeared_projector` now carries the cancellation-free closed form
+in its JVP instead, which makes ``tol`` inert for smeared occupations.  The experiments
+are kept as they were run, because the route they retire is still the one a Phase 1
+developer writes first.
 
 **The fixture is graphene at** :math:`K`, and it is the physically right one rather than
 an engineered one: the two :math:`\pi` bands are degenerate there *and* the Fermi level
@@ -35,13 +40,22 @@ Five experiments::
   at the Dirac point puts the zone-integrated answer at the local one.
 * **B, kernel anatomy.**  For every close pair: the splitting, the run's tolerance, the
   direct quotient, :math:`f'(\bar\lambda)`, and which of the two the exact kernel
-  agrees with.  This is what says whether the branch fires at all.
+  agrees with.  This is what says whether the branch fires at all -- a diagnostic of the
+  retired mechanism, kept because it is also what shows the closed form agreeing with
+  *both* candidates where each is right, which is why it can replace them.
 * **C, gradient along Hermitian directions, swept in** :math:`w`.  Three routes --
-  JAX's own ``eigh`` rule, the direct quotient (``tol=0``) and the safe rule
-  (``tol=`` :func:`elkjax.hamiltonian.projector_tolerance`) -- against the exact kernel
-  and against central FD.  Sweeping :math:`w` is the point: the direct quotient's
+  JAX's own ``eigh`` rule, the literal difference quotient
+  (:func:`elkjax.projector.direct_quotient_projector`) and the safe rule -- against the
+  exact kernel and against central FD.  Sweeping :math:`w` is the point: the quotient's
   relative error is :math:`\sim\epsilon\,w/\Delta\lambda`, so it *grows* with the
   smearing width, which is the opposite of the intuition that broader smearing is safer.
+  Since the measurements below were first taken, :func:`elkjax.projector.smeared_projector`
+  has been changed to carry the cancellation-free kernel in its JVP, so ``tol`` no longer
+  selects anything for it -- the quotient route is kept because it is the thing under
+  test, not because it is an implementation.
+* **C(ii), what is left after that.**  The residual is the two eigensolvers disagreeing
+  about the eigenvalues, amplified by the kernel's :math:`1/w` relative sensitivity --
+  measured, not inferred, by rerunning the same closed form on XLA's own decomposition.
 * **D, gradient in** :math:`k`.  The same at the end of the whole differentiable
   pipeline.  The FD step must satisfy :math:`v_F h\ll w` or the cubic term dominates.
 * **E, the self-consistent Fermi level.**  Fixed :math:`N` against fixed :math:`\mu`,
@@ -183,6 +197,40 @@ def matrix_direction(reduced, tol, mu, width, ndir=5, seed=1400):
     return rows
 
 
+# ------------------------------------------------------------------------ C(ii)
+
+
+def eigensolver_floor(reduced, mu, width, ndir=3, seed=1450):
+    r"""What is left after the closed-form kernel: the two eigensolvers, not the rule.
+
+    The reference builds its own decomposition with LAPACK while ``smeared_projector``
+    uses XLA's, and the two disagree at :math:`\sim10^{-14}` Ha.  The kernel's
+    sensitivity to an eigenvalue is :math:`\sim f''\sim1/w^2` against a value
+    :math:`\sim f'\sim1/w`, so that disagreement enters the RELATIVE error divided by
+    :math:`w` -- which is why the residual shrinks as the smearing widens, the opposite
+    of every other effect in §1i.  Rerunning the same closed form on XLA's own
+    decomposition removes it and is the measurement that says so.
+    """
+    n = reduced.shape[0]
+    m = _observable(n)
+    hj, mj = jnp.asarray(reduced), jnp.asarray(m)
+    evals, evecs = (np.asarray(x) for x in jnp.linalg.eigh(hj))
+    kernel = ref.fermi_divided_difference_kernel(evals, mu, width)
+    rows = []
+    for j in range(ndir):
+        d = ref.random_hermitian_direction(n, seed + j)
+        dj = jnp.asarray(d)
+        ad = float(jax.grad(lambda t: _loss(
+            pj.smeared_projector(hj + t * dj, mu, width, 0.0), mj))(0.0))
+        lapack = float(np.real(np.trace(
+            ref.dprojector_fermi(reduced, d, mu, width) @ m)))
+        a = evecs.conj().T @ d @ evecs
+        xla = float(np.real(np.trace((evecs @ (kernel * a) @ evecs.conj().T) @ m)))
+        rows.append(dict(vs_lapack=_rel(ad, lapack), vs_xla=_rel(ad, xla),
+                         between=_rel(lapack, xla)))
+    return rows
+
+
 # --------------------------------------------------------------------------- D
 
 
@@ -321,6 +369,14 @@ def main(workdir="phase1_smearing"):
                   f"naive fwd {worst['naive_fwd']:.2e}  rev {worst['naive_rev']:.2e}   "
                   f"quotient rev {worst['direct_rev']:.2e}   "
                   f"safe fwd {worst['safe_fwd']:.2e}  rev {worst['safe_rev']:.2e}")
+
+            rows = eigensolver_floor(reduced, mu, width)
+            worst = {key: max(r[key] for r in rows)
+                     for key in ("vs_lapack", "vs_xla", "between")}
+            print(f"C(ii). the residual is the eigensolver, not the kernel: "
+                  f"AD vs LAPACK-built reference {worst['vs_lapack']:.2e}, "
+                  f"vs XLA-built {worst['vs_xla']:.2e}, "
+                  f"the two references differ by {worst['between']:.2e}")
 
             rows = k_direction(export, tol, mu, width)
             for r in rows:

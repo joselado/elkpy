@@ -839,6 +839,57 @@ cancellation-prone route — the same "necessary but not sufficient" shape §1f 
 the refusal. Anything wanting better than $10^{-9}$ on a matrix like this needs the
 stable form of the kernel in the JVP itself, not a threshold.
 
+### Removing the tolerance rather than tuning it
+
+The $2\times10^{-9}$ above is not a threshold that wants adjusting. The stable form of
+the kernel quoted at the top of this section is **analytically exact at every
+splitting**, so it can go inside the JVP and there is then nothing left for `tol` to
+select. `projector.fermi_kernel` does that, and `smeared_projector` now uses it; the
+near/far branch that remains is about `cosh` overflowing (a real LAPW spectrum reaches
+$|u|\sim10^6$ at Elk's default width), not about resolving a degeneracy, and both
+`jnp.where` arguments are made finite before the select so the discarded branch cannot
+put a `NaN` into the gradient.
+
+| | $w=10^{-3}$ | $10^{-2}$ | $10^{-1}$ |
+|---|---|---|---|
+| Si $\Gamma$, safe rule with the `tol` branch | 2.0e-9 | 4.4e-11 | 8.9e-10 |
+| Si $\Gamma$, safe rule with the closed form | **7.4e-12** | **3.1e-12** | **4.8e-14** |
+| graphene $K$, either | 1.0e-13 | 1.0e-13 | 2.0e-10 |
+| Si $\Gamma$, fixed-$N$ (experiment E) | — | 7.6e-10 → **3.0e-13** | 2.0e-9 → **6.0e-13** |
+
+`tol` is now **inert** for smeared occupations, and that is asserted as *equality*
+across fourteen decades of it including zero — a stronger statement than study §8(b)'s
+"flat over two decades", and a different one: a threshold removed rather than tuned to
+be harmless. It remains load-bearing for `hard_window_projector`, whose straddling-pair
+`NaN` refusal is a statement about a derivative that does not exist.
+
+**And what is left is not the kernel.** The residual shrinks as the smearing *widens*,
+which is backwards for every other effect in this section, so it was chased down:
+`reference.dprojector_fermi` builds its own eigendecomposition with LAPACK while
+`smeared_projector` uses XLA's, and on this matrix the two disagree by
+$2.1\times10^{-14}$ Ha. The kernel's sensitivity to an eigenvalue is $f''\sim1/w^2$
+against a value $f'\sim1/w$, so that disagreement enters the relative error divided by
+$w$. Re-running the *same closed form* on XLA's own decomposition confirms it exactly:
+
+| | AD vs LAPACK-built reference | AD vs XLA-built | the two references |
+|---|---|---|---|
+| $w=10^{-3}$ | 1.8e-12 | **7.9e-14** | 1.9e-12 |
+| $w=10^{-2}$ | 3.1e-12 | **5.5e-15** | 3.1e-12 |
+| $w=10^{-1}$ | 2.0e-14 | **2.6e-15** | 2.2e-14 |
+
+The third column is the first, to two digits. So the rule is accurate to $\sim10^{-14}$
+and what the driver reports is a *comparison* artifact — worth knowing before anyone
+tunes anything against a $10^{-12}$ target. `elkjax.phase1_smearing.eigensolver_floor`
+is that measurement, kept in the driver.
+
+One consequence for the test suite, stated because it weakens an oracle:
+`reference.fermi_divided_difference_kernel` and `projector.fermi_kernel` now share a
+*formula*. They remain independent **implementations** (NumPy and XLA, and the table
+above is exactly what that catches), but the arbiter where it matters is central finite
+differences — legitimate here, since $P=f(H)$ is smooth — and
+`direct_quotient_projector`, which keeps the literal quotient and is therefore still
+formula-independent wherever it is accurate.
+
 ### The $k$-derivative, and the self-consistent Fermi level
 
 The whole pipeline differentiated in $k$ with smeared occupations agrees with the exact
@@ -904,3 +955,104 @@ kernel's own JVP still forms the quotient rather than the stable closed form, wh
 what puts the floor at $2\times10^{-9}$ on Si. And second derivatives are untouched here:
 `smeared_projector`'s JVP calls `eigh`, so a second derivative falls back on JAX's rule
 exactly as §0a′ describes, and `sign_projector` covers hard windows only.
+
+
+## 1j. Second derivatives, and the route that survives them
+
+`docs/continue_here.md` §3 item 5, and the last Phase 1 item reachable without Phase 2.
+§1f's safe-$K$ rule is **first order by construction**: its own JVP body calls
+`jnp.linalg.eigh`, so a second derivative falls back on JAX's default eigenvector rule
+and the hazard the rule exists to remove comes straight back.
+`projector.sign_projector` is the eigensolver-free route — the projector as a matrix
+sign function,
+
+$$
+P=\tfrac12\big(\mathbb 1-\mathrm{sign}(\tilde H-\mu)\big),
+\qquad X\leftarrow\tfrac12(3X-X^3),\quad X_0=(\tilde H-\mu)/\lVert\tilde H-\mu\rVert_2,
+$$
+
+with no eigendecomposition in it, hence no gauge and no $1/(\lambda_i-\lambda_j)$
+anywhere, which JAX differentiates to any order natively. Phase 0a′ showed that on a
+toy; this is its first LAPW matrix.
+
+Driver: `python3 -m elkjax.phase1_secondorder`. Tests:
+`tests/test_calculation_lapw_secondorder.py`.
+
+### The cost, which a toy could not have supplied
+
+Newton-Schulz needs about $\log(\lVert\tilde H-\mu\rVert_2/\Delta)/\log(3/2)$ steps, and
+the numerator is set by **the top of the basis, not by the valence bandwidth**. Measured
+on bulk Si at $\Gamma$, `rgkmax=7`: the reduced spectrum runs $[-0.243,\,17.9]$ Ha
+against a 0.35 Ha valence manifold and a 0.0926 Ha boundary gap, so the ratio is
+$1.9\times10^{2}$ and the predicted count 12.9. Observed: **10 steps is not converged**
+(error 1.1, i.e. not a projector at all), 20 steps reaches $3.4\times10^{-14}$ against
+the safe-$K$ rule and $4.2\times10^{-14}$ against Elk's own occupied subspace, and 30, 40
+and 60 do not improve on it. 42 ms at $n=177$ on this machine.
+
+Note this is the *first-variational* matrix, which contains no core states at all. The
+study's own "deepest state in the window" phrasing anticipates a second-variational or
+all-electron block, where the numerator — and so the tape the study worries about —
+would be larger still.
+
+### Only one route survives, and the control says why
+
+At $\Gamma$, with the $\Gamma_{25'}$ triplet inside the window, `grad(grad)` of the
+scalar $\mathrm{Tr}[P M]$ along three Hermitian directions:
+
+| | direction 1 | direction 2 | direction 3 |
+|---|---|---|---|
+| reference (central FD of the first derivative) | 0.00332328 | 0.00312484 | 0.00269235 |
+| `sign_projector` | 1.6e-10 | 2.6e-11 | 8.8e-11 |
+| `hard_window_projector` (the safe-$K$ rule) | **NaN** | **NaN** | **NaN** |
+| naive | **NaN** | **NaN** | **NaN** |
+| second difference of the loss (coarse control) | 8.8e-5 | 2.6e-6 | 1.0e-5 |
+
+The reference is deliberately **not** a second difference of the loss, which loses four
+digits; it is a central difference of the safe rule's *first* derivative, which §1f
+validated against the closed form and which shares no code with the sign route.
+
+**The control is in the same ground state.** At a generic $k$ with no degeneracy, all
+three second derivatives agree with the reference to $4$–$9\times10^{-11}$. So the `NaN`
+is not "second derivatives of a projector are hard", it is the enclosed multiplet — the
+same statement §1f makes about the first derivative, extended one order. And the
+safe-$K$ rule failing here is not a defect: it is its own docstring's warning,
+now measured on a real matrix rather than argued.
+
+### Through the assembly, and which side of the disagreement is wrong
+
+Differentiating twice in $k$ — through `match`, the Gaunt contractions, the Cholesky
+reduction and the sign iteration — gives $-2.4960647845$ in 12.8 s. The first
+derivative through the two routes agrees to $2.4\times10^{-14}$, which is the entry
+ticket. For the second, one FD step could only report a $10^{-6}$ disagreement without
+saying whose. Refining it does say:
+
+| central FD step $h$ | $10^{-3}$ | $3\times10^{-4}$ | $10^{-4}$ | $3\times10^{-5}$ |
+|---|---|---|---|---|
+| relative to the AD value | 1.44e-4 | 1.29e-5 | 1.44e-6 | 1.29e-7 |
+
+Exactly $O(h^2)$ — a factor of 100 per decade of step — so this is the finite difference
+converging **onto** the AD value, not AD converging onto anything. The same argument
+Phase 0a′ used on the toy, now through the whole LAPW assembly.
+
+### What this settles
+
+`sign_projector` works on a real LAPW matrix, at a real symmetry multiplet, to second
+order, at a cost of about 20 unrolled Newton-Schulz steps set by the top of the basis.
+That closes the last Phase 1 item that needed no Phase 2 ingredient.
+
+**It does not settle the §9.2 hybrid question**, and it would be easy to overclaim here.
+The targets that decide that question — phonons, Born charges, response functions — need
+second derivatives *through the SCF fixed point*, i.e. $dv^*/d\theta$ differentiated
+again, which is Phase 0a′'s territory and has only ever been demonstrated on the toy.
+What §1j supplies is the **projector** half of that composition, the piece 0a′ identified
+as the blocker, now on a real LAPW matrix at a real multiplet. The fixed-point half at
+anything like production shapes is still untested.
+
+Two things it does not settle. `sign_projector` covers **hard windows only**; smeared
+occupations at second order would need a Chebyshev expansion of the Fermi function,
+which is separate work and is *not* what §1i built (§1i's closed form removes the
+tolerance from the first derivative, not the `eigh` from the JVP). And the iteration is
+unrolled, which at $n=177$ is free and at production shapes is exactly the tape Phase 0e
+measured compile time against — `lax.scan` over the Newton-Schulz steps is the obvious
+answer and has not been tried, since scanning a step whose body is two matmuls is the
+textbook case for it.

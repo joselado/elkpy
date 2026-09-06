@@ -6,10 +6,14 @@ Workstream B's `jax-port` was fast-forwarded in earlier; `origin/master` is now 
 The `elk-full-coverage` and `jax-port` branches still exist and point at older commits;
 deleting both is safe.
 
-**Phase 1i is the newest work**: smeared occupations and the self-consistent Fermi
-level, differentiated on Elk's own matrices, which is the first configuration in which
-the divided-difference kernel's near-degenerate branch is not vacuous. See §3's item 4
-and `docs/jax_port_phase1.md` §1i.
+**§§1i-1j are the newest work**, and between them they close **both** remaining Phase 1
+items that needed no Phase 2 ingredient. §1i: smeared occupations and the
+self-consistent Fermi level on Elk's own matrices — the first configuration in which the
+divided-difference kernel's near-degenerate branch is not vacuous — after which the
+tolerance was **removed** rather than tuned, by putting the cancellation-free closed form
+inside the JVP. §1j: second derivatives, where `sign_projector` returns a finite,
+FD-confirmed number at a real symmetry multiplet and both `eigh`-based routes return
+`NaN`. See §3's items 4 and 5, and `docs/jax_port_phase1.md`.
 
 **Phase 0 is closed and Phase 1 has started.** `hmlfv`/`olpfv` are transcribed and
 checked against Elk element-wise (`docs/jax_port_phase1.md`, patch 0014), the assembly
@@ -20,6 +24,9 @@ $k$-tangent `NaN` at $\Gamma$ and across every $k_z=0$ plane; **that is fixed to
 (§1g), so the projector derivative now works where the multiplets are.
 
 ```
+7695478  Remove the smeared tolerance, differentiate twice   elkjax/phase1_secondorder.py
+8e4e04f  Make the fixed-N tests use the reference they claim
+0b2cbe2  Record what the smeared kernel measured
 d2eb839  Differentiate a smeared occupation on Elk's own matrices  elkjax/phase1_smearing.py
 2306e08  Close the negative test, correct the study's own fixture
 4a4090f  Remove the two poles that made the k-tangent NaN at Gamma  elkjax/lapw.py
@@ -308,14 +315,35 @@ Weinert Poisson, XC) and two Phase 1 items are reachable without it.
    still untested (a zone-summed Fermi level is Phase 2), and the safe rule's floor on Si
    is $2\times10^{-9}$ rather than $10^{-13}$ because the *other* pair sits $67\times$
    ABOVE the tolerance and therefore takes the cancellation-prone quotient — the
-   tolerance is a cliff, and beating $10^{-9}$ needs the stable kernel inside the JVP.
+   tolerance is a cliff. **That has since been fixed**: the closed form is now inside
+   `smeared_projector`'s JVP (`projector.fermi_kernel`), `tol` is *inert* for the smeared
+   case — asserted as equality across fourteen decades of it, not as a plateau — and Si's
+   floor is 7.4e-12 / 3.1e-12 / 4.8e-14 across the three widths. What remains is not the
+   kernel: it is LAPACK and XLA disagreeing about the eigenvalues by 2.1e-14 Ha,
+   amplified by the kernel's $1/w$ relative sensitivity; rerunning the same closed form
+   on XLA's own decomposition gives 7.9e-14 / 5.5e-15 / 2.6e-15
+   (`phase1_smearing.eigensolver_floor`). Knock-on for the suite:
+   `reference.fermi_divided_difference_kernel` and `projector.fermi_kernel` now share a
+   formula, so the arbiter where it matters is central FD (legitimate, $P=f(H)$ is
+   smooth) and `direct_quotient_projector`, which stays literal.
 
-5. **Then: second derivatives on a real LAPW matrix.** `hard_window_projector`'s JVP
-   calls `eigh` itself, so a second derivative falls back on JAX's default rule;
-   `sign_projector` (0a′) is the eigensolver-free route and has only ever run on the
-   toy. On an all-electron matrix its Newton–Schulz step count is set by the **deepest
-   state in the window**, not by the valence bandwidth, so this is as much a cost
-   measurement as a correctness one. Also self-contained.
+5. **~~Second derivatives on a real LAPW matrix.~~ DONE** (§1j,
+   `elkjax/phase1_secondorder.py`, `tests/test_calculation_lapw_secondorder.py`). At
+   bulk Si's $\Gamma$ with the $\Gamma_{25'}$ triplet inside the window, `grad(grad)`
+   through `sign_projector` agrees with a central difference of the safe rule's own
+   first derivative to $3\times10^{-11}$–$2\times10^{-10}$, while **both** `eigh`-based
+   routes — the naive one *and* the safe-$K$ rule — return `NaN`, which is the latter's
+   own docstring warning measured rather than argued. The control is in the same ground
+   state: at a generic $k$ all three agree to $10^{-10}$, so the failure is the
+   multiplet and not the order. Differentiated twice in $k$ through the whole assembly
+   as well, where refining the FD step gives 1.44e-4, 1.29e-5, 1.44e-6, 1.29e-7 —
+   textbook $O(h^2)$, i.e. FD converging **onto** AD. Cost: the Newton-Schulz count is
+   set by the top of the basis (17.9 Ha) and not the 0.35 Ha valence manifold, so the
+   ratio is 190 and the count 13; 10 steps is not converged, 20 is, to $3\times10^{-14}$
+   against both the safe rule and Elk's own subspace, in 42 ms at $n=177$. Left behind:
+   `sign_projector` is hard-window only (smeared at second order needs a Chebyshev
+   expansion of the Fermi function), and the iteration is unrolled — `lax.scan` over a
+   two-matmul body is the obvious fix at production shapes and has not been tried.
 
 6. **~~The adversarial `soc_scale` sweep.~~ WITHDRAWN as written** — `soc_scale`
    cannot move the first-variational spectrum at all. `socfr` enters only
@@ -416,7 +444,9 @@ as the control that separates an AD bug from a real basis effect.
   `check_fermi_level_determined` now gives. Still open: the k-point weights, which
   cancel at a single k.
 - **`sign_projector` covers hard windows only.** Smeared occupations at second order
-  would need a Chebyshev expansion of the Fermi function. Separate work.
+  would need a Chebyshev expansion of the Fermi function. Separate work, and the one
+  thing §1i and §1j between them do NOT reach: §1i removed the tolerance from the
+  smeared FIRST derivative, not the `eigh` from its JVP.
 
 ### The code, and how to run it
 
@@ -440,6 +470,8 @@ phase1_projector.py  item 1f: the rule wired to the eigensolve, on real matrices
 phase1_smearing.py   item 1i: smeared occupations and the self-consistent Fermi
                level, on real matrices -- the first configuration in which the
                kernel's near-degenerate branch is not vacuous
+phase1_secondorder.py  item 1j: second derivatives via sign_projector, where both
+               eigh-based routes return NaN at a real multiplet
 ```
 
 ```bash
@@ -451,7 +483,8 @@ ELKPY_RUN_SLOW_TESTS=1 PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
 PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
     tests/test_calculation_lapw_assembly.py \
     tests/test_calculation_lapw_projector.py \
-    tests/test_calculation_lapw_smearing.py -q
+    tests/test_calculation_lapw_smearing.py \
+    tests/test_calculation_lapw_secondorder.py -q
 ```
 
 **`taskset` is not decoration.** `.claude/settings.json`'s `OMP_NUM_THREADS=1` does not

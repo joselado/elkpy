@@ -28,6 +28,15 @@ all.  The two ``jnp.where`` calls are not redundant: the *denominator* is made s
 before the division, because ``jnp.where`` evaluates both branches and a ``NaN`` in the
 discarded one still propagates through the gradient.
 
+**That ``tol`` branch is now the HARD-WINDOW rule's, not a general one.**  For Fermi-Dirac
+occupations the quotient has a closed form with no subtraction in it
+(:func:`fermi_kernel`), which is exact at every splitting, so :func:`smeared_projector`
+carries that instead and ``tol`` selects nothing for it -- measured, the gradient is
+*equal* across fourteen decades of ``tol`` (Phase 1i, `docs/jax_port_phase1.md`).  A hard
+window has no such closed form to reach for -- its occupation is a step, not a smooth
+function of the eigenvalue -- so there ``tol`` remains load-bearing, and the refusal
+below is a statement about a derivative that does not exist.
+
 **Two refusals rather than two silently wrong numbers.**
 
 * For a hard integer window, a pair straddling the window boundary that is closer than
@@ -41,10 +50,14 @@ discarded one still propagates through the gradient.
   pairs are treated as split, which is hazard A reintroduced exactly where the rule was
   installed to prevent it.
 
-**Known limitation, and it is Phase 0a′'s problem.**  This rule is first-order only: the
-JVP body itself calls ``jnp.linalg.eigh``, so differentiating the rule a second time
-(``jax.hessian``) falls back on JAX's default eigenvector rule and the hazard returns.
-Second-order work needs the rule made recursive, or forward-over-forward.
+**First order only, and the answer is** :func:`sign_projector`.  This rule's JVP body
+itself calls ``jnp.linalg.eigh``, so differentiating it a second time falls back on JAX's
+default eigenvector rule and the hazard returns -- measured on Elk's own matrices in
+Phase 1j, where ``grad(grad)`` of the safe rule at bulk silicon's :math:`\Gamma_{25'}`
+triplet is ``NaN`` while :func:`sign_projector`, which contains no eigensolve at all,
+returns a value agreeing with a central difference of this rule's own first derivative
+to :math:`10^{-10}`.  ``jax.hessian`` is not the route either way: a ``custom_vjp``
+cannot be forward-differentiated, so the composition is ``grad(grad)``.
 """
 
 import functools
@@ -90,6 +103,48 @@ def fermi_dirac(evals, mu, width):
     """Occupations and :math:`f'` for ``stype=3`` smearing, as ``(f, df/de)``."""
     f = jax.nn.sigmoid(-(evals - mu) / width)
     return f, -f * (1.0 - f) / width
+
+
+def fermi_kernel(evals, mu, width, crossover=1.0):
+    r"""The Fermi-Dirac divided difference :math:`K_{ij}`, **without cancellation**.
+
+    :func:`divided_difference_kernel` forms :math:`(f_i-f_j)/(\lambda_i-\lambda_j)`
+    literally and repairs the close pairs with a ``tol`` branch.  That branch is a
+    *cliff*: Phase 1i measured a pair 67x ABOVE the threshold on bulk silicon still
+    losing enough of the numerator to hold the whole derivative at
+    :math:`2\times10^{-9}` instead of :math:`10^{-13}`.  The repair is not a better
+    threshold, it is not needing one -- for the logistic function the quotient has a
+    closed form containing no subtraction at all:
+
+    .. math::
+
+        K_{ij}=-\frac{1}{4w}\,
+               \frac{\sinh(z_{ij})/z_{ij}}{\cosh u_i\,\cosh u_j},
+        \qquad u_i=\frac{\lambda_i-\mu}{2w},\quad z_{ij}=u_i-u_j ,
+
+    from :math:`f_a-f_b=-2e^{(a+b)/2w}\sinh(z)f_af_b` and
+    :math:`f_ie^{u_i}=1/(2\cosh u_i)`.  It is **analytically exact at every splitting**
+    and reduces to :math:`f'=-f(1-f)/w` on the diagonal, so the near/far distinction
+    below is about :math:`\cosh` overflowing, not about resolving a degeneracy: above
+    ``crossover`` in :math:`|z|` the two occupations differ by an :math:`O(1)` fraction,
+    the plain quotient is already accurate, and it is the safer of the two to evaluate.
+
+    Both ``jnp.where`` arguments are made finite before the select, for the reason the
+    module docstring gives: ``where`` evaluates both branches, and an ``inf/inf`` in the
+    discarded one becomes a ``NaN`` that survives into the gradient.
+    """
+    u = 0.5 * (evals - mu) / width
+    z = u[:, None] - u[None, :]
+    near = jnp.abs(z) <= crossover
+    zs = jnp.where(near, z, 0.0)              # bounded, so sinh cannot overflow
+    sinhc = jnp.where(jnp.abs(zs) < 1e-150, 1.0,
+                      jnp.sinh(zs) / jnp.where(zs == 0.0, 1.0, zs))
+    uc = jnp.clip(u, -350.0, 350.0)           # cosh(350) ~ 1e152; the product fits
+    stable = -0.25 / width * sinhc / (jnp.cosh(uc)[:, None] * jnp.cosh(uc)[None, :])
+    f = jax.nn.sigmoid(-2.0 * u)
+    dl = evals[:, None] - evals[None, :]
+    quotient = (f[:, None] - f[None, :]) / jnp.where(near, 1.0, dl)
+    return jnp.where(near, stable, quotient)
 
 
 def _projector(evecs, occ):
@@ -149,6 +204,11 @@ def smeared_projector(h, mu, width, tol=0.0):
 
     The :math:`\mu` tangent enters as :math:`-V\,\mathrm{diag}(f')\,V^\dagger\,d\mu`,
     since :math:`\partial f(\lambda-\mu)/\partial\mu = -f'(\lambda)`.
+
+    ``tol`` is **inert** and is kept only so the smeared and hard-window signatures stay
+    parallel: the JVP uses :func:`fermi_kernel`, which is exact at every splitting, so
+    there is no near-degenerate branch left to select.  Asserted as equality across
+    fourteen decades of it in ``tests/test_jax_projector.py``.
     """
     evals, evecs = jnp.linalg.eigh(h)
     occ, _ = fermi_dirac(evals, mu, width)
@@ -160,7 +220,7 @@ def _smeared_projector_jvp(width, tol, primals, tangents):
     (h, mu), (dh, dmu) = primals, tangents
     evals, evecs = jnp.linalg.eigh(h)
     occ, docc = fermi_dirac(evals, mu, width)
-    kernel = divided_difference_kernel(evals, occ, docc, tol)
+    kernel = fermi_kernel(evals, mu, width)
     a = evecs.conj().T @ dh @ evecs
     dp = evecs @ (kernel * a) @ evecs.conj().T
     return _projector(evecs, occ), dp - _projector(evecs, docc) * dmu
@@ -173,18 +233,38 @@ def naive_smeared_projector(h, mu, width):
     return _projector(evecs, occ)
 
 
+@functools.partial(jax.custom_jvp, nondiff_argnums=(2,))
 def direct_quotient_projector(h, mu, width):
-    r"""The safe-:math:`K` rule with the near-degenerate branch **switched off**.
+    r"""The same projector with the **literal** difference quotient in its JVP.
 
-    ``smeared_projector(h, mu, width, tol=0.0)``, given a name because it is the
-    third route Phase 1i needs and it is not the same thing as
-    :func:`naive_smeared_projector`.  Both avoid the eigenvector derivative; this one
-    still forms :math:`(f_i-f_j)/(\lambda_i-\lambda_j)` literally, so it is exposed to
-    the *numerator's* cancellation but not to the eigenvector rule's :math:`1/\delta\lambda`
-    amplification.  Separating the two is what shows which of them a real LAPW multiplet
-    actually trips (`docs/jax_port_phase1.md` §1i).
+    Kept as a route under test, not as an implementation, and given its own
+    ``custom_jvp`` so that it stays literal now that :func:`smeared_projector` does not.
+    It avoids the eigenvector derivative exactly as the safe rule does, but forms
+    :math:`(f_i-f_j)/(\lambda_i-\lambda_j)` by subtraction, so it is exposed to the
+    numerator's cancellation and not to the :math:`1/\delta\lambda` amplification.
+    Separating the two is what showed which of them a real LAPW multiplet trips
+    (`docs/jax_port_phase1.md` §1i): on graphene's Dirac pair, neither; on silicon's
+    :math:`\Gamma_{25'}`, this one, by 100% of the kernel entry.
+
+    It is also the one route in the smeared family that remains *formula-independent*
+    of :func:`elkjax.reference.dprojector_fermi`, which now shares its closed form with
+    ``smeared_projector``; that is why it is still exercised on the fixture where it is
+    accurate.
     """
-    return smeared_projector(h, mu, width, 0.0)
+    evals, evecs = jnp.linalg.eigh(h)
+    occ, _ = fermi_dirac(evals, mu, width)
+    return _projector(evecs, occ)
+
+
+@direct_quotient_projector.defjvp
+def _direct_quotient_projector_jvp(width, primals, tangents):
+    (h, mu), (dh, dmu) = primals, tangents
+    evals, evecs = jnp.linalg.eigh(h)
+    occ, docc = fermi_dirac(evals, mu, width)
+    kernel = divided_difference_kernel(evals, occ, docc, 0.0)
+    a = evecs.conj().T @ dh @ evecs
+    dp = evecs @ (kernel * a) @ evecs.conj().T
+    return _projector(evecs, occ), dp - _projector(evecs, docc) * dmu
 
 
 # ------------------------------------------------ the self-consistent Fermi level

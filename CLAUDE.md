@@ -1182,7 +1182,7 @@ vendored tree:
 
 `docs/jax_port.md` (1,623 lines) is the design study, `docs/continue_here.md` §3 the cold-start
 summary, `docs/jax_port_phase0.md` the running log of what Phase 0 measured, and
-`docs/jax_port_phase1.md` the same for Phase 1, which is now under way (through §1i). Verdict, in one line: **a research project justified by
+`docs/jax_port_phase1.md` the same for Phase 1, which is now under way (through §1j). Verdict, in one line: **a research project justified by
 differentiability, not by the GPU** — SIRIUS already does FP-LAPW on CUDA/ROCm with Elk as its
 reference, and Elk's hot spots are already near-peak BLAS-3. Nothing about the port is a plan of
 record; **Phase 0 (§6 of the study) is designed to kill it, not to start it**, and that is what
@@ -1427,12 +1427,47 @@ because the *other* pair sits $67\times$ ABOVE the tolerance and therefore takes
 cancellation-prone quotient — the tolerance is a cliff, and beating that needs the stable
 kernel inside the JVP rather than a better threshold.
 
+**The tolerance was then removed rather than tuned, and second derivatives followed
+(§1i second pass, §1j).** The stable form of the kernel is *analytically exact at every
+splitting*, so it belongs inside the JVP rather than beside it: `projector.fermi_kernel`
+now carries it and `smeared_projector` uses it, which takes Si's floor from
+$2\times10^{-9}$ to $7.4\times10^{-12}$/$3.1\times10^{-12}$/$4.8\times10^{-14}$ across the
+three widths and makes `tol` **inert** for smeared occupations — asserted as *equality*
+across fourteen decades of it, which is a stronger and different statement from study
+§8(b)'s "flat over two decades". (`tol` stays load-bearing for `hard_window_projector`,
+whose straddling-pair `NaN` is a claim about a derivative that does not exist.) What is
+left is **not the kernel**: the residual shrinks as the smearing *widens*, which is
+backwards, and chasing that showed LAPACK and XLA disagreeing about the eigenvalues by
+$2.1\times10^{-14}$ Ha, amplified by the kernel's $f''/f'\sim1/w$ relative sensitivity —
+rerunning the identical closed form on XLA's own decomposition gives 7.9e-14 / 5.5e-15 /
+2.6e-15, and the difference between the two references *is* the residual to two digits
+(`phase1_smearing.eigensolver_floor`). Knock-on worth remembering: the reference and the
+implementation now share a *formula*, so the arbiter where it matters is central FD
+(legitimate here, since $P=f(H)$ is smooth) and `direct_quotient_projector`, which keeps
+the literal quotient. **Second order (§1j)**: the safe-$K$ rule is first-order by
+construction — its JVP body calls `eigh` — and on bulk Si at $\Gamma$ with the
+$\Gamma_{25'}$ triplet enclosed, `grad(grad)` through it returns `NaN`, as does the naive
+route, while `sign_projector` (matrix sign by Newton-Schulz, no eigensolve) returns a
+finite value agreeing with a central difference of the safe rule's own first derivative to
+$3\times10^{-11}$–$2\times10^{-10}$. The control is in the same ground state: at a generic
+$k$ all three agree to $10^{-10}$, so the failure is the multiplet, not the order.
+Differentiated twice in $k$ through the whole assembly too, where refining the FD step
+gives 1.44e-4, 1.29e-5, 1.44e-6, 1.29e-7 — textbook $O(h^2)$, i.e. FD converging *onto*
+AD. Cost, which is the half a toy could not supply: the Newton-Schulz count is set by the
+top of the basis (17.9 Ha) and not by the 0.35 Ha valence manifold, so the ratio is 190
+and the predicted count 13 — 10 steps is not converged (error 1.1, not a projector at
+all), 20 reaches $3\times10^{-14}$ against both the safe rule and Elk's own occupied
+subspace, in 42 ms at $n=177$. Use `grad(grad)`, never `jax.hessian`.
+
 **Still open in Phase 1**: the radial integrals are inputs, not outputs (building them
 needs `genapwfr`/`genlofr`/`hmlrad`/`olprad` and through `vsmt` the muffin-tin potential
 — Phase 2); the POSITION derivative $d\varepsilon_j/d\mathbf R$ on displaced h-BN, which
-is harder than the $k$ one because moving an atom moves the radial integrals; and second
-derivatives on a real LAPW matrix, which need `sign_projector` rather than the first-order
-rule.
+is harder than the $k$ one because moving an atom moves the radial integrals; smeared
+occupations **at second order**, which `sign_projector` does not cover (it is hard-window
+only; that needs a Chebyshev expansion of the Fermi function, and §1i removed the
+tolerance from the smeared first derivative, not the `eigh` from its JVP); and the
+unrolled Newton-Schulz tape, where `lax.scan` over a two-matmul body is the obvious fix at
+production shapes and has not been tried.
 
 **$\kappa(O)$ for a real LAPW overlap is measured, and the cheap estimate is
 useless.** Patch 0013 (§33) supplies real $H$ and $O$; `python3 -m elkjax.phase0b_overlap`

@@ -453,3 +453,92 @@ def test_a_gapped_spectrum_refuses_a_self_consistent_fermi_level():
     # the same spectrum at a width comparable to the gap is determined again
     mu, response = pj.check_fermi_level_determined(gapped, 3.0, 1.0)
     assert response > 1e-2 and -1.9 < mu < 1.9
+
+
+# ---------------------------------------------------------------------------
+# Phase 1i, second pass: the cancellation-free kernel INSIDE the JVP.
+#
+# `smeared_projector` now uses `projector.fermi_kernel`, which shares its closed
+# form with `reference.fermi_divided_difference_kernel`.  That makes the NumPy
+# oracle an INDEPENDENT IMPLEMENTATION but no longer an independent FORMULA, so
+# every test below carries either a central finite difference (legitimate here --
+# P = f(H) is smooth, so there is no branch exchange to average over) or
+# `direct_quotient_projector`, which keeps the literal quotient and is therefore
+# still formula-independent wherever it is accurate.
+# ---------------------------------------------------------------------------
+
+
+def test_the_jax_kernel_matches_the_numpy_oracle_and_stays_finite():
+    """Two implementations of one closed form, over an all-electron energy spread.
+
+    The spread matters: `cosh(u)` overflows at |u| ~ 710, and a real LAPW spectrum
+    runs from core levels thousands of Ha below mu to basis states thousands above,
+    so at Elk's default swidth |u| reaches 1e6.  `jnp.where` evaluates both branches,
+    so an unguarded `inf/inf` in the discarded one would reach the gradient as NaN.
+    """
+    evals = np.array([-3000.0, -0.5, -1e-15, 1e-15, 0.3, 5.0, 4000.0])
+    for width in (1e-3, 1e-2, 1e-1):
+        got = np.asarray(pj.fermi_kernel(jnp.asarray(evals), 0.0, width))
+        assert np.isfinite(got).all(), width
+        expected = ref.fermi_divided_difference_kernel(evals, 0.0, width)
+        assert np.abs(got - expected).max() < 1e-14 * max(1.0 / width, 1.0)
+
+
+def test_the_tolerance_is_now_inert_for_smeared_occupations():
+    """Not a plateau -- the gradient does not depend on `tol` AT ALL.
+
+    Study §8(b) asks for flatness over two decades; with the closed form in the JVP
+    there is nothing left for `tol` to select, so the assertion is equality to the last
+    bit across fourteen decades including 0 and a value larger than the whole spectrum.
+    That is the difference between a threshold tuned to be harmless and a threshold
+    removed, and it is why §1i's 2e-9 floor on real Si matrices goes away.
+    """
+    evals = np.array([-2.0, -1.0, -1e-15, 1e-15, 1.0, 2.0])
+    h = jnp.asarray(ref.hermitian_from_spectrum(evals, 12))
+    d = jnp.asarray(ref.random_hermitian_direction(6, 13))
+    m = jnp.asarray(OBSERVABLE)
+    values = []
+    for tol in (0.0, 1e-16, 1e-12, 1e-9, 1e-6, 1e-3, 1e2):
+        fn = lambda t: jnp.real(jnp.trace(
+            pj.smeared_projector(h + t * d, 0.0, 1e-2, tol) @ m))
+        values.append(float(jax.grad(fn)(0.0)))
+    assert abs(values[0]) > 1e-6, values
+    assert all(v == values[0] for v in values), values
+
+
+def test_the_closed_form_beats_the_literal_quotient_at_a_roundoff_splitting():
+    """The two routes, arbitrated by a finite difference rather than by each other.
+
+    At a 1e-15 splitting and Elk's default width the literal quotient's numerator is
+    bitwise zero, so it misses that pair's whole contribution; the closed form does
+    not.  Central FD is the independent judge -- it is legitimate here because
+    P = f(H) is a smooth matrix function, so unlike §1h there is no branch exchange
+    to average over.
+
+    Compared as MATRICES, not as a scalar loss.  A trace against one observable dilutes
+    a single kernel entry among all the others -- measured, the same comparison through
+    Tr[dP M] shows only 2.6e-5 -- so a scalar test would understate a failure that is
+    100% of the entry responsible for it.  That dilution is itself the reason §1i's real
+    silicon derivative was off by 3.7e-3 rather than by 100%.
+    """
+    evals = np.array([-2.0, -1.0, -0.5e-15, 0.5e-15, 1.0, 2.0])
+    h = ref.hermitian_from_spectrum(evals, 14)
+    d = ref.random_hermitian_direction(6, 15)
+    hj, dj = jnp.asarray(h), jnp.asarray(d)
+    mu, width, step = 0.0, 1e-3, 1e-7
+
+    def projector(matrix):
+        lam, vecs = np.linalg.eigh(matrix)
+        f, _ = ref.fermi_dirac(lam, mu, width)
+        return (vecs * f) @ vecs.conj().T
+
+    fd = (projector(h + step * d) - projector(h - step * d)) / (2 * step)
+    stable = np.asarray(jax.jvp(
+        lambda t: pj.smeared_projector(hj + t * dj, mu, width, 0.0), (0.0,), (1.0,))[1])
+    literal = np.asarray(jax.jvp(
+        lambda t: pj.direct_quotient_projector(hj + t * dj, mu, width),
+        (0.0,), (1.0,))[1])
+    scale = np.linalg.norm(fd)
+    assert scale > 1.0, scale
+    assert np.linalg.norm(stable - fd) < 1e-7 * scale        # measured 2.6e-9
+    assert np.linalg.norm(literal - fd) > 1e3 * np.linalg.norm(stable - fd)
