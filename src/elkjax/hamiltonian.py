@@ -65,6 +65,18 @@ Hamiltonian.
 Everything below takes the radial integrals as inputs.  Building *them* from
 the radial Schrodinger solutions (``genapwfr``, ``genlofr``, ``hmlrad``,
 ``olprad``) is the next step and needs the muffin-tin potential, i.e. Phase 2.
+
+The last section of this module closes the eigenproblem: the Cholesky
+reduction :math:`\\tilde H=L^{-1}HL^{-\\dagger}` that Elk's own ``eveqnfv``
+makes through ``zhegv``, the tolerance
+:math:`\\epsilon\\,\\kappa(O)\\,\\lVert\\tilde H\\rVert` measured on
+*this* run, and the occupied projector built through
+`elkjax.projector`'s safe-:math:`K` rule.  That last piece is not a
+convenience: an individual eigenvalue's derivative does not exist inside a
+multiplet, and a real ground state puts one there by symmetry -- bulk silicon
+at :math:`\\Gamma` carries the three-fold :math:`\\Gamma_{25'}` valence level
+inside its occupied window.  The projector is the object that survives, and
+Phase 1f measures that it does (`docs/jax_port_phase1.md`).
 """
 
 import numpy as np
@@ -83,6 +95,16 @@ __all__ = [
     "muffin_tin_overlap",
     "muffin_tin_hamiltonian",
     "assemble_from_export",
+    "interstitial_potential_matrix",
+    "matching_coefficients",
+    "eigenproblem_at",
+    "cholesky_reduce",
+    "first_variational_eigenvalues",
+    "projector_tolerance",
+    "occupied_window",
+    "occupied_projector",
+    "elk_occupied_projector",
+    "occupied_band_count",
 ]
 
 
@@ -478,23 +500,169 @@ def eigenproblem_at(export, kc, vsig=None):
             muffin_tin_overlap(local) + _pad(jnp.asarray(export["omat_istl"])))
 
 
+def cholesky_reduce(h, o):
+    r"""Reduce :math:`Hv=\varepsilon Ov` to a standard problem, Elk's own route.
+
+    Returns :math:`(\tilde H, L)` with :math:`O=LL^\dagger` and
+    :math:`\tilde H=L^{-1}HL^{-\dagger}`, which is what LAPACK's ``zhegv``
+    does inside `eveqnfv`.  Eigenvectors map back as :math:`c=L^{-\dagger}y`,
+    and conversely a normalised Elk eigenvector (:math:`c^\dagger Oc=1`)
+    becomes the orthonormal :math:`y=L^\dagger c` -- which is how the
+    projector below is compared against Elk's own `evecfv`.
+
+    Both solves are triangular in exact arithmetic but are written as general
+    ``solve`` calls because that is what JAX differentiates without a
+    structured-matrix rule; the cost is irrelevant at Phase 1 sizes.
+    """
+    chol = jnp.linalg.cholesky(o)
+    reduced = jnp.linalg.solve(chol, jnp.linalg.solve(chol, h).conj().T).conj().T
+    return reduced, chol
+
+
 def first_variational_eigenvalues(export, kc, vsig=None):
     """The first-variational spectrum at an arbitrary Cartesian k.
-
-    The generalised problem :math:`Hv = \\varepsilon Ov` is reduced to a
-    standard one by Cholesky, :math:`\\tilde H = L^{-1}HL^{-\\dagger}` with
-    :math:`O = LL^\\dagger` -- the same reduction Elk's own `eveqnfv` makes
-    through LAPACK's ``zhegv``, and the one whose conditioning
-    :math:`\\kappa(O)` Phase 0b(ii) measured (about 5e3 at a standard cutoff,
-    so the safe-K tolerance must be recomputed per run rather than assumed).
 
     Differentiable in ``kc``.  An INDIVIDUAL eigenvalue's derivative is only
     meaningful where that eigenvalue is non-degenerate -- at a multiplet
     ``eigh``'s own derivative rule divides by a vanishing gap (Phase 0b) and
     the sorted branch is not differentiable at all -- so a caller wanting a
-    degenerate group must differentiate its trace.
+    degenerate group must differentiate its trace, or use
+    :func:`occupied_projector`, which is well defined there.
+    """
+    reduced, _ = cholesky_reduce(*eigenproblem_at(export, kc, vsig=vsig))
+    return jnp.linalg.eigvalsh(reduced)
+
+
+# ---------------------------------------------------------------------------
+# The occupied projector, and the tolerance it needs
+# ---------------------------------------------------------------------------
+#
+# `first_variational_eigenvalues` closes with a plain `eigvalsh`, which is the
+# route Phase 0b showed is unsafe the moment two eigenvalues approach: JAX's
+# own rule differentiates the eigenVECTORS and divides by the gap before the
+# occupation difference can cancel against it.  The occupied projector
+#
+#     P = sum_{i < nocc} |i><i|
+#
+# is the object that IS well defined at an enclosed multiplet -- it does not
+# depend on how `eigh` resolves the degenerate subspace -- and
+# `projector.hard_window_projector` carries the rule that keeps it that way.
+# The two had never met: the rule was only ever exercised on a synthetic
+# overlap with a PRESCRIBED condition number, which `docs/continue_here.md` §3
+# flags as the biggest hole left in Phase 0.
+#
+# What real matrices supply that a synthetic pair cannot is the tolerance.  It
+# is a property of the run -- kappa(O) is set by the plane-wave cutoff, not by
+# the matrix size (Phase 0b(ii)) -- so it is measured here rather than passed
+# in, and it is measured on the REDUCED matrix, whose norm is about 3x |H|.
+
+
+def projector_tolerance(reduced, o):
+    r""":math:`\epsilon\,\kappa(O)\,\lVert\tilde H\rVert_2`, measured on this run.
+
+    The scale below which two computed eigenvalues of the reduced problem
+    cannot be told apart, and therefore the only defensible threshold for
+    "degenerate" in the divided-difference kernel (study §8(b)).  Three
+    choices here are conclusions of Phase 0b(ii), not preferences:
+
+    * :math:`\kappa(O)` comes from a dense ``eigvalsh``.  §8(b)'s cheap
+      Cholesky-diagonal estimate is **uninformative** on real overlaps -- it
+      moved 8.05 to 9.25 while the truth moved over a 74-fold range -- so it
+      cannot set a threshold.
+    * the norm is :math:`\lVert L^{-1}HL^{-\dagger}\rVert`, not
+      :math:`\lVert H\rVert`; the reduced matrix is the one actually
+      diagonalised and is consistently the larger.
+    * it is recomputed per run, because :math:`\kappa(O)` is a **cutoff**
+      property: ``rgkmax`` 7 to 9 takes bulk Si from 5e3 to 2.1e5 while the
+      matrix size is nearly irrelevant.
+
+    Host-side and non-differentiable by construction: a threshold that moved
+    with the parameter would make the kernel's branch a function of the
+    perturbation.
+    """
+    eigenvalues = np.linalg.eigvalsh(np.asarray(o))
+    kappa = float(eigenvalues.max() / eigenvalues.min())
+    return float(np.finfo(np.float64).eps * kappa
+                 * np.linalg.norm(np.asarray(reduced), 2))
+
+
+def occupied_window(export, kc, nocc, vsig=None, tol=None):
+    r"""Refuse an occupied window whose boundary is not resolvably gapped.
+
+    Returns ``(tol, gap)``.  Raises ``ValueError`` when
+    :math:`\varepsilon_{n_{\rm occ}}-\varepsilon_{n_{\rm occ}-1}` is at or
+    below ``tol``, because there is then no differentiable occupied subspace
+    at all -- as mathematics, not as numerics -- and the honest answer is a
+    refusal rather than a number.  :func:`occupied_projector`'s in-graph
+    ``NaN`` is the safety net for a caller who skips this; a ``NaN`` is still
+    a returned non-number, and the study's Phase 1 criterion asks for an
+    explicit refusal.
+
+    This is the same shape as `elkpy.parsers.symmetry.check_window_gap` and
+    `elkjax.projector.check_sign_window`: host-side, before any tracing, since
+    a traced predicate cannot raise.
     """
     h, o = eigenproblem_at(export, kc, vsig=vsig)
-    chol = jnp.linalg.cholesky(o)
-    reduced = jnp.linalg.solve(chol, jnp.linalg.solve(chol, h).conj().T).conj().T
-    return jnp.linalg.eigvalsh(reduced)
+    reduced, _ = cholesky_reduce(h, o)
+    if tol is None:
+        tol = projector_tolerance(reduced, o)
+    evals = np.asarray(jnp.linalg.eigvalsh(reduced))
+    if not 0 < nocc < evals.size:
+        raise ValueError(
+            f"nocc={nocc} is not a proper window of {evals.size} states")
+    gap = float(evals[nocc] - evals[nocc - 1])
+    if gap <= tol:
+        raise ValueError(
+            f"occupied-window boundary gap {gap:.3e} Ha is at or below the "
+            f"resolution {tol:.3e} Ha of this run (eps kappa(O) |H~|): the "
+            f"occupied subspace is not differentiable here. Window the whole "
+            f"degenerate group together instead.")
+    return tol, gap
+
+
+def occupied_projector(export, kc, nocc, tol, vsig=None):
+    r""":math:`\tilde P=\sum_{i<n_{\rm occ}}|y_i\rangle\langle y_i|`, differentiable in ``kc``.
+
+    In the Cholesky-REDUCED basis, where the projector is an honest orthogonal
+    one; Elk's own eigenvectors map into it as :math:`y=L^\dagger c`.  Built
+    through :func:`elkjax.projector.hard_window_projector`, so JAX never sees
+    the eigenvector derivative and an enclosed multiplet contributes exactly
+    zero to :math:`dP` instead of a ratio of two rounding errors.
+
+    ``tol`` is required rather than defaulted: it must come from
+    :func:`occupied_window`, which also performs the refusal, and defaulting
+    it here would let a caller differentiate through an ungapped boundary
+    while believing a threshold had been checked.
+    """
+    from .projector import hard_window_projector
+
+    reduced, _ = cholesky_reduce(*eigenproblem_at(export, kc, vsig=vsig))
+    return hard_window_projector(reduced, nocc, tol)
+
+
+def elk_occupied_projector(export, nocc):
+    r"""The same projector built from Elk's own ``evecfv``, for the forward check.
+
+    :math:`Y=L^\dagger C` is orthonormal because Elk normalises
+    :math:`C^\dagger OC=\mathbb 1`, so :math:`YY^\dagger` is the reduced-basis
+    projector onto exactly the subspace Elk's eigenvectors span.  Comparing
+    *projectors* rather than coefficients is what makes the check meaningful
+    at all: ``evecfv`` is arbitrary within any degenerate multiplet (study
+    §8(b), hazard C), and bulk Si at :math:`\Gamma` has a three-fold one
+    inside the occupied window.
+    """
+    chol = np.linalg.cholesky(np.asarray(export["omat"]))
+    y = chol.conj().T @ np.asarray(export["evecfv"])[:, :nocc]
+    return y @ y.conj().T
+
+
+def occupied_band_count(evalfv, efermi):
+    """How many first-variational bands lie below the Fermi level.
+
+    The export carries no electron count, and assuming one is a trap this
+    project has already paid for elsewhere (`docs/design.md` §13: core states
+    are not among the bands ``nstsv`` indexes).  Counting Elk's own
+    eigenvalues against Elk's own ``EFERMI.OUT`` is exact for a gapped system
+    at any k-point and needs no chemistry.
+    """
+    return int(np.sum(np.asarray(evalfv) < float(efermi)))
