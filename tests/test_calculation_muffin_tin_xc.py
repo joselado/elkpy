@@ -1,4 +1,5 @@
-r"""Phase 2 of the JAX port: the muffin-tin angular transform, and an anomaly.
+r"""Phase 2 of the JAX port: the muffin-tin angular transform, and why Elk's
+own `vxcmt` is NOT the pointwise XC potential of its own density.
 
 A nonlinear functional cannot be applied in the spherical-harmonic basis, so
 Elk evaluates it on an angular grid: `rbsht` maps the `lmmax` coefficients at
@@ -6,31 +7,37 @@ each radial point to `lmmax` values on that grid, the functional is applied
 pointwise, and `rfsht` maps back.  `elkjax.grid.to_angular`/`from_angular`
 transcribe the pair, with patch 0016 exporting the four matrices.
 
-**Two results are solid.**  The transforms are mutual inverses to 2.7e-12, and
-the exchange and correlation ENERGY densities built this way reproduce Elk's
-own `exmt` and `ecmt` to 1.8e-15 and 2.8e-16 -- so both the transform and the
-density it is applied to are right.
+That round trip is exact on a band-limited function, but v_xc[rho] is NOT
+band-limited even when rho is: squeezing a nonlinear function through a finite
+angular grid leaks weight into every harmonic, including the ones the site
+symmetry forbids.  **`potxc.f90` lines 55-58 then remove it** --
 
-**One is not, and this file pins it rather than hiding it.**  The same
-construction applied to the POTENTIAL misses Elk's `vxcmt` by 5.3e-3 on a
-scale of 45 (1.2e-4 relative).  What has been established about it:
+    if (tsh) then
+      call symrfmt(nrmt,nrmti,npmt,npmtmax,vxcmt_)
+      if (spinpol) call symrvfmt(.true.,ncmag,...,bxcmt_)
 
-  * it is entirely in CORRELATION.  Elk's v_x equals (4/3) times its own eps_x
-    exactly at every point, and eps_x itself is exact, so exchange is right.
-  * it is NOT a density error.  eps_c agrees to 2.8e-16 at the same points, and
-    eps_c and v_c have comparable sensitivity to rho.
-  * it is NOT a function of rho.  Points at rho = 11.2 disagree while points
-    at rho = 0.78 agree; the two sets overlap in density.  It tracks RADIUS,
-    growing smoothly from below 1e-9 at r = 0.30 Bohr to 5.3e-3 at r = R_MT.
-  * it is NOT the interstitial's story.  In the interstitial the identical
-    transcription reproduces Elk's `vxcir` to 4.4e-16 over an overlapping
-    density range (test_calculation_xc.py).
-  * it is NOT mixing.  vsmt - vclmt - vxcmt is 1.7e-7 on a scale of 9e7, so
-    the exported potentials are mutually consistent, and comparing against
-    vsmt - vclmt instead gives the identical 5.3e-3.
+-- symmetrising the POTENTIAL and the field, and NOT `exmt_`/`ecmt_`, which
+are returned as computed.  So in Elk the two are built from the same density
+by the same code and then treated differently, and
 
-Ruled out and unexplained.  The assertions below therefore pin the CURRENT
-state: if a later change explains it, they fail, which is the point.
+    v_xc(muffin tin) = S v_xc[rho],   e_xc(muffin tin) = e_xc[rho]
+
+with S the average over the `nsymcrys` crystal operations (`symrfmt`).  This
+is measured here rather than argued: the pointwise transcription reproduces
+`exmt`/`ecmt` to 1.8e-15 but misses `vxcmt` by 5.3e-3 on a scale of 45; the
+same transcription against a `symtype=0` ground state, where `symrfmt` is the
+identity, reproduces `vxcmt` to 1.4e-14 as well.
+
+Two consequences for the port, both real:
+
+  * S is not roundoff.  1.2e-4 relative, growing from below 1e-9 near the
+    nucleus (where the density is spherical and there is nothing to project)
+    to 5.3e-3 at R_MT.  Any transcription of Elk's SCF must apply it, which
+    means exporting `symlatc`/`lsplsymc`/`ieqatom`, or must run `symtype=0`.
+  * inside a symmetric muffin tin Elk's own v_xc is not the functional
+    derivative of its own E_xc.  The discrepancy is variational noise of the
+    SHT truncation, but it is there, and a total-energy or force check at
+    better than ~1e-4 relative will see it.
 
 Skipped without the elk binary, and without jax.
 """
@@ -53,16 +60,41 @@ pytestmark = [
 SI_AVEC = [(5.13, 5.13, 0.00), (5.13, 0.00, 5.13), (0.00, 5.13, 5.13)]
 
 
-@pytest.fixture(scope="module")
-def groundstate(tmp_path_factory):
-    workdir = tmp_path_factory.mktemp("mtxc") / "si"
+def _ground_state(workdir, extra_blocks=None):
     calculation = Structure(
         avec=SI_AVEC,
         species={"Si": [(0.0, 0.0, 0.0), (0.25, 0.25, 0.25)]},
-    ).get_calculation(workdir, xc="PW", ngridk=(2, 2, 2), rgkmax=7.0)
+    ).get_calculation(workdir, xc="PW", ngridk=(2, 2, 2), rgkmax=7.0,
+                      extra_blocks=extra_blocks)
     calculation.ensure_ground_state()
     with calculation.eigenstate_session() as session:
         return session.ground_state()
+
+
+@pytest.fixture(scope="module")
+def groundstate(tmp_path_factory):
+    """Bulk Si with its full 48-operation symmetry."""
+    return _ground_state(tmp_path_factory.mktemp("mtxc") / "si")
+
+
+@pytest.fixture(scope="module")
+def unsymmetrised(tmp_path_factory):
+    """The same cell with `symtype = 0`, which is what the `nosym` input block
+    sets (`readinput.f90:1311`) and which makes `symrfmt` the identity."""
+    return _ground_state(tmp_path_factory.mktemp("mtxc") / "si_nosym",
+                         extra_blocks={"symtype": [0]})
+
+
+def _potential(groundstate, ias):
+    """The pointwise XC potential of Elk's own density, in packed harmonics."""
+    from elkjax import grid, xc
+    isp = int(groundstate["idxis"][ias]) - 1
+    npmt = int(groundstate["npmt"][isp])
+    rho = np.asarray(grid.to_angular(groundstate["rhomt"][ias],
+                                     groundstate, ias))[:npmt]
+    _, _, vx, _, vc, _ = xc.pwca(0.5 * rho, 0.5 * rho)
+    values = np.asarray(vx) + np.asarray(vc)
+    return np.asarray(grid.from_angular(values, groundstate, ias))[:npmt]
 
 
 def test_the_angular_transforms_are_mutual_inverses(groundstate):
@@ -79,7 +111,8 @@ def test_the_angular_transforms_are_mutual_inverses(groundstate):
 
 
 def test_the_energy_densities_are_exact_in_the_muffin_tin(groundstate):
-    """`exmt` and `ecmt` from the angular-grid density, element-wise."""
+    """`exmt` and `ecmt` from the angular-grid density, element-wise.  These
+    are the two arrays `potxc` does NOT symmetrise, and they are exact."""
     from elkjax import grid, xc
     for ias in range(int(groundstate["natmtot"])):
         rho = np.asarray(grid.to_angular(groundstate["rhomt"][ias],
@@ -93,49 +126,66 @@ def test_the_energy_densities_are_exact_in_the_muffin_tin(groundstate):
             assert np.abs(got - reference).max() < 1e-13
 
 
-def test_the_muffin_tin_potential_does_not_match_and_the_gap_is_in_correlation(
-        groundstate):
-    """The anomaly, pinned with what has been ruled out.
+def test_the_potential_is_exact_only_without_symmetrisation(
+        groundstate, unsymmetrised):
+    """The measurement that identifies `symrfmt`, and the reason it needs two
+    ground states: the pointwise potential is a 5.3e-3 miss on the symmetric
+    cell and machine precision on the `symtype=0` one, from the same code.
 
-    Exchange is exact: Elk's own v_x is (4/3) eps_x to roundoff.  Correlation
-    is not, by 1.2e-4 relative -- while eps_c at the very same points is exact.
+    A single-fixture version of this test could only pin the discrepancy, not
+    attribute it -- which is what this file did before the cause was found.
     """
-    from elkjax import grid, xc
-    ias = 0
-    isp = int(groundstate["idxis"][ias]) - 1
-    npmt = int(groundstate["npmt"][isp])
-    rho = np.asarray(grid.to_angular(groundstate["rhomt"][ias],
-                                     groundstate, ias))[:npmt]
-    elk_vxc = np.asarray(grid.to_angular(groundstate["vxcmt"][ias],
-                                         groundstate, ias))[:npmt]
-    elk_ex = np.asarray(grid.to_angular(groundstate["exmt"][ias],
-                                        groundstate, ias))[:npmt]
-    _, _, vx, _, vc, _ = xc.pwca(0.5 * rho, 0.5 * rho)
-    # exchange, exactly
-    assert np.abs(np.asarray(vx) - (4.0 / 3.0) * elk_ex).max() < 1e-12
-    # correlation, not
-    elk_vc = elk_vxc - (4.0 / 3.0) * elk_ex
-    residual = np.abs(np.asarray(vc) - elk_vc)
-    assert residual.max() > 1e-4, "the anomaly is gone -- update this file"
-    assert residual.max() / np.abs(elk_vxc).max() < 1e-3
+    symmetric = max(
+        np.abs(_potential(groundstate, ias)
+               - groundstate["vxcmt"][ias][:len(_potential(groundstate, ias))]
+               ).max()
+        for ias in range(int(groundstate["natmtot"])))
+    scale = np.abs(groundstate["vxcmt"][0]).max()
+
+    assert symmetric > 1e-4, (
+        "the symmetric cell no longer shows the projection; if `potxc` has "
+        "stopped calling `symrfmt`, this whole file is about nothing")
+    assert symmetric / scale < 1e-3
+
+    for ias in range(int(unsymmetrised["natmtot"])):
+        mine = _potential(unsymmetrised, ias)
+        elk = unsymmetrised["vxcmt"][ias][:len(mine)]
+        assert np.abs(mine - elk).max() < 1e-12, (
+            "with symmetrisation switched off the pointwise potential must be "
+            "exact -- if it is not, the cause is not `symrfmt` after all")
 
 
-def test_the_muffin_tin_gap_is_not_a_function_of_the_density(groundstate):
-    """The observation that rules out the obvious explanations: points at
-    rho = 11 disagree while points at rho = 0.78 agree, so the two sets
-    overlap in density and the discrepancy tracks radius instead."""
-    from elkjax import grid, xc
+def test_the_projection_removes_the_symmetry_forbidden_harmonics(groundstate):
+    """What `symrfmt` actually does to this function, resolved by l.
+
+    Diamond Si's site symmetry forbids l = 1, 2 and 5 in the muffin tin, and
+    Elk's `vxcmt` carries 1e-20 there -- exactly zero.  The pointwise
+    potential carries 1e-3, because the SHT round trip of a nonlinear
+    function is not band-limited.  That is the leak, seen directly.
+
+    The inner region (l <= lmaxi = 1) is exact to 6e-14 in the same run: near
+    the nucleus the density is spherical, so there is nothing to project.
+    """
     ias = 0
     isp = int(groundstate["idxis"][ias]) - 1
+    nr, nri = int(groundstate["nrmt"][isp]), int(groundstate["nrmti"][isp])
+    lmmaxi, lmmaxo = int(groundstate["lmmaxi"]), int(groundstate["lmmaxo"])
     npmt = int(groundstate["npmt"][isp])
-    rho = np.asarray(grid.to_angular(groundstate["rhomt"][ias],
-                                     groundstate, ias))[:npmt]
-    elk = np.asarray(grid.to_angular(groundstate["vxcmt"][ias],
-                                     groundstate, ias))[:npmt]
-    _, _, vx, _, vc, _ = xc.pwca(0.5 * rho, 0.5 * rho)
-    bad = np.abs(np.asarray(vx) + np.asarray(vc) - elk) > 1e-9
-    assert bad.any() and (~bad).any()
-    assert rho[bad].max() > rho[~bad].min(), (
-        "the disagreeing and agreeing points no longer overlap in density; "
-        "if they now separate cleanly, the explanation may be a density "
-        "threshold after all")
+
+    mine = _potential(groundstate, ias)
+    elk = groundstate["vxcmt"][ias][:npmt]
+
+    inner_size = lmmaxi * nri
+    inner = (mine - elk)[:inner_size].reshape(nri, lmmaxi)
+    assert np.abs(inner).max() < 1e-12
+
+    outer_mine = mine[inner_size:].reshape(nr - nri, lmmaxo)
+    outer_elk = elk[inner_size:].reshape(nr - nri, lmmaxo)
+    for l in (1, 2, 5):
+        block = slice(l * l, (l + 1) ** 2)
+        assert np.abs(outer_elk[:, block]).max() < 1e-15, (
+            f"l={l} is symmetry-forbidden here and Elk's vxcmt must be zero")
+        assert np.abs(outer_mine[:, block]).max() > 1e-4, (
+            f"l={l} carries the leak; if it has vanished the SHT round trip "
+            "has become band-limited, which it cannot be for a nonlinear "
+            "functional")

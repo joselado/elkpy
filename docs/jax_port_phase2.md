@@ -26,7 +26,7 @@ $V_s$ itself, which is what this phase is for.
 | **2c** the Weinert Poisson solver | not started |
 | **2d** a GGA functional | **done for PBE (`xctype=20`)** (§2b): energy densities exact against Elk's own `exir`/`ecir` (4e-16), and `jax.grad` of the discretised energy reproduces Elk's hand-coded potential to 2.4e-5 median — with the gap identified as discretise-then-differentiate versus differentiate-then-discretise, not as an error in either |
 | **2e** symmetrisation | not started |
-| **2d′** the muffin-tin angular transform | **done, with an anomaly** (§2d): `rbsht`/`rfsht` are mutual inverses to 2.7e-12 and give `exmt`/`ecmt` exactly, but `vxcmt` misses by 1.2e-4 relative — localised to correlation, not a function of the density, and unexplained |
+| **2d′** the muffin-tin angular transform | **done** (§2d): `rbsht`/`rfsht` are mutual inverses to 2.7e-12 and give `exmt`/`ecmt` exactly. `vxcmt` misses by 1.2e-4 relative **because `potxc.f90:55-58` symmetrises the potential and not the energy density** — on a `symtype=0` ground state the same code gives 1.4e-14 |
 | **2f** total energy at fixed input potential | **partly** (§2c): the cell integral and inner product are built (`rfint`/`rfinp`), so the charge integrates to the electron count within 1.1e-14 — the study's forward criterion asks 1e-8 — and $E_x$/$E_c$ match Elk's own INFO.OUT to 1e-9. The total energy needs the density and the Poisson solve |
 
 ---
@@ -333,7 +333,7 @@ Poisson solve, neither of which is started.
 
 ---
 
-## 2d. The muffin-tin angular transform, and one thing that does not add up
+## 2d. The muffin-tin angular transform, and why Elk's $v_{xc}$ is not $v_{xc}[\rho]$
 
 ### What was built
 
@@ -351,46 +351,96 @@ $l_{\max}^{\rm o}=6$ give $4^2+49^2$ doubles each way.
 | `exmt` from the angular-grid density | **1.8e-15** |
 | `ecmt` from the angular-grid density | **2.8e-16** |
 | `vxcmt` from the same | **5.3e-3** on a scale of 45 (1.2e-4 relative) |
+| `vxcmt`, same code, `symtype = 0` ground state | **1.4e-14** |
 
-The first three say the transform is right and the density it is applied to is
-right. The fourth does not follow from them, and it should.
+The last row is the explanation, and the four above it are what made it worth
+finding.
 
-### What has been ruled out
+### `potxc` symmetrises the potential and not the energy density
 
-* **It is entirely in correlation.** Elk's own $v_x$ equals $\tfrac43$ times
-  its own $\varepsilon_x$ to roundoff at every point, and $\varepsilon_x$
-  itself is exact, so the exchange half is right.
-* **It is not a density error.** $\varepsilon_c$ agrees to 2.8e-16 at the very
-  same points, and $\varepsilon_c$ and $v_c$ have comparable sensitivity to
-  $\rho$ — a $\delta\rho$ big enough to produce this would show in both.
-* **It is not a function of $\rho$.** Points at $\rho=11.2$ disagree while
-  points at $\rho=0.78$ agree; the two sets overlap in density. What it tracks
-  is *radius*, growing smoothly from below $10^{-9}$ at $r=0.30$ Bohr to
-  $5.3\times10^{-3}$ at $R_{\rm MT}$.
-* **It is not the interstitial's story.** The identical transcription
-  reproduces Elk's `vxcir` to 4.4e-16 (§2a) over an overlapping density range.
-* **It is not mixing.** `vsmt - vclmt - vxcmt` is $1.7\times10^{-7}$ on a
-  scale of $9\times10^{7}$, so the exported potentials are mutually
-  consistent, and comparing against `vsmt - vclmt` instead gives the identical
-  $5.3\times10^{-3}$.
-* **It is not a post-processing filter.** `potks` trims only `vxcir`, and no
-  routine outside `potxc`/`oepmain` writes `vxcmt` at all (grep-verified).
+`potxc.f90` lines 55-58, after the per-atom `potxcmt` loop:
 
-That is where it stands. `tests/test_calculation_muffin_tin_xc.py` asserts the
-solid results *and* pins the anomaly's size and its
-not-a-function-of-density character, so a later change that explains it makes
-the test fail — which is the point of pinning it rather than leaving it in
-prose.
+```fortran
+if (tsh) then
+  call symrfmt(nrmt,nrmti,npmt,npmtmax,vxcmt_)
+  if (spinpol) call symrvfmt(.true.,ncmag,nrmt,nrmti,npmt,npmtmax,bxcmt_)
+```
 
-### Why this is worth a section rather than a footnote
+`vxcmt_` and `bxcmt_` are symmetrised; `exmt_`/`ecmt_` are returned exactly as
+`potxcmt` computed them. So in Elk's muffin tins
 
-The two exact rows above are what make the fourth interesting. If the density
-or the transform were wrong, $\varepsilon_x$ and $\varepsilon_c$ would be wrong
-too, and they are exact to roundoff. So one of the following is true and it is
-not yet known which: Elk's muffin-tin $v_c$ is computed from something other
-than the angular-grid density that its own $\varepsilon_c$ is computed from; or
-the export carries a `vxcmt` from a different state than its `exmt`/`ecmt`
-despite `potxcmt` writing all three in the same loop; or there is a reading of
-`xcifc`'s unpolarised branch that has been missed. **Do not build the
-muffin-tin GGA or the total energy on this path until it is settled** — the
-interstitial path is exact and is the one to extend meanwhile.
+$$v_{xc} = \hat S\,v_{xc}[\rho],\qquad \varepsilon_{xc}=\varepsilon_{xc}[\rho],$$
+
+with $\hat S$ the average over the $n_{\rm symcrys}$ crystal operations
+(`symrfmt`, each term a `rotrfmt` of the function at the atom that operation
+maps in). The two are built from the same density by the same routine and then
+treated differently.
+
+$\hat S$ is not the identity on this function even though $\rho$ is already
+symmetric, because **$v_{xc}[\rho]$ is not band-limited when $\rho$ is**.
+Squeezing a nonlinear function through a finite angular grid leaks weight into
+every harmonic, the symmetry-forbidden ones included, and `rfsht` truncates
+that leak at $l_{\max}$ rather than removing it. `symrfmt` removes it.
+
+Resolved by $l$ on bulk Si (atom 0, outer region, $l_{\max}^{\rm o}=6$):
+
+| $l$ | Elk's `vxcmt` | pointwise $v_{xc}[\rho]$, residual |
+|---|---|---|
+| 0 | 3.5e+1 | 2.9e-4 |
+| 1 | **1.7e-20** | 1.2e-3 |
+| 2 | **1.5e-20** | 9.4e-4 |
+| 3 | 1.5e-1 | 1.4e-3 |
+| 4 | 2.9e-2 | 1.7e-3 |
+| 5 | **6.9e-19** | 2.8e-3 |
+| 6 | 1.9e-3 | 5.3e-3 |
+
+$l=1,2,5$ are forbidden by the site symmetry and Elk carries exactly zero
+there; the pointwise potential carries $10^{-3}$. In the *inner* region
+($l\le l_{\max}^{\rm i}=1$, $r<0.30$ Bohr) the residual is 6e-14: near the
+nucleus the density is spherical and there is nothing to project.
+
+The `symtype = 0` run is the control that turns this from an argument into a
+measurement. `readinput.f90:1311` shows the `nosym` input block doing nothing
+but setting `symtype=0`, which leaves one symmetry operation and makes
+`symrfmt` the identity. On that ground state the same transcription reproduces
+`vxcmt` to 1.4e-14 at both atoms, while `exmt`/`ecmt` stay exact — so nothing
+about the functional, the density or the transform changed, only $\hat S$.
+
+### Two consequences, both real
+
+**Elk's SCF cannot be reproduced without $\hat S$.** 1.2e-4 relative is far
+above any tolerance in this port. Applying it needs `symlatc`, `lsplsymc`,
+`ieqatom` and `isymlat` exported (patch 0016 exports none of them), plus a
+transcription of `rotrfmt`'s Wigner-$D$ rotation of real harmonics — or the
+port runs `symtype=0`, paying the cost of an unreduced $k$-set and an
+unsymmetrised density. The second is the cheaper route for Phase 2 and is what
+`tests/test_calculation_muffin_tin_xc.py` uses; the first will be needed
+eventually, and it is one more patch, not a research problem.
+
+**Inside a symmetric muffin tin, Elk's own $v_{xc}$ is not the functional
+derivative of its own $E_{xc}$.** $\varepsilon_{xc}$ keeps the leak and
+$v_{xc}$ does not, so the two are inconsistent at the $10^{-4}$ relative level
+— variational noise of the SHT truncation rather than an error, but present,
+and a total-energy or force check at better than that will see it. This is
+worth remembering when the total energy (item 2f) is assembled: agreement
+better than $\sim10^{-4}$ relative between an AD force and Elk's own is not to
+be expected on a symmetric cell, and getting it would be evidence of a mistake
+rather than of success.
+
+### Why the wrong hypotheses took a while
+
+Everything checked before the cause was found is listed here because each was
+individually decisive and collectively misleading: it is entirely in
+correlation (Elk's own $v_x=\tfrac43\varepsilon_x$ to roundoff); it is not a
+density error ($\varepsilon_c$ agrees to 2.8e-16 at the same points); it is not
+a function of $\rho$ (points at $\rho=11.2$ disagree, points at $\rho=0.78$
+agree, and the two sets overlap); it is not mixing (`vsmt - vclmt - vxcmt` is
+1.7e-7 on a scale of 9e7); it is not a post-processing filter (`potks` trims
+only `vxcir`); it is not the interstitial's story (4.4e-16 there, §2a). All
+true, and none of them looks at the *last four lines of the calling routine*.
+
+The one observation that pointed at the answer was the $l$ decomposition —
+Elk holding exact zeros in three channels where the transcription held
+$10^{-3}$. A scalar residual, however carefully bounded, cannot show that.
+**When a field-valued quantity disagrees, decompose it in the basis the code
+stores it in before ruling anything out.**
