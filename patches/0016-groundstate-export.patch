@@ -1,6 +1,6 @@
 --- a/src/elkpy_eigenstates.f90
 +++ b/src/elkpy_eigenstates.f90
-@@ -1595,6 +1595,110 @@
+@@ -1595,6 +1595,112 @@
  !EOC
  
  !BOP
@@ -60,6 +60,8 @@
 +write(*,*) ngvc
 +write(*,*) ngridg(1),ngridg(2),ngridg(3)
 +write(*,'(4ES25.16E3)') omega
++write(*,'(4ES25.16E3)') avec(1:3,1:3)
++write(*,'(4ES25.16E3)') bvec(1:3,1:3)
 +do is=1,nspecies
 +  write(*,*) nrmt(is),nrmti(is),npmt(is)
 +end do
@@ -111,7 +113,7 @@
  ! !ROUTINE: elkpy_eigenstate_session
  ! !INTERFACE:
  subroutine elkpy_eigenstate_session
-@@ -1672,6 +1776,14 @@
+@@ -1672,6 +1778,14 @@
  !    JAX port (docs/jax\_port.md), not a physical observable: nothing
  !    upstream writes {\tt apwalm} at all. $H$ and $O$ carry only the upper
  !    triangle Elk fills.
@@ -126,7 +128,7 @@
  !   \item {\tt PARITY k1 k2 k3 ist0 ist1} -- the inversion (parity) operator
  !    $\langle\psi_m|\hat I|\psi_n\rangle$ over the band window
  !    $[ist0,ist1]$, plus all {\tt nstsv} eigenvalues of the same
-@@ -1743,6 +1855,11 @@
+@@ -1743,6 +1857,11 @@
    if (ios /= 0) cycle
    select case(trim(cmd))
  

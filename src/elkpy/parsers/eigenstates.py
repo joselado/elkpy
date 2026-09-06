@@ -303,6 +303,11 @@ def parse_lapw_response(tokens):
       omega                     -- unit cell volume (Bohr^3)
       avec, bvec                -- (3, 3), columns are the lattice /
                                    reciprocal lattice vectors (Elk's own
+                                   avec(:, j) convention, atomic units).
+                                   Needed to put `ivg` on the FFT grid: `vgc`
+                                   only covers the first `ngvec` entries.
+      avec, bvec                -- (3, 3), columns are the lattice /
+                                   reciprocal lattice vectors (Elk's own
                                    avec(:, j) convention, atomic units)
       vkc                       -- (3,) the k-point in Cartesian a.u.
       idxis                     -- (natmtot,) 1-based species of each atom
@@ -667,6 +672,11 @@ def parse_groundstate_response(tokens):
                                    reproducing that filter too.
       ngridg                    -- (3,) the real-space FFT grid
       omega                     -- unit cell volume (Bohr^3)
+      avec, bvec                -- (3, 3), columns are the lattice /
+                                   reciprocal lattice vectors (Elk's own
+                                   avec(:, j) convention, atomic units).
+                                   Needed to put `ivg` on the FFT grid: `vgc`
+                                   only covers the first `ngvec` entries.
       nrmt, nrmti, npmt         -- (nspecies,) radial points, inner-region
                                    radial points, packed muffin-tin length
       idxis                     -- (natmtot,) 1-based species of each atom
@@ -709,6 +719,9 @@ def parse_groundstate_response(tokens):
     flat, pos = _take(tokens, pos, 3, int)
     out["ngridg"] = np.array(flat)
     (out["omega"],), pos = _take(tokens, pos, 1, float)
+    for key in ("avec", "bvec"):
+        flat, pos = _take(tokens, pos, 9, float)
+        out[key] = np.array(flat).reshape(3, 3, order="F")
     nrmt = np.zeros(nspecies, dtype=int)
     nrmti = np.zeros(nspecies, dtype=int)
     npmt = np.zeros(nspecies, dtype=int)

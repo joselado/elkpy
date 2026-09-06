@@ -23,6 +23,51 @@ import numpy as np
 import jax.numpy as jnp
 
 
+def reciprocal_vectors(groundstate):
+    r"""The Cartesian :math:`\mathbf G` at every point of the FFT grid,
+    laid out in the FFT array's own order.
+
+    `vgc` in the export covers only the first `ngvec` entries of Elk's sorted
+    G-list, and the grid has `ngtot > ngvec` slots; the rest are recovered
+    from the integer vectors `ivg` and the reciprocal lattice.  `igfft` is
+    what puts a list entry in its FFT slot, and it is not the identity --
+    Elk's list is sorted by :math:`|\mathbf G|`, so "the first n G-vectors"
+    is a sphere and not a corner of the box.
+    """
+    ngtot = int(groundstate["ngtot"])
+    bvec = np.asarray(groundstate["bvec"])
+    ivg = np.asarray(groundstate["ivg"]).astype(float)
+    igfft = np.asarray(groundstate["igfft"]) - 1
+    out = np.zeros((3, ngtot))
+    out[:, igfft] = bvec @ ivg
+    return out
+
+
+def laplacian(values, groundstate):
+    r""":math:`\nabla^2 f` on the interstitial grid, spectrally.
+
+    Exact for a function the grid represents exactly, which `vclir` is not
+    near a muffin-tin sphere -- see `tests/test_calculation_poisson.py`.
+    """
+    g2 = jnp.asarray((reciprocal_vectors(groundstate) ** 2).sum(axis=0))
+    ngridg = groundstate["ngridg"]
+    return to_real(-g2 * to_reciprocal(values, ngridg), ngridg)
+
+
+def gradient(values, groundstate):
+    r""":math:`\nabla f` on the interstitial grid, spectrally: `(3, ngtot)`.
+
+    The adjoint of this operation is the divergence, which is what makes a
+    GGA's :math:`-\nabla\cdot(\partial(\rho\varepsilon)/\partial\nabla\rho)`
+    term fall out of `jax.grad` with nothing hand-coded.
+    """
+    gvec = jnp.asarray(reciprocal_vectors(groundstate))
+    ngridg = groundstate["ngridg"]
+    spectrum = to_reciprocal(values, ngridg)
+    return jnp.stack([to_real(1j * gvec[a] * spectrum, ngridg)
+                      for a in range(3)])
+
+
 def to_reciprocal(values, ngridg):
     """Real-space FFT grid -> the complex G-space array, in Elk's layout."""
     shape = tuple(int(n) for n in ngridg)
