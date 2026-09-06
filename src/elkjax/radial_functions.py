@@ -41,6 +41,15 @@ port holds the linearisation energies fixed) and the overflow freeze at
 :math:`|P|>10^{100}` (which exists for deep core states in `rdirac`; at the
 valence linearisation energies the APW solutions do not approach it).
 
+**The radial functions reach `apwalm` through `D`.**  `match` solves
+:math:`DA=b` with :math:`D` the matrix of radial derivatives at
+:math:`R_{\rm MT}`, so rebuilding `apwfr` without rebuilding :math:`D` freezes
+the basis at the sphere boundary while changing it inside -- and every APW
+block of both :math:`H` and :math:`O` then misses the matching response.
+`derivative_matrices` closes that, and it is checked against the exported
+`dmat` rather than against a finite difference, which would differentiate the
+same truncated function twice and see nothing.
+
 **What `apwfr`'s second component is.**  `genapwfr` stores :math:`u` and
 :math:`Eu`, then Gram-Schmidt-orthonormalises the set at each :math:`\ell`
 carrying BOTH through the same combination -- so the second component is a
@@ -354,14 +363,72 @@ def lo_radial_functions(export, potential=None, lorbe=None):
     return out
 
 
+def derivative_matrices(export, apwfr=None):
+    r"""The matrices $D$ that `match` inverts, rebuilt from the radial
+    functions.
+
+    $D^{\alpha\ell}_{ij}$ is the $(i-1)$-th radial derivative of the $j$-th APW
+    radial function at $R_{\rm MT}$, with the zeroth row the value itself:
+
+    .. math::
+       D_{1j} = u_{j\ell}(R_{\rm MT}), \qquad
+       D_{ij} = \left.\frac{d^{\,i-1}u_{j\ell}}{dr^{\,i-1}}\right|_{R_{\rm MT}},
+       \quad i>1,
+
+    the derivatives taken by fitting a polynomial through the last `npapw`
+    mesh points (`polynm`).  `match` solves $DA=b$ for the matching
+    coefficients, so **$D$ is how the radial functions reach `apwalm`**: a
+    caller that rebuilds `apwfr` from a perturbed potential and leaves $D$
+    alone silently freezes the basis's shape at the sphere boundary while
+    changing it inside, and every APW block of both $H$ and $O$ then misses
+    the matching response.  That is not visible in an AD-versus-FD comparison,
+    which differentiates the same truncated function twice; the check with
+    teeth is this array against the exported `dmat`.
+
+    Returns the same nested list shape the export uses: over atoms, then over
+    $\ell$, an `(ord, ord)` array with `ord = apword[l, is]`.
+    """
+    apwfr = export["apwfr_full"] if apwfr is None else apwfr
+    apword = np.asarray(export["apword"])
+    rmt = np.asarray(export["rmt"])
+    npapw = int(export["npapw"])
+    nl = int(export["lmaxapw"]) + 1
+    out = []
+    for ias in range(int(export["natmtot"])):
+        is_, nr, r, _ = _atom_mesh(export, ias)
+        tail = slice(nr - npapw, nr)
+        rtail = r[tail]
+        per_l = []
+        for l in range(nl):
+            ord_ = int(apword[l, is_])
+            cols = []
+            for jo in range(ord_):
+                u = apwfr[tail, 0, jo, l, ias]
+                col = [u[-1]] + [polynm(io, rtail, u, rmt[is_])
+                                 for io in range(1, ord_)]
+                cols.append(jnp.stack(col))
+            per_l.append(jnp.stack(cols, axis=1))       # d[io, jo]
+        out.append(per_l)
+    return out
+
+
 def radial_functions_from_export(export, potential=None, apwe=None,
                                  lorbe=None):
     """A copy of `export` with `apwfr_full`, `apwdfr` and `lofr` REPLACED by
     the ones built here, so `radial.py` and `hamiltonian.py` consume them
     unchanged.  Composed with `radial.integrals_from_export`, this makes the
     whole first-variational spectrum a function of `vsmt`."""
+    from . import hamiltonian as _ham
+
     fr, dfr = apw_radial_functions(export, potential=potential, apwe=apwe)
     lofr = lo_radial_functions(export, potential=potential, lorbe=lorbe)
+    dmat = derivative_matrices(export, apwfr=fr)
     out = dict(export)
-    out.update(apwfr_full=fr, apwdfr=dfr, lofr=lofr)
+    out.update(apwfr_full=fr, apwdfr=dfr, lofr=lofr, dmat=dmat)
+    # apwalm depends on the radial functions THROUGH dmat, so it has to be
+    # rebuilt too -- see `derivative_matrices`.  At the export's own G+k, so
+    # the result is directly comparable with Elk's own matrices.
+    ngp = int(export["ngp"])
+    vgkc = jnp.asarray(np.asarray(export["vgpc"])[:, :ngp].T)
+    out["apwalm"] = _ham.matching_coefficients(out, vgkc)
     return out

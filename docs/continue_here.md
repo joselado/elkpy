@@ -372,7 +372,7 @@ Weinert Poisson, XC) and two Phase 1 items are reachable without it.
 
    **The finding to carry forward is the channel split.** Frozen-basis vs full AD on
    bulk Si: a purely SPHERICAL perturbation gives frozen-basis derivative **exactly
-   zero** and 100% basis response; a purely NON-SPHERICAL one gives 4.2e-16 basis
+   zero** and 100% basis response; a purely NON-SPHERICAL one gives 7.0e-16 basis
    response. Both are structural. `hmlrad`'s $\ell_2=0$ element is
    $\langle u|\hat Hu\rangle$ — `genapwfr` has already applied $\hat H$, the radial
    functions being that operator's own solutions — so the spherical potential never
@@ -381,6 +381,16 @@ Weinert Poisson, XC) and two Phase 1 items are reachable without it.
    potential cannot move the basis. **Consequence for Phase 2**: a chain that produced
    a perfectly correct $\delta v_s$ and fed it to a frozen LAPW basis would return
    ZERO for the spherical channel while passing the study's pointwise $v_{xc}$ check.
+
+   **And one trap that no gradient check can catch, hit here for real.** A perturbed
+   potential reaches $H$ and $O$ twice: inside the radial integrals, and through the
+   matrix $D$ of radial derivatives at $R_{\rm MT}$ that `match` inverts for `apwalm`.
+   The first version rebuilt `apwfr` and left `apwalm` exported — a basis frozen at the
+   sphere boundary and moving inside. AD and FD then differentiate the same truncated
+   function and agree to 4e-10, the closed form is unaffected, and both structural zeros
+   survive; only a FORWARD check sees it (`radial_functions.derivative_matrices` against
+   the exported `dmat`). Phase 0's "a green gradient test does not validate a
+   transcription", verbatim. It was worth 21% of the full derivative.
 
    Two more things worth remembering. The export was internally inconsistent by one
    mixing step until 0015 called `genapwlofr` (`gndstate` mixes the potential AFTER

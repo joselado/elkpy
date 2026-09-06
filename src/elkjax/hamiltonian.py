@@ -468,6 +468,8 @@ def matching_coefficients(export, vgkc):
     per_atom = []
     for ias in range(int(export["natmtot"])):
         dmat = [jnp.asarray(m, dtype=complex) for m in export["dmat"][ias]]
+        # `export` may carry a REBUILT dmat (elkjax.radial_functions), which is
+        # how a perturbed potential reaches the matching coefficients.
         per_atom.append(lapw.match(
             lmaxapw, vgkc, jnp.asarray(atposc[:, ias]), dmat,
             float(rmt[int(idxis[ias])]), omega))

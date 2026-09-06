@@ -1478,8 +1478,8 @@ the four-point window it is integrated over) and `lax.scan` starts at the fourth
 **The finding, and it is structural: the two channels of the potential are exactly
 complementary.** Frozen-basis vs full AD on bulk Si over the occupied window — a purely
 SPHERICAL perturbation gives a frozen-basis derivative of **exactly zero** and 100% basis
-response; a purely NON-SPHERICAL one gives 4.2e-16 basis response; a random direction
-mixes them at 79%. `hmlrad`'s $\ell_2=0$ element is $\langle u|\hat Hu\rangle$ and
+response; a purely NON-SPHERICAL one gives 7.0e-16 basis response; a random direction
+mixes them at 83%. `hmlrad`'s $\ell_2=0$ element is $\langle u|\hat Hu\rangle$ and
 `genapwfr` has already applied $\hat H$ — the radial functions ARE that operator's
 solutions, which is the LAPW construction itself — so the spherical potential never
 appears in a radial integral and reaches $H$ only by moving the basis; and
@@ -1488,7 +1488,17 @@ potential cannot move the basis. **A Hellmann-Feynman-shaped treatment of the mu
 potential does not lose a small correction in the spherical channel — it loses the whole
 term**, which is a warning for Phase 2: a chain producing a perfectly correct
 $\delta v_s$ and feeding it to a frozen LAPW basis would return zero there while passing
-the study's pointwise $v_{xc}$ check. The frozen branch is pinned by a closed form, not
+the study's pointwise $v_{xc}$ check. **The basis response itself has two halves**, and
+the first version of this measurement missed one: a perturbed potential reaches $H$ and
+$O$ both inside the radial integrals and through the matrix $D$ of radial derivatives at
+$R_{\rm MT}$ that `match` inverts, so rebuilding `apwfr` without rebuilding $D$ (and hence
+`apwalm`) freezes the basis at the sphere boundary while its interior moves. Nothing in
+the gradient checks could see it — AD and FD then differentiate the same truncated
+function and agree to 4e-10, and both structural zeros survive — which is Phase 0's own
+"a green gradient test does not validate a transcription" recurring verbatim; the check
+that exposes it is forward, `elkjax.radial_functions.derivative_matrices` against the
+exported `dmat`. It was worth 21% of the full derivative. The frozen branch is pinned by
+a closed form, not
 by finite differences (at fixed basis the overlap does not respond, so first-order
 perturbation theory collapses to $\sum_n c_n^\dagger\delta Hc_n$ with Elk's own
 `evecfv`): 1.2e-15. Getting that reference right needs one non-obvious fact — **the map

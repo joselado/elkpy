@@ -25,7 +25,7 @@ Elk's own `apwalm` by patch 0013, so the first build step is the assembly.
 | **1h** the negative test at an exact degeneracy (required to fail) | **done — on graphene at K**, and it corrected the study's own fixture suggestion: a time-reversal-invariant point cannot show the disagreement, however degenerate |
 | **1i** smeared occupations and the self-consistent Fermi level | **done** — the closed-form kernel inside the JVP makes the tolerance INERT for smeared occupations; whether the near-degenerate branch fires is set by the assembly's roundoff, not by the physics |
 | **1j** second derivatives at a real multiplet | **done** — only `sign_projector` survives; both `eigh`-based routes return `NaN`, and the control at a generic $k$ says the failure is the multiplet, not the order |
-| **1k** the spectrum as a differentiable function of the muffin-tin potential | **done — and the two channels are exactly complementary**: the spherical part of $v_s$ enters ONLY through the basis (frozen-basis derivative exactly zero) and the non-spherical part ONLY through the integrals (basis response 4e-16) |
+| **1k** the spectrum as a differentiable function of the muffin-tin potential | **done — and the two channels are exactly complementary**: the spherical part of $v_s$ enters ONLY through the basis (frozen-basis derivative exactly zero) and the non-spherical part ONLY through the integrals (basis response 7e-16) |
 
 ---
 
@@ -1156,9 +1156,9 @@ $k=(0.1,0.2,0.05)$, over the four occupied first-variational bands:
 
 | direction | frozen-basis AD | full AD | basis response |
 |---|---|---|---|
-| spherical | **0** (exactly) | 9.8917e-2 | **100%** |
-| non-spherical | 2.6258e-2 | 2.6258e-2 | **0** (4.2e-16 absolute) |
-| random (their sum) | 2.6258e-2 | 1.2517e-1 | 79% |
+| spherical | **0** (exactly) | 1.3215e-1 | **100%** |
+| non-spherical | 2.6258e-2 | 2.6258e-2 | **0** (7.0e-16 absolute) |
+| random (their sum) | 2.6258e-2 | 1.5841e-1 | 83% |
 
 Both zeros are structural, not numerical, and each has a one-line cause.
 
@@ -1175,8 +1175,33 @@ muffin-tin potential does not lose a small correction in the spherical channel;
 `genapwfr`/`genlofr` integrate in the spherical part alone, so the basis cannot
 respond and the two branches agree to $4\times10^{-16}$ absolute.
 
-The random direction's 79% is then just the mixture, and is quoted only to say
+The random direction's 83% is then just the mixture, and is quoted only to say
 that the effect is not a corner case of the split.
+
+### The basis response has two halves, and one of them was missed first
+
+A perturbed potential reaches $H$ and $O$ through the radial functions **twice**:
+once inside the radial integrals, and once through the matrix $D$ of radial
+derivatives at $R_{\rm MT}$ that `match` inverts for the matching coefficients.
+The first version of this measurement rebuilt `apwfr`/`lofr` and the integrals
+and left `apwalm` at its exported value — a basis whose shape at the sphere
+boundary is frozen while its interior moves.
+
+**Nothing in the gradient checks could see it.** AD and central FD then
+differentiate the *same* truncated function and agree to $4\times10^{-10}$;
+the closed form pins the frozen branch, which is unaffected; both structural
+zeros survive (the frozen branch holds $D$ fixed by definition, and a
+non-spherical perturbation moves neither `apwfr` nor $D$). This is Phase 0's
+own carried-forward finding — *a green gradient test does not validate a
+transcription* — recurring exactly as stated, and the check that exposes it is
+the forward one: rebuild $D$ from `apwfr` and compare against the exported
+`dmat` (bitwise at `apword=1`, 3.4e-16 at `apword=2`).
+
+Quantitatively the omission was **not** small. With $D$ frozen the spherical
+channel gave 9.8917e-2 against a true 1.3215e-1: the matching response alone is
+a quarter of the basis response and 21% of the full derivative. So "freeze the
+basis" has two distinct meanings inside the muffin tin, and neither is
+negligible.
 
 ### AD against finite differences of the same function
 
@@ -1184,9 +1209,9 @@ On the random direction, central FD of the identical JAX function:
 
 | step | frozen branch | full branch |
 |---|---|---|
-| $10^{-4}$ | 2.0e-9 | 3.9e-10 |
-| $10^{-5}$ | 4.8e-9 | 5.2e-9 |
-| $10^{-6}$ | 7.4e-8 | 4.0e-8 |
+| $10^{-4}$ | 2.0e-9 | 4.9e-10 |
+| $10^{-5}$ | 4.8e-9 | 8.7e-10 |
+| $10^{-6}$ | 7.4e-8 | 3.8e-8 |
 
 The disagreement **grows** as the step shrinks, which is the $1/h$ signature of
 roundoff in the difference and not of a wrong gradient — the criterion

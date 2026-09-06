@@ -51,7 +51,7 @@ pytestmark = [
                        reason="jax not installed; pip install -e .[jax]"),
 ]
 
-from test_calculation_lapw_assembly import CASES, exports, _module_tmp  # noqa
+from conftest import LAPW_CASES as CASES  # noqa: F401
 
 # Every integral is one weighted sum over a few hundred radial points, so
 # roundoff is the only scale in play.  Measured worst case across the three

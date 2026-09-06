@@ -29,6 +29,11 @@ for:
     same-l orthogonalisation (in Elk's ascending-energy `idxelo` order) does
     any work.
 
+The rebuilt `D` is checked here too.  It is what carries a perturbed `apwfr`
+into `apwalm`, and it is invisible to any gradient check: a chain that rebuilt
+the radial functions and left `D` alone differentiates a truncated function
+consistently and agrees with its own finite differences perfectly.
+
 `rschrodint`'s node count and its overflow freeze are deliberately absent
 from the transcription; both are non-differentiable branches, and the first
 is only used by `linengy`, which this port does not run.
@@ -50,7 +55,7 @@ pytestmark = [
                        reason="jax not installed; pip install -e .[jax]"),
 ]
 
-from test_calculation_lapw_assembly import CASES, exports, _module_tmp  # noqa
+from conftest import LAPW_CASES as CASES  # noqa: F401
 
 # Every radial function is a few hundred predictor-corrector steps in double
 # precision; measured worst case across the three fixtures is 7e-13 absolute
@@ -116,6 +121,34 @@ def test_apword_two_actually_mixes_the_orders(exports):
     e0 = apwe[0, l, ias] + apwdm[0, l, 0] * deapw
     u0, hu0 = fr[:, 0, 0, l, ias], fr[:, 1, 0, l, ias]
     assert np.abs(hu0 - e0 * u0).max() < 1e-14 * np.abs(hu0).max()
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_the_derivative_matrices_match_elk(case, exports):
+    """`D`, the matrix `match` inverts, rebuilt from the radial functions.
+
+    This is the ONLY route by which a rebuilt `apwfr` reaches the matching
+    coefficients, and therefore every APW block of both H and O.  It is
+    checked against Elk's own `dmat` rather than against a finite difference,
+    because a chain that rebuilt `apwfr` and left `D` alone would still pass
+    every AD-versus-FD comparison -- both sides differentiate the same
+    truncated function.  That is Phase 0's standing finding, and it happened
+    here (see `docs/jax_port_phase1.md` §1k).
+
+    Only the apword=2 fixture makes `D` a real matrix; at order 1 it is the
+    single number u(R_MT) and the `polynm` derivative rows are never built.
+    """
+    from elkjax import radial_functions as rf
+    export = exports[case]
+    _skip_without_potential(export)
+    built = rf.derivative_matrices(export)
+    worst = 0.0
+    for ias, per_l in enumerate(built):
+        for l, matrix in enumerate(per_l):
+            ref = np.asarray(export["dmat"][ias][l])
+            worst = max(worst, np.abs(np.asarray(matrix) - ref).max()
+                        / max(np.abs(ref).max(), 1e-30))
+    assert worst < 1e-13, worst
 
 
 @pytest.mark.parametrize("case", CASES)

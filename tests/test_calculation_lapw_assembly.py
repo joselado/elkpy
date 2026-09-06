@@ -11,7 +11,8 @@ instead of "H is wrong somewhere". The interstitial contributions are taken
 from the export and not rebuilt: the Hamiltonian's needs the interstitial
 Kohn-Sham potential, which is Phase 2 of the port.
 
-Three fixtures, and each one catches something the others cannot:
+Three fixtures (built once per session in `tests/conftest.py`), each catching
+something the others cannot:
 
   * bulk Si at apword=1  -- the stock case, every species file Elk ships.
   * bulk Si at apword=2  -- the only way to exercise haa's and hloa's APW
@@ -33,7 +34,6 @@ import numpy as np
 import pytest
 
 from elkpy import config
-from elkpy.structure import Structure
 
 pytestmark = [
     pytest.mark.skipif(not config.default_elk_binary().is_file(),
@@ -42,8 +42,7 @@ pytestmark = [
                        reason="jax not installed; pip install -e .[jax]"),
 ]
 
-SI_AVEC = [(5.13, 5.13, 0.00), (5.13, 0.00, 5.13), (0.00, 5.13, 5.13)]
-KPOINT = (0.1, 0.2, 0.05)          # generic: no symmetry, no degeneracy
+from conftest import LAPW_KPOINT as KPOINT      # noqa: F401
 
 # Machine precision is the right scale for every block: each is a small dense
 # contraction of exported doubles. The one exception is Elk's own side --
@@ -52,78 +51,6 @@ KPOINT = (0.1, 0.2, 0.05)          # generic: no symmetry, no degeneracy
 # on h-BN that costs 3.3e-14, and reproducing the guard recovers 3.0e-17, so
 # the tolerance is set by the guard and not by the transcription.
 TOL = 1e-12
-
-
-def _apword2_species_dir(tmp_path):
-    """Elk's own Si.in with the APW order raised from 1 to 2 -- derivative
-    orders 0 and 1, the textbook LAPW basis u_l and du_l/dE. Every species
-    file Elk ships sets apword = 1, so without this the order axis of haa and
-    hloa is length 1 and never tested."""
-    source = config.resolve_species_path() / "Si.in"
-    out = []
-    for line in source.read_text().splitlines(keepends=True):
-        if ": apword" in line:
-            out.append("   2                                        : apword\n")
-            out.append("    0.1500   0  F                           : apwe0, apwdm, apwve\n")
-            out.append("    0.1500   1  F\n")
-            continue
-        if ": apwe0, apwdm, apwve" in line and out and "apword" in out[-3]:
-            continue
-        out.append(line)
-    directory = tmp_path / "species_apword2"
-    directory.mkdir()
-    (directory / "Si.in").write_text("".join(out))
-    return directory
-
-
-@pytest.fixture(scope="module")
-def _module_tmp(tmp_path_factory):
-    return tmp_path_factory.mktemp("lapw_assembly")
-
-
-def _export(structure, workdir, sppath=None, **kwargs):
-    """The LAPW export at KPOINT, plus Elk's own momentum matrix there.
-
-    `pmat` rides along under a key of its own because it is the independent
-    Fortran reference for the k-derivative below -- genpmatk, which shares no
-    code with hmlfv/olpfv.
-    """
-    from elkpy.calculation import Calculation
-    calc = Calculation(structure=structure, workdir=workdir, **kwargs)
-    if sppath is not None:
-        calc.sppath = sppath
-    calc.ensure_ground_state()
-    with calc.eigenstate_session() as session:
-        export = session.lapw_problem(KPOINT)
-    export["_pmat"] = np.asarray(calc.get_momentum_matrix(KPOINT).pmat)
-    return export
-
-
-@pytest.fixture(scope="module")
-def exports(_module_tmp):
-    """All three cases, each ground state converged once.
-
-    A single dict rather than three parametrized fixtures because the tests
-    below select among them by name: pytest's `getfixturevalue` cannot reach
-    into a parametrized fixture.
-    """
-    out = {}
-    silicon = Structure(
-        avec=SI_AVEC,
-        species={"Si": [(0.0, 0.0, 0.0), (0.25, 0.25, 0.25)]})
-    out["si_apword1"] = _export(silicon, _module_tmp / "si1",
-                                ngridk=(2, 2, 2), rgkmax=7.0)
-    out["si_apword2"] = _export(
-        silicon, _module_tmp / "si2",
-        sppath=_apword2_species_dir(_module_tmp), ngridk=(2, 2, 2),
-        rgkmax=7.0)
-    a, c = 4.746, 20.0
-    hbn = Structure(
-        avec=[(a, 0.0, 0.0), (-a / 2, a * 3 ** 0.5 / 2, 0.0), (0.0, 0.0, c)],
-        species={"B": [(0.0, 0.0, 0.0)], "N": [(1 / 3, 2 / 3, 0.0)]})
-    out["hbn"] = _export(hbn, _module_tmp / "hbn",
-                         ngridk=(2, 2, 1), rgkmax=6.0)
-    return out
 
 
 CASES = ["si_apword1", "si_apword2", "hbn"]

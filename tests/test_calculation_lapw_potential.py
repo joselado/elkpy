@@ -38,8 +38,11 @@ Hamiltonian rather than from anything about the fixtures.
 
 So a Hellmann-Feynman-shaped treatment of the muffin-tin potential does not
 lose a small correction in the spherical channel; it loses the whole term.
-Measured on bulk Si with a random direction, which mixes the two: 79% of the
-derivative is basis response.
+Measured on bulk Si with a random direction, which mixes the two: 83% of the
+derivative is basis response.  A quarter of that arrives through `apwalm` --
+the radial functions reach the matching coefficients through the derivative
+matrix D, and freezing D while rebuilding `apwfr` is worth 21% of the full
+derivative on its own.
 
 Three further checks:
 
@@ -73,8 +76,6 @@ pytestmark = [
     pytest.mark.skipif(importlib.util.find_spec("jax") is None,
                        reason="jax not installed; pip install -e .[jax]"),
 ]
-
-from test_calculation_lapw_assembly import exports, _module_tmp  # noqa
 
 NOCC = 4          # both fixtures carry 8 valence electrons, i.e. 4 bands
 CASES = ["si_apword1", "hbn"]
@@ -181,7 +182,7 @@ def test_the_basis_response_is_not_a_small_correction(gradients):
     (Hellmann-Feynman-shaped) term is not the derivative -- the same finding
     `docs/jax_port_phase1.md` §1e records for k, in a channel where it is far
     larger.  Asserted as an order of magnitude, since its exact value depends
-    on the direction; measured 79% on bulk Si.
+    on the direction; measured 83% on bulk Si.
     """
     for case in CASES:
         row = gradients[case]["random"]
