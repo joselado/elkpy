@@ -1,12 +1,20 @@
 # Continue here
 
-Working state as of 2026-09-06, so this can be picked up cold. Workstream A landed on
-`elk-full-coverage` and is now on `master` at `39de3e4`. Workstream B is on `jax-port`,
-which is **not merged**; to land it, `git checkout master && git merge --ff-only jax-port`.
+Working state as of 2026-09-06, so this can be picked up cold. **Both workstreams are
+now on `master`**: Workstream A landed via `elk-full-coverage`, and Workstream B's
+`jax-port` was fast-forwarded in at the end of this session. Nothing is pushed — `origin`
+is still at the pre-merge `master`. The `jax-port` branch still exists and points at the
+same commit; deleting it is safe.
 
 ```
-a8f45cc  Export Elk's LAPW eigenproblem, close 0c against it   patches/0013, elkjax
-7a88920  Close a hole in 0c's forward check, pin the harmonic's pole  tests, docs
+4be2933  (master, jax-port) Correct the soc_scale shortfall to a range
+096d2eb  Close the kappa table with h-BN at the higher cutoff
+e559ac7  Record what a LAPW query costs, and what apword=2 pins
+81c8021  Check the exported eigenvectors against the exported eigenproblem
+35aec88  Measure kappa(O) on real overlaps, retire 8(b)'s estimate   elkjax/phase0b_overlap.py
+a8f45cc  Export Elk's LAPW eigenproblem, close 0c against it         patches/0013
+c299c14  Bring the continuation document up to date
+7a88920  Close a hole in 0c's forward check, pin the harmonic's pole
 794175f  Add the Phase 0 verdict and repair two stale status rows
 fe03924  Settle Phase 0c: the LAPW matching coefficients             src/elkjax/lapw.py
 01bf937  Correct two mechanism attributions, guard sign_projector
@@ -14,7 +22,7 @@ adcb2d0  Settle Phase 0e: compile flat in shapes, ~n^1.85 in ops     src/elkjax/
 410be6a  Unblock Phase 0a-prime with an eigensolver-free projector
 14782ad  Settle Phase 0a: reverse mode survives the eigensolve       src/elkjax/fixedpoint.py
 15d910d  Settle Phase 0b: the safe-K projector rule is needed        src/elkjax/projector.py
-39de3e4  (master) Add a continuation document                        docs/continue_here.md
+39de3e4  Add a continuation document                                 docs/continue_here.md
 ```
 
 **Phase 0 of the JAX port is closed and it did not kill the project** — §3 has the
@@ -287,12 +295,22 @@ production shape (26.8 GiB of H and S) is never allocated, only compiled.
 - ~~Start patch 0013.~~ Done and committed — see §3. It was taken as the obvious next
   step rather than put to you, since it was the single item all three open bullets
   shared. The maintenance commitment is real and is now recorded in `patches/README.md`.
+- ~~Merge `jax-port` into `master`.~~ Done, fast-forward, at your instruction. **Not
+  pushed** — that is still open.
 - Phase 1 at all, or the §9.2 hybrid. Phase 0 removed the technical objections; the
   scope question it does not answer is whether the targets that need `dv*/dθ` — phonons,
   Born charges, elastic constants, response functions, ML-XC training, reverse-mode
   inverse design — are the goal. §9.2 puts the hybrid at 13-15 weeks and it delivers
-  everything that needs no SCF derivative.
-- Merge `jax-port` into `master`, or keep it on the branch.
+  everything that needs no SCF derivative. **This is the one open Workstream B decision.**
+
+If Phase 1 does go ahead, three things it should start from rather than rediscover:
+`match` is already written and already checked against Elk element-wise, so the first
+build step is `hmlfv`/`olpfv`, not `match`; the G+k set, `atposc` and `rmt` must be taken
+from the export rather than regenerated (`gengkvec`'s ordering, `tshift`'s origin shift
+and `checkmt`'s radius shrink are three separate ways to get a correct-looking
+transcription that cannot be compared element-wise); and the projector tolerance must be
+computed per run from a real κ, since it is a cutoff property and §8(b)'s cheap estimate
+is useless.
 
 **Workstream A** (unchanged from the previous session)
 
