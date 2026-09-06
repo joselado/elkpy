@@ -91,31 +91,9 @@ def band_energy(export, packed, nocc, frozen_basis=False):
                             nocc=nocc))
 
 
-def perturbation_theory_reference(export, direction, nocc):
-    r"""The frozen-basis derivative in closed form: :math:`\sum_n c_n^\dagger\,
-    \delta H\,c_n` over the occupied window, with Elk's own `evecfv`.
-
-    At fixed basis the overlap does not respond to the potential at all, so
-    this is exactly first-order perturbation theory for the generalised
-    eigenproblem -- an oracle involving no finite difference and no eigensolve
-    of a perturbed matrix.
-
-    **The map from the potential to the radial integrals is AFFINE, not
-    linear**, and getting that wrong is the whole difficulty here.  Its
-    constant part is the $\ell_2=0$ element, which is
-    $\int u(\hat Hu)r^2dr$ and contains no potential -- `hmlrad` computes it
-    from `apwfr`'s second component, which `genapwfr` has already applied the
-    radial Hamiltonian to.  So $\delta H$ is the integrals built from
-    `direction` **with their $\ell_2=0$ slice zeroed**; keeping it carries the
-    unperturbed kinetic block into the derivative, and measured on bulk Si
-    that is not a small error -- it flips the sign.
-    """
-    dv = radial.potential_arrays(export, jnp.asarray(direction))
-    integrals = dict(export)
-    haa, hloa, hlolo = radial.hamiltonian_integrals(export, potential=dv)
-    integrals.update(haa=haa.at[0].set(0.0),
-                     hloa=hloa.at[0].set(0.0),
-                     hlolo=hlolo.at[0].set(0.0))
+def _matrix_element(export, integrals, nocc):
+    """:math:`\sum_{n<n_{\rm occ}} c_n^\dagger\,\delta H\,c_n` with Elk's own
+    `evecfv`, normalised as :math:`c_n^\dagger Oc_n=1`."""
     dh = ham.muffin_tin_hamiltonian(integrals)
     nmatp = int(export["nmatp"])
     dh_full = jnp.zeros((nmatp, nmatp), dtype=complex).at[
@@ -125,6 +103,68 @@ def perturbation_theory_reference(export, direction, nocc):
     norm = jnp.einsum("in,ij,jn->n", c.conj(), o, c).real
     return float(jnp.sum(
         jnp.einsum("in,ij,jn->n", c.conj(), dh_full, c).real / norm))
+
+
+def elk_matrix_perturbation(export, direction, nocc):
+    r"""First-order perturbation theory for **Elk's assembled matrix** at
+    fixed radial functions -- the closed form the frozen-basis AD branch must
+    reproduce.
+
+    At fixed basis the overlap does not respond to the potential, so
+    :math:`\delta\varepsilon_n = c_n^\dagger\,\delta H\,c_n`.  What
+    :math:`\delta H` is takes one non-obvious step: the map from the potential
+    to the radial integrals is **affine, not linear**, its constant part being
+    the :math:`\ell_2=0` element (which is
+    :math:`\int u_i(\hat Hu_j)r^2dr` and contains no potential), so that slice
+    must be ZEROED in the integrals built from `direction`.  Carrying it does
+    not degrade the reference, it flips its sign.
+
+    **This is not** :math:`\langle\psi|\delta V|\psi\rangle`, and the
+    difference is the subject of `hellmann_feynman` below.
+    """
+    dv = radial.potential_arrays(export, jnp.asarray(direction))
+    integrals = dict(export)
+    haa, hloa, hlolo = radial.hamiltonian_integrals(export, potential=dv)
+    integrals.update(haa=haa.at[0].set(0.0),
+                     hloa=hloa.at[0].set(0.0),
+                     hlolo=hlolo.at[0].set(0.0))
+    return _matrix_element(export, integrals, nocc)
+
+
+def hellmann_feynman(export, direction, nocc):
+    r"""The true :math:`\sum_n\langle\psi_n|\delta V|\psi_n\rangle` over the
+    muffin tins, at frozen radial functions.
+
+    The difference from `elk_matrix_perturbation` is the :math:`\ell_2=0`
+    channel, and it is not a detail.  Elk's own assembly uses the radial
+    equation to **eliminate** the explicit spherical-potential integral: the
+    radial functions solve
+    :math:`(\hat T+v_{\rm sph})u_j=\varepsilon_ju_j`, so
+    :math:`\int u_i(\hat Hu_j)r^2dr = \varepsilon_j\int u_iu_jr^2dr` and no
+    :math:`v_{\rm sph}` appears anywhere in `hmlrad`'s output.  That is exact
+    for the unperturbed matrix and carries no dependence on
+    :math:`v_{\rm sph}` at fixed :math:`u` -- so `elk_matrix_perturbation`
+    correctly returns zero for a spherical perturbation, while the physical
+    first-order shift :math:`\int u_i\,\delta v_{\rm sph}\,u_j\,r^2dr` is
+    plainly not zero.
+
+    So the two differ by exactly the spherical channel's Hellmann-Feynman
+    term, and
+
+    .. math::
+       \frac{d}{dt}\sum_n\varepsilon_n
+         = \underbrace{\langle\psi|\delta V|\psi\rangle}_{\text{this}}
+         + \underbrace{(\text{basis relaxation})}_{\text{the rest}},
+
+    which is the decomposition a Pulay / incomplete-basis-set discussion needs
+    and which "full minus frozen" does not give.
+    """
+    dv = radial.potential_arrays(export, jnp.asarray(direction))
+    integrals = dict(export)
+    haa, hloa, hlolo = radial.hamiltonian_integrals(
+        export, potential=dv, potential_only=True)
+    integrals.update(haa=haa, hloa=hloa, hlolo=hlolo)
+    return _matrix_element(export, integrals, nocc)
 
 
 def central_difference(fn, packed, direction, step):
@@ -161,9 +201,21 @@ def split_directions(export, seed=17):
         spherical[ias, 0:stop:lmmaxi] = full[ias, 0:stop:lmmaxi]
         end = stop + lmmaxo * (nr - nri)
         spherical[ias, stop:end:lmmaxo] = full[ias, stop:end:lmmaxo]
+    valence = np.zeros_like(full)
+    for ias in range(int(export["natmtot"])):
+        is_ = int(idxis[ias])
+        nr, nri = int(nrmt[is_]), int(nrmti[is_])
+        r = np.asarray(export["rlmt"])[is_, :nr]
+        radius = float(np.asarray(export["rmt"])[is_])
+        shape = np.exp(-((r - 0.5 * radius) / (0.25 * radius)) ** 2)
+        stop = lmmaxi * nri
+        valence[ias, 0:stop:lmmaxi] = shape[:nri]
+        end = stop + lmmaxo * (nr - nri)
+        valence[ias, stop:end:lmmaxo] = shape[nri:]
     return {"random": jnp.asarray(full),
             "spherical": jnp.asarray(spherical),
-            "non-spherical": jnp.asarray(full - spherical)}
+            "non-spherical": jnp.asarray(full - spherical),
+            "valence": jnp.asarray(valence)}
 
 
 def derivatives(export, direction, nocc, steps=()):
@@ -176,8 +228,10 @@ def derivatives(export, direction, nocc, steps=()):
         if steps:
             out[f"fd_{tag}"] = [central_difference(fn, packed, direction, h)
                                 for h in steps]
-    out["closed_form"] = perturbation_theory_reference(export, direction, nocc)
+    out["closed_form"] = elk_matrix_perturbation(export, direction, nocc)
+    out["hellmann_feynman"] = hellmann_feynman(export, direction, nocc)
     out["basis_response"] = out["ad_full"] - out["ad_frozen"]
+    out["relaxation"] = out["ad_full"] - out["hellmann_feynman"]
     out["steps"] = list(steps)
     return out
 
@@ -202,7 +256,11 @@ def report(result):
         lines.append(f"    first-order PT     {row['closed_form']: .12e}"
                      f"   rel "
                      f"{abs(row['ad_frozen'] - row['closed_form']) / max(abs(row['closed_form']), 1e-300):.3e}")
+        lines.append(f"    Hellmann-Feynman   {row['hellmann_feynman']: .12e}")
         lines.append(f"    full AD            {row['ad_full']: .12e}")
+        share = abs(row["relaxation"]) / max(abs(row["ad_full"]), 1e-300)
+        lines.append(f"    basis relaxation   {row['relaxation']: .12e}"
+                     f"   ({share:.3%} of the full derivative)")
         share = abs(row["basis_response"]) / max(abs(row["ad_full"]), 1e-300)
         lines.append(f"    basis response     {row['basis_response']: .12e}"
                      f"   ({share:.3%} of the full derivative)")

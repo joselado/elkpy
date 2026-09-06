@@ -1486,18 +1486,25 @@ the four-point window it is integrated over) and `lax.scan` starts at the fourth
 
 **The finding, and it is structural: the two channels of the potential are exactly
 complementary.** Frozen-basis vs full AD on bulk Si over the occupied window — a purely
-SPHERICAL perturbation gives a frozen-basis derivative of **exactly zero** and 100% basis
-response; a purely NON-SPHERICAL one gives 7.0e-16 basis response; a random direction
-mixes them at 83%. `hmlrad`'s $\ell_2=0$ element is $\langle u|\hat Hu\rangle$ and
-`genapwfr` has already applied $\hat H$ — the radial functions ARE that operator's
-solutions, which is the LAPW construction itself — so the spherical potential never
-appears in a radial integral and reaches $H$ only by moving the basis; and
-`genapwfr`/`genlofr` integrate in the spherical part alone, so the non-spherical
-potential cannot move the basis. **A Hellmann-Feynman-shaped treatment of the muffin-tin
-potential does not lose a small correction in the spherical channel — it loses the whole
-term**, which is a warning for Phase 2: a chain producing a perfectly correct
-$\delta v_s$ and feeding it to a frozen LAPW basis would return zero there while passing
-the study's pointwise $v_{xc}$ check. **The basis response itself has two halves**, and
+SPHERICAL perturbation gives a frozen-basis derivative of **exactly zero**; a purely
+NON-SPHERICAL one moves the basis not at all (7.0e-16). `hmlrad`'s $\ell_2=0$ element is
+$\langle u|\hat Hu\rangle$ and `genapwfr` has already applied $\hat H$ — the radial
+functions ARE that operator's solutions, so the radial equation has **eliminated** the
+explicit $\int u\,v_{\rm sph}\,u$ integral, which is the LAPW construction itself; and
+`genapwfr`/`genlofr` integrate in the spherical part alone, so the non-spherical potential
+cannot move the basis. **So "full minus frozen" is NOT the basis relaxation** — it is the
+Hellmann-Feynman term Elk's bookkeeping hides *plus* the relaxation, and conflating them
+was a real error corrected here. `phase1_potential.hellmann_feynman` computes
+$\sum_n\langle\psi_n|\delta V|\psi_n\rangle$ explicitly (the same integrals with the
+$\ell_2=0$ slice filled by the potential integral rather than zeroed), and the honest
+decomposition is HF + relaxation. **The relaxation depends on the SHAPE of the
+perturbation by a factor of 100**: 29% of the derivative for white noise reaching the
+nuclear cusp, where a basis at fixed linearisation energy cannot follow it, and **0.30%**
+for a smooth valence-region bump — roughly what an SCF update does. Quoting the first
+alone misrepresents the method. The Phase 2 warning that survives is narrower and
+sharper: a chain producing a perfectly correct $\delta v_s$ and feeding it to a basis
+frozen in Elk's own $\ell_2=0$ sense returns **zero** for the spherical channel while
+passing the study's pointwise $v_{xc}$ check. **The relaxation itself has two routes**, and
 the first version of this measurement missed one: a perturbed potential reaches $H$ and
 $O$ both inside the radial integrals and through the matrix $D$ of radial derivatives at
 $R_{\rm MT}$ that `match` inverts, so rebuilding `apwfr` without rebuilding $D$ (and hence

@@ -25,7 +25,7 @@ Elk's own `apwalm` by patch 0013, so the first build step is the assembly.
 | **1h** the negative test at an exact degeneracy (required to fail) | **done — on graphene at K**, and it corrected the study's own fixture suggestion: a time-reversal-invariant point cannot show the disagreement, however degenerate |
 | **1i** smeared occupations and the self-consistent Fermi level | **done** — the closed-form kernel inside the JVP makes the tolerance INERT for smeared occupations; whether the near-degenerate branch fires is set by the assembly's roundoff, not by the physics |
 | **1j** second derivatives at a real multiplet | **done** — only `sign_projector` survives; both `eigh`-based routes return `NaN`, and the control at a generic $k$ says the failure is the multiplet, not the order |
-| **1k** the spectrum as a differentiable function of the muffin-tin potential | **done — and the two channels are exactly complementary**: the spherical part of $v_s$ enters ONLY through the basis (frozen-basis derivative exactly zero) and the non-spherical part ONLY through the integrals (basis response 7e-16) |
+| **1k** the spectrum as a differentiable function of the muffin-tin potential | **done — and the two channels are exactly complementary**: the spherical part of $v_s$ enters ONLY through the basis (frozen-basis derivative exactly zero, because the radial equation has eliminated it) and the non-spherical part ONLY through the integrals. The genuine basis relaxation is **0.30%** of the derivative for a valence-shaped perturbation and 29% for white noise |
 | **1l** the position derivative at frozen potential | **done — pinned by a sum rule**: rigid translation leaves the spectrum invariant to 2e-15 Ha with only the interstitial POTENTIAL's response supplied by hand, $\tilde\Theta$'s being built; and the forward form of that null is sharper than the gradient form, which is identically satisfied by the wrong assembly on silicon |
 
 ---
@@ -1137,7 +1137,7 @@ subtle indexing error, and the two-way split named the cause in one run.
 ### The two channels of the potential are exactly complementary
 
 The point of building the integrals rather than importing them is the
-derivative, and the derivative separates into two pieces that can be computed
+derivative, and the derivative separates into pieces that can be computed
 independently:
 
 * **frozen basis** — hold `apwfr`/`lofr` fixed, let only the radial integrals
@@ -1145,64 +1145,85 @@ independently:
   first-order perturbation theory for the generalised eigenproblem collapses to
   $\delta\varepsilon_n = c_n^\dagger\,\delta H\,c_n$ with
   $c_n^\dagger Oc_n=1$: a closed form, computable from Elk's own `evecfv`, with
-  no finite difference and no perturbed eigensolve in it.
+  no finite difference and no perturbed eigensolve in it. It agrees with the
+  frozen-basis AD branch to $1.2\times10^{-15}$.
+* **Hellmann-Feynman** — the physical
+  $\sum_n\langle\psi_n|\delta V|\psi_n\rangle$ at the same frozen basis. It is
+  **not** the same object, and the difference is the subject of the next
+  paragraph.
 * **full** — let the perturbation reach the radial functions, which `genapwfr`
-  re-solves in the perturbed potential at the same linearisation energies.
+  re-solves in the perturbed potential at the same linearisation energies, and
+  through them the derivative matrix $D$ and the matching coefficients.
 
-Their difference is the **basis response**, the term any frozen-basis argument
-drops. Splitting a random direction into its spherical ($\ell=0$) and
-non-spherical halves turns that from a number into a structural statement, and
-the two halves come out **exactly complementary** — on bulk Si, at
-$k=(0.1,0.2,0.05)$, over the four occupied first-variational bands:
+Splitting a random direction into its spherical ($\ell=0$) and non-spherical
+halves makes the structure visible, and the two halves come out **exactly
+complementary** — on bulk Si, at $k=(0.1,0.2,0.05)$, over the four occupied
+first-variational bands:
 
-| direction | frozen-basis AD | full AD | basis response |
-|---|---|---|---|
-| spherical | **0** (exactly) | 1.3215e-1 | **100%** |
-| non-spherical | 2.6258e-2 | 2.6258e-2 | **0** (7.0e-16 absolute) |
-| random (their sum) | 2.6258e-2 | 1.5841e-1 | 83% |
-
-Both zeros are structural, not numerical, and each has a one-line cause.
+| direction | frozen-basis AD | Hellmann-Feynman | full AD | relaxation |
+|---|---|---|---|---|
+| spherical | **0** (exactly) | 1.7845e-1 | 1.3215e-1 | −4.6299e-2 (35%) |
+| non-spherical | 2.6258e-2 | 2.6258e-2 | 2.6258e-2 | **7.3e-16** |
+| random (their sum) | 2.6258e-2 | 2.0471e-1 | 1.5841e-1 | −4.6299e-2 (29%) |
+| valence bump | **0** (exactly) | 2.3349e-1 | 2.3420e-1 | +7.1e-4 (**0.30%**) |
 
 **The spherical potential never appears in a radial integral.** `hmlrad`'s
 $\ell_2=0$ element is $\int u_{q\ell}(\hat Hu_{q'\ell})r^2dr$, and `genapwfr`
 has already applied $\hat H$ — the radial functions *are* that operator's
-solutions. This is the LAPW construction itself: the spherical potential is
-absorbed into the basis, and only the non-spherical remainder survives as an
-explicit matrix element. So a Hellmann-Feynman-shaped treatment of the
-muffin-tin potential does not lose a small correction in the spherical channel;
-**it loses the entire term.**
+solutions, so the radial equation has **eliminated** the explicit
+$\int u\,v_{\rm sph}\,u$ integral in favour of the linearisation energy. This
+is the LAPW construction itself. At frozen $u$ the assembled matrix therefore
+carries no dependence on $v_{\rm sph}$ at all, which is why the frozen-basis
+column is exactly zero there.
 
-**The non-spherical potential never reaches the radial equation.**
-`genapwfr`/`genlofr` integrate in the spherical part alone, so the basis cannot
-respond and the two branches agree to $4\times10^{-16}$ absolute.
+**So "full minus frozen" is not the basis relaxation**, and an earlier version
+of this section called it that. It is the hidden Hellmann-Feynman term *plus*
+the relaxation. `hellmann_feynman` computes the first explicitly — the same
+integrals with the $\ell_2=0$ slice filled by the potential integral instead of
+zeroed — and the honest decomposition is
 
-The random direction's 83% is then just the mixture, and is quoted only to say
-that the effect is not a corner case of the split.
+$$\frac{d}{dt}\sum_n\varepsilon_n
+ = \underbrace{\sum_n\langle\psi_n|\delta V|\psi_n\rangle}_{\text{Hellmann-Feynman}}
+ + \underbrace{(\text{basis relaxation})}_{\text{Pulay-shaped}} .$$
 
-### The basis response has two halves, and one of them was missed first
+The relaxation lives **entirely in the spherical channel** — it must, since the
+non-spherical one has none — which the table shows as the random and spherical
+directions carrying the identical −4.6299e-2.
 
-A perturbed potential reaches $H$ and $O$ through the radial functions **twice**:
-once inside the radial integrals, and once through the matrix $D$ of radial
-derivatives at $R_{\rm MT}$ that `match` inverts for the matching coefficients.
-The first version of this measurement rebuilt `apwfr`/`lofr` and the integrals
-and left `apwalm` at its exported value — a basis whose shape at the sphere
-boundary is frozen while its interior moves.
+### And the relaxation depends on the shape of the perturbation, by a factor of 100
+
+The last row is the one to quote. A white-noise direction has structure down to
+the nuclear cusp, where radial functions built at a **fixed** linearisation
+energy cannot follow it, and the relaxation is 29% of the derivative. A smooth
+spherical bump centred at $R_{\rm MT}/2$ — roughly what an SCF update to the
+valence density does to the potential — gives **0.30%**.
+
+That is the difference between "LAPW's basis relaxation is a leading-order
+effect" and "LAPW's linearisation does its job in the regime it was designed
+for", and only the second is true. Quoting the random direction alone, as an
+earlier draft of this section did, misrepresents the method.
+
+### The relaxation has two routes, and one of them was missed first
+
+A perturbed potential reaches $H$ and $O$ through the radial functions
+**twice**: once inside the radial integrals, and once through the matrix $D$ of
+radial derivatives at $R_{\rm MT}$ that `match` inverts for the matching
+coefficients. The first version of this measurement rebuilt `apwfr`/`lofr` and
+the integrals and left `apwalm` at its exported value — a basis whose shape at
+the sphere boundary is frozen while its interior moves.
 
 **Nothing in the gradient checks could see it.** AD and central FD then
-differentiate the *same* truncated function and agree to $4\times10^{-10}$;
-the closed form pins the frozen branch, which is unaffected; both structural
-zeros survive (the frozen branch holds $D$ fixed by definition, and a
-non-spherical perturbation moves neither `apwfr` nor $D$). This is Phase 0's
-own carried-forward finding — *a green gradient test does not validate a
-transcription* — recurring exactly as stated, and the check that exposes it is
-the forward one: rebuild $D$ from `apwfr` and compare against the exported
-`dmat` (bitwise at `apword=1`, 3.4e-16 at `apword=2`).
+differentiate the *same* truncated function and agree to $5\times10^{-10}$; the
+closed form pins the frozen branch, which is unaffected; both structural zeros
+survive. This is Phase 0's own carried-forward finding — *a green gradient test
+does not validate a transcription* — recurring exactly as stated, and the check
+that exposes it is the forward one: rebuild $D$ from `apwfr` and compare against
+the exported `dmat` (bitwise at `apword=1`, 3.4e-16 at `apword=2`).
 
 Quantitatively the omission was **not** small. With $D$ frozen the spherical
-channel gave 9.8917e-2 against a true 1.3215e-1: the matching response alone is
-a quarter of the basis response and 21% of the full derivative. So "freeze the
-basis" has two distinct meanings inside the muffin tin, and neither is
-negligible.
+channel gave 9.8917e-2 against a true 1.3215e-1: the matching route is a
+quarter of the spherical channel's total response and 21% of the full
+derivative.
 
 ### AD against finite differences of the same function
 
@@ -1227,8 +1248,10 @@ Building "the integrals of $\delta V$" and calling the result $\delta H$ carries
 the $\ell_2=0$ block — which is the constant part, $\langle u|\hat Hu\rangle$ —
 into the derivative at full strength. On bulk Si that does not merely degrade
 the reference: it changes its sign ($-2.27\times10^{-1}$ against a true
-$+2.63\times10^{-2}$). The fix is to zero the $\ell_2=0$ slice, which is the
-same fact as the first zero in the table above, met from the other side.
+$+2.63\times10^{-2}$). The fix is to zero the $\ell_2=0$ slice — and to fill it
+with the *potential* integral instead is exactly what turns Elk's matrix
+perturbation into the Hellmann-Feynman term. The same slice, three uses, and
+getting the wrong one gives a plausible number every time.
 
 ### What this settles, and what it does not
 
@@ -1259,7 +1282,10 @@ $v_{xc}$ pointwise. That is a check on the functional, and it is worth having,
 but the table above says it would not catch the failure mode that matters here:
 a Phase 2 chain that produced a perfectly correct $\delta v_s$ and then fed it
 to a frozen LAPW basis would return **zero** for the spherical channel while
-looking entirely healthy.
+looking entirely healthy. Note also which number to carry forward: the genuine
+basis relaxation is 0.30% for a valence-shaped perturbation, so an SCF-scale
+argument that neglects it is defensible — but "frozen basis" in the sense of
+Elk's own $\ell_2=0$ bookkeeping loses 100% of that channel, which is not.
 
 ---
 

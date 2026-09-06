@@ -123,7 +123,7 @@ def overlap_integrals(export, apwfr=None, lofr=None):
 
 
 def hamiltonian_integrals(export, potential=None, apwfr=None, lofr=None,
-                          apwdfr=None):
+                          apwdfr=None, potential_only=False):
     """`hmlrad`: the APW--APW, local-orbital--APW and
     local-orbital--local-orbital radial Hamiltonian integrals.
 
@@ -134,6 +134,18 @@ def hamiltonian_integrals(export, potential=None, apwfr=None, lofr=None,
     `potential` is the list of dense `(nr, lmmaxo)` arrays
     `potential_arrays` returns; passing it explicitly is what makes the
     result differentiable with respect to the potential.
+
+    `potential_only` replaces the $\ell_2=0$ element with the plain potential
+    integral $\int u_iu_j\,v_{00}\,r^2dr$ instead of Elk's
+    $\int u_i(\hat Hu_j)r^2dr$.  **That is not a variant of `hmlrad`, it is a
+    different object**, and it exists for exactly one purpose: the matrix
+    element of a potential PERTURBATION.  Elk's own $\ell_2=0$ element has
+    used the radial equation to eliminate the explicit spherical-potential
+    integral in favour of the linearisation energy, so at frozen radial
+    functions it carries no dependence on $v_{\rm sph}$ at all -- correct for
+    the unperturbed matrix, and silently wrong if used as
+    $\langle\psi|\delta V|\psi\rangle$, which needs the integral back.  See
+    `elkjax.phase1_potential`.
     """
     potential = potential_arrays(export) if potential is None else potential
     apwfr = export["apwfr_full"] if apwfr is None else apwfr
@@ -178,6 +190,11 @@ def hamiltonian_integrals(export, potential=None, apwfr=None, lofr=None,
         haa = haa.at[1:, :, :, :, :, ias].set(haa_pot[1:])
         hloa = hloa.at[1:, :, :, :, ias].set(hloa_pot[1:])
         hlolo = hlolo.at[1:, :, :, ias].set(hlolo_pot[1:])
+        if potential_only:
+            haa = haa.at[0, :, :, :, :, ias].set(haa_pot[0])
+            hloa = hloa.at[0, :, :, :, ias].set(hloa_pot[0])
+            hlolo = hlolo.at[0, :, :, ias].set(hlolo_pot[0])
+            continue
         for l in range(nl):
             haa = haa.at[0, :, l, :, l, ias].set(
                 jnp.transpose(diag[:, :, l]))

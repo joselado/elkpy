@@ -19,36 +19,43 @@ it, and separates the two things that derivative contains.
     different number, and the difference is the term a frozen-basis argument
     drops.
 
-The two branches turn out to be EXACTLY COMPLEMENTARY, which is the finding
-this file exists to record, and it follows from how Elk builds the muffin-tin
-Hamiltonian rather than from anything about the fixtures.
+The two branches turn out to be EXACTLY COMPLEMENTARY, and the reason is how
+Elk builds the muffin-tin Hamiltonian rather than anything about the fixtures.
 
   * The SPHERICAL part of `vsmt` never appears in a radial integral.
-    `hmlrad`'s l2 = 0 element is <u|H u>, which `genapwfr` has already applied
-    the radial Hamiltonian to -- the radial functions ARE that operator's
-    solutions, so the spherical potential is absorbed into the basis and only
-    the non-spherical remainder survives as an explicit matrix element (the
-    standard LAPW construction).  The frozen-basis derivative along a purely
-    spherical direction is therefore not small: it is EXACTLY ZERO, while the
-    full derivative is O(1).
+    `hmlrad`'s l2 = 0 element is <u|H u>, and `genapwfr` has already applied
+    H -- the radial functions ARE that operator's solutions, so the radial
+    equation has ELIMINATED the explicit spherical-potential integral in
+    favour of the linearisation energy.  The frozen-basis derivative along a
+    purely spherical direction is therefore not small: it is EXACTLY ZERO.
   * The NON-SPHERICAL part never reaches the radial equation, which
     `genapwfr` and `genlofr` integrate in the spherical potential alone.  Its
-    basis response is therefore exactly zero and the two branches agree to
-    roundoff.
+    basis response is exactly zero and the two branches agree to roundoff.
 
-So a Hellmann-Feynman-shaped treatment of the muffin-tin potential does not
-lose a small correction in the spherical channel; it loses the whole term.
-Measured on bulk Si with a random direction, which mixes the two: 83% of the
-derivative is basis response.  A quarter of that arrives through `apwalm` --
-the radial functions reach the matching coefficients through the derivative
-matrix D, and freezing D while rebuilding `apwfr` is worth 21% of the full
-derivative on its own.
+**So "full minus frozen" is NOT the basis relaxation**, and calling it that
+would conflate two different things: the Hellmann-Feynman term Elk's assembly
+has hidden, and the genuine response of the basis.  `hellmann_feynman` computes
+the first explicitly -- the same integrals with the l2 = 0 slice filled by the
+potential integral rather than zeroed -- and
+
+    d(sum eps_n)/dt = <psi|dV|psi>  +  basis relaxation
+
+is the decomposition a Pulay / incomplete-basis-set discussion actually wants.
+
+**And the relaxation term depends enormously on the SHAPE of the
+perturbation**, which is the measurement this file exists to make.  On bulk Si
+it is 29% of the derivative for a white-noise direction that has structure down
+to the nuclear cusp, where a basis built at a fixed linearisation energy cannot
+follow it -- and 0.3% for a smooth spherical bump in the valence region, which
+is roughly what an SCF update to the density does.  Quoting the first number
+alone would badly misrepresent the method.
 
 Three further checks:
 
-  1. The derivative is linear in the direction, so the two halves must add
-     back to the whole -- which a wrong stride through the packed potential
-     would break while leaving everything above passing.
+  1. The derivative is linear in the direction, so the spherical and
+     non-spherical halves must add back to the whole -- which a wrong stride
+     through the packed potential would break while leaving everything above
+     passing.
   2. The closed form pins the frozen-basis branch outright.  Getting it right
      needs one non-obvious fact: the map from the potential to the radial
      integrals is AFFINE, not linear.  Its constant part is that same l2 = 0
@@ -112,8 +119,8 @@ def test_frozen_basis_derivative_is_first_order_perturbation_theory(
         case, gradients):
     """The oracle with no finite difference in it."""
     for name, row in gradients[case].items():
-        if name == "spherical":
-            continue                       # identically zero; see below
+        if name in ("spherical", "valence"):
+            continue        # identically zero -- asserted in its own test
         assert abs(row["closed_form"]) > 1e-8, (name, "no signal")
         assert _rel(row["ad_frozen"], row["closed_form"]) < 1e-11, (name, row)
 
@@ -124,24 +131,33 @@ def test_the_spherical_channel_enters_only_through_the_basis(case, gradients):
     spherical channel reaches H only by moving the radial functions.
 
     The frozen-basis derivative is then exactly zero -- structurally, not
-    numerically -- while the full one is O(1).  A frozen-basis argument does
-    not approximate this term; it deletes it.
+    numerically -- while the Hellmann-Feynman term and the full derivative are
+    both O(1).  That gap is not "basis response": it is the physical
+    first-order term Elk's bookkeeping has eliminated.
     """
-    row = gradients[case]["spherical"]
-    assert abs(row["ad_full"]) > 1e-3, "the spherical direction carries no signal"
-    assert row["ad_frozen"] == 0.0, row
-    assert row["closed_form"] == 0.0, row
+    for name in ("spherical", "valence"):
+        row = gradients[case][name]
+        assert abs(row["ad_full"]) > 1e-3, (name, "no signal")
+        assert row["ad_frozen"] == 0.0, (name, row)
+        assert row["closed_form"] == 0.0, (name, row)
+        assert abs(row["hellmann_feynman"]) > 1e-3, (name, row)
 
 
 @pytest.mark.parametrize("case", CASES)
 def test_the_non_spherical_channel_enters_only_through_the_integrals(
         case, gradients):
     """The complement: `genapwfr`/`genlofr` integrate in the spherical
-    potential alone, so a non-spherical perturbation cannot move the basis and
-    the two branches must agree to ROUNDOFF, not closely."""
+    potential alone, so a non-spherical perturbation cannot move the basis.
+
+    All three numbers must coincide to roundoff -- and Elk's own matrix
+    element IS the Hellmann-Feynman term in this channel, which is what makes
+    the spherical channel's disagreement a statement about the assembly rather
+    than about the fixture.
+    """
     row = gradients[case]["non-spherical"]
     assert abs(row["ad_full"]) > 1e-8, "the null direction carries no signal"
     assert _rel(row["ad_full"], row["ad_frozen"]) < 1e-11, row
+    assert _rel(row["hellmann_feynman"], row["ad_frozen"]) < 1e-11, row
 
 
 @pytest.mark.parametrize("case", CASES)
@@ -150,9 +166,22 @@ def test_the_derivative_is_linear_in_the_direction(case, gradients):
     direction split itself, which a wrong stride through the packed potential
     would break while leaving every other test here passing."""
     rows = gradients[case]
-    for tag in ("ad_frozen", "ad_full"):
+    for tag in ("ad_frozen", "ad_full", "hellmann_feynman"):
         total = rows["spherical"][tag] + rows["non-spherical"][tag]
         assert _rel(total, rows["random"][tag]) < 1e-11, (tag, rows)
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_the_relaxation_lives_entirely_in_the_spherical_channel(
+        case, gradients):
+    """It must, since the non-spherical channel has none -- so the random
+    direction's relaxation has to equal the spherical direction's exactly,
+    which is a sharper statement than either number alone."""
+    rows = gradients[case]
+    assert _rel(rows["random"]["relaxation"],
+                rows["spherical"]["relaxation"]) < 1e-9, rows
+    assert abs(rows["non-spherical"]["relaxation"]) < 1e-12 * abs(
+        rows["non-spherical"]["ad_full"]), rows
 
 
 def test_ad_agrees_with_central_differences(exports):
@@ -174,17 +203,21 @@ def test_ad_agrees_with_central_differences(exports):
         assert errors[2] > 3 * errors[0], (tag, errors)
 
 
-def test_the_basis_response_is_not_a_small_correction(gradients):
-    """The measurement this whole file exists to make, on a direction that
-    mixes the two channels.
+def test_the_relaxation_depends_on_the_shape_of_the_perturbation(gradients):
+    """The measurement this file exists to make.
 
-    LAPW's basis depends on the potential, so the frozen-basis
-    (Hellmann-Feynman-shaped) term is not the derivative -- the same finding
-    `docs/jax_port_phase1.md` §1e records for k, in a channel where it is far
-    larger.  Asserted as an order of magnitude, since its exact value depends
-    on the direction; measured 83% on bulk Si.
+    A white-noise potential direction has structure down to the nuclear cusp,
+    where radial functions built at a FIXED linearisation energy cannot follow
+    it, and the relaxation term is 29% of the derivative.  A smooth spherical
+    bump in the valence region -- roughly what an SCF update does -- gives
+    0.3%.  Both are asserted, and so is the ratio between them, because
+    quoting either alone misrepresents the method in opposite directions.
     """
     for case in CASES:
-        row = gradients[case]["random"]
-        share = abs(row["basis_response"]) / abs(row["ad_full"])
-        assert share > 0.1, (case, share, row)
+        rows = gradients[case]
+        noisy = abs(rows["random"]["relaxation"] / rows["random"]["ad_full"])
+        smooth = abs(rows["valence"]["relaxation"]
+                     / rows["valence"]["ad_full"])
+        assert noisy > 0.1, (case, noisy)
+        assert smooth < 0.02, (case, smooth)
+        assert noisy > 10 * smooth, (case, noisy, smooth)

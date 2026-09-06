@@ -415,7 +415,17 @@ Weinert Poisson, XC) and two Phase 1 items are reachable without it.
    than a single aggregate. And the map from the potential to the radial integrals is
    AFFINE, not linear: its constant part is that same $\ell_2=0$ block, and carrying it
    into $\delta H$ flips the sign of the closed-form reference rather than merely
-   degrading it.
+   degrading it. (Filling that slice with the POTENTIAL integral instead is what turns
+   Elk's matrix perturbation into the Hellmann-Feynman term — same slice, three uses,
+   and the wrong one gives a plausible number every time.)
+
+   **"Full minus frozen" is NOT the basis relaxation**, and reading it that way was an
+   error corrected in a later commit. It is the Hellmann-Feynman term Elk's $\ell_2=0$
+   bookkeeping hides PLUS the relaxation. `phase1_potential.hellmann_feynman` computes
+   $\sum_n\langle\psi_n|\delta V|\psi_n\rangle$ explicitly, and the genuine relaxation
+   depends on the SHAPE of the perturbation by a factor of 100: **29%** of the derivative
+   for white noise down to the nuclear cusp, **0.30%** for a smooth valence-region bump —
+   roughly what an SCF update does. Quote the second, not the first.
 
 7. **~~The adversarial `soc_scale` sweep.~~ WITHDRAWN as written** — `soc_scale`
    cannot move the first-variational spectrum at all. `socfr` enters only
