@@ -1058,9 +1058,9 @@ occupations at second order would need a Chebyshev expansion of the Fermi functi
 which is separate work and is *not* what §1i built (§1i's closed form removes the
 tolerance from the first derivative, not the `eigh` from the JVP). And the iteration is
 unrolled, which at $n=177$ is free and at production shapes is exactly the tape Phase 0e
-measured compile time against — `lax.scan` over the Newton-Schulz steps is the obvious
-answer and has not been tried, since scanning a step whose body is two matmuls is the
-textbook case for it.
+measured compile time against. **That is now done — §1m**: `lax.scan` is the default,
+the unrolled tape costs 230x the instructions and 142x the compile time at 80 steps and
+second order, and the saving is the *graph* rather than the memory (10%).
 
 ---
 

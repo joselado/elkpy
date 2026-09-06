@@ -25,11 +25,10 @@ Phase 2 items below it are ordered by cost. In short:
    without it by running `symtype=0`.
 3. **`rhomag`** (item 2b) — the density from the eigenvectors, which closes the SCF
    loop. Not started.
-4. **The three Phase 1 leftovers**: the position derivative $d\varepsilon/d\mathbf R$
-   (needs moving radial integrals); smeared occupations at *second* order (needs a
-   Chebyshev expansion of the Fermi function — `sign_projector` is hard-window only);
-   and `lax.scan` over the Newton-Schulz tape, which is self-contained and needs no Elk
-   run.
+4. **The two Phase 1 leftovers**: the position derivative $d\varepsilon/d\mathbf R$
+   (needs moving radial integrals, so it waits on Phase 2); and smeared occupations at
+   *second* order, which needs a Chebyshev expansion of the Fermi function —
+   `sign_projector` is hard-window only. The `lax.scan` item is done (§1m).
 
 **Five rules this port has paid for, in the order they will bite again.** Each is a
 measurement in `docs/jax_port_phase{0,1,2}.md`, not a maxim.
@@ -386,8 +385,10 @@ named in item 12 need no Elk run and are the cheapest work available.
    ratio is 190 and the count 13; 10 steps is not converged, 20 is, to $3\times10^{-14}$
    against both the safe rule and Elk's own subspace, in 42 ms at $n=177$. Left behind:
    `sign_projector` is hard-window only (smeared at second order needs a Chebyshev
-   expansion of the Fermi function), and the iteration is unrolled — `lax.scan` over a
-   two-matmul body is the obvious fix at production shapes and has not been tried.
+   expansion of the Fermi function). The unrolled iteration is **since fixed** (§1m):
+   `lax.scan` is the default, worth 230x the instructions and 142x the compile time at
+   80 steps and second order — but it saves the graph, not the memory (10%), and it is
+   not bitwise, XLA reassociating inside each fused region.
 
 6. **~~The radial integrals, and the spectrum as a function of the potential.~~ DONE**
    (§1k, patch 0015, `elkjax/radial.py`, `elkjax/radial_functions.py`,
@@ -533,9 +534,8 @@ named in item 12 need no Elk run and are the cheapest work available.
     point is "multipoles and pseudocharge checked, $G$-space solve open" — say which,
     rather than stretching a tolerance.
 
-12. **The three Phase 1 leftovers**, none of which needs an Elk run. `lax.scan` over
-    the Newton-Schulz tape (§1j; the iteration is unrolled and its op count is what
-    Phase 0e showed compile time is superlinear in). Smeared occupations at **second**
+12. **The Phase 1 leftovers**, neither of which needs an Elk run. (`lax.scan` over the
+    Newton-Schulz tape is **done**, §1m.) Smeared occupations at **second**
     order, which needs a Chebyshev expansion of the Fermi function — `sign_projector`
     is hard-window only, and §1i removed the tolerance from the smeared *first*
     derivative, not the `eigh` from its JVP. And §8(b)'s k-point weights, which cancel

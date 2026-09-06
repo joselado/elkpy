@@ -1580,8 +1580,14 @@ Kohn-Sham potentials' own response to the displacement is Phase 2, and is now th
 thing missing. Also open: smeared occupations **at second order**, which `sign_projector` does not cover
 (it is hard-window only; that needs a Chebyshev expansion of the Fermi function, and §1i
 removed the tolerance from the smeared first derivative, not the `eigh` from its JVP); and
-the unrolled Newton-Schulz tape, where `lax.scan` over a two-matmul body is the obvious fix
-at production shapes and has not been tried.
+the unrolled Newton-Schulz tape, which is **now fixed** (§1m): `lax.scan` is the default,
+worth 230x the HLO instructions and 142x the compile time at 80 steps and second order
+(0.21 s against 30.0 s), with a count flat in the tape. Two qualifications — the
+differentiation order multiplies the ratio rather than adding to it, so the order this
+routine exists for is the one that pays most; and `scan` saves the GRAPH, not the memory
+(10%, since its backward pass stores one residual per iteration exactly as the unrolled
+tape does). It is also not bitwise (6e-16): calling the same function the same number of
+times does not fix the arithmetic, XLA fusing the two shapes into different regions.
 
 **$\kappa(O)$ for a real LAPW overlap is measured, and the cheap estimate is
 useless.** Patch 0013 (§33) supplies real $H$ and $O$; `python3 -m elkjax.phase0b_overlap`
