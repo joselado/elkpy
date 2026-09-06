@@ -24,7 +24,7 @@ $k$-tangent `NaN` at $\Gamma$ and across every $k_z=0$ plane; **that is fixed to
 (§1g), so the projector derivative now works where the multiplets are.
 
 ```
-7695478  Remove the smeared tolerance, differentiate twice   elkjax/phase1_secondorder.py
+bd4ee3e  Remove the smeared tolerance, differentiate twice   elkjax/phase1_secondorder.py
 8e4e04f  Make the fixed-N tests use the reference they claim
 0b2cbe2  Record what the smeared kernel measured
 d2eb839  Differentiate a smeared occupation on Elk's own matrices  elkjax/phase1_smearing.py
