@@ -729,6 +729,10 @@ def parse_groundstate_response(tokens):
                                    builds it on the COARSE grid, so it only
                                    carries |G| <= 2 gkmax, and `init0`
                                    allocates it that long
+      npsd, lnpsd, wprmt,
+      vcln, atposc              -- the Weinert Poisson solve's ingredients;
+                                   see `_parse_poisson` for why these four and
+                                   nothing else
 
     Two contents are what a transcription has to reproduce rather than what
     it might expect: `rhomt` INCLUDES the core density (`rhocore` adds it),
@@ -796,7 +800,45 @@ def parse_groundstate_response(tokens):
         flat, pos = _take(tokens, pos, 2 * count, float)
         reim = np.array(flat).reshape(count, 2)
         out[key] = reim[:, 0] + 1j * reim[:, 1]
+    pos = _parse_poisson(tokens, pos, out, nspecies, natmtot, nrmt, nrmtmax)
     return out
+
+
+def _parse_poisson(tokens, pos, out, nspecies, natmtot, nrmt, nrmtmax):
+    """Patch 0017's tail: the Weinert solve's ingredients that cannot be rebuilt.
+
+    Everything else `potcoul` needs IS rebuilt rather than exported --
+    `rlmt(:,l,:)` is r**l and `rmtl(l,:)` is rmt**l from the mesh above,
+    `gclg` is 4*pi/gc**2, and `ylmg`/`sfacg`/`jlgrmt` are `genylmv`,
+    `gensfacgp` and `sbessel`, all of which `elkjax.lapw` transcribes and
+    Phase 0c already pinned against Elk element-wise.  Exporting `ylmg`
+    alone would be ~38 MB of text.
+
+      npsd, lnpsd  -- the pseudocharge exponent and lmaxo+npsd+1 (`init0`)
+      wprmt        -- (nspecies, 4, max nrmt) `wsplint`'s cumulative spline
+                      weights, which `zpotclmt`'s `splintwp` consumes four at
+                      a time.  NOT `wr2mt`, and no closed form worth retyping
+      vcln         -- (nspecies, max nrmt) the nuclear potential (`potnucl`),
+                      which `potcoul` adds to the l=0 channel BEFORE
+                      `zpotcoul` reads the sphere-boundary multipoles -- so a
+                      transcription that omits it gets every qlm wrong
+      atposc       -- (3, natmtot) Cartesian atomic positions, for the
+                      structure factors.  No other query carries them
+    """
+    pair, pos = _take(tokens, pos, 2, int)
+    out["npsd"], out["lnpsd"] = pair
+    wprmt = np.zeros((nspecies, 4, nrmtmax))
+    vcln = np.zeros((nspecies, nrmtmax))
+    for is_ in range(nspecies):
+        n = int(nrmt[is_])
+        flat, pos = _take(tokens, pos, 4 * n, float)
+        wprmt[is_, :, :n] = np.array(flat).reshape(4, n, order="F")
+        flat, pos = _take(tokens, pos, n, float)
+        vcln[is_, :n] = flat
+    out.update(wprmt=wprmt, vcln=vcln)
+    flat, pos = _take(tokens, pos, 3 * natmtot, float)
+    out["atposc"] = np.array(flat).reshape(3, natmtot, order="F")
+    return pos
 
 
 def unpack_muffin_tin(packed, nr, nri, lmmaxi, lmmaxo):
