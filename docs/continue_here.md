@@ -182,14 +182,34 @@ returns it bitwise equal where LAPACK gives 1.5e-14 — so the identical code gi
 garbage at n=400 and `NaN` at n=1000. §10 item 1's "split by cause" is refined
 accordingly.
 
+### 0a — settled too: reverse mode survives the eigensolve
+
+Getting the adjoint through an SCF fixed point with an exactly degenerate spectrum
+works: `custom_vjp` + GMRES on the transposed operator agrees with a dense
+implicit-function-theorem reference to 1e-14 on four spectra, both for `Tr[P M]` and for
+the band energy, with the linear solve converged to ~1e-15. The naive projector rule
+fails on the identical machinery. Mixer-independent to 2.5e-13; the error against the
+converged answer tracks the SCF residual linearly, so gradient work needs tighter
+convergence than a forward run.
+
+**The trap worth carrying forward**: a perturbation that *respects* the symmetry
+protecting a degeneracy hides the bug completely — 1.5e-14 with the naive rule symmetric
+versus 4.7e-1 symmetry-broken, on the same Hamiltonian. Same shape as 0b's
+single-direction mistake. Test along general directions and break the symmetry.
+
+**0a′ is blocked, and the blocker is localised.** Reverse-over-reverse through the fixed
+point is fine (matches FD without a degeneracy); what returns `NaN` is the safe-K rule's
+own second derivative, since its JVP body calls `jnp.linalg.eigh`. The second derivative
+demonstrably exists — FD gives a finite number — so this is missing machinery, not an
+ill-posed quantity: the rule needs a JVP body that is itself custom-ruled.
+`jax.hessian` raising `TypeError` is separate and is a JAX limitation, not a result —
+a `custom_vjp` cannot be forward-differentiated at all.
+
 ### Still open in Phase 0
 
-- **0a / 0a′** — reverse-mode implicit differentiation through the SCF fixed point, and
-  then `jax.hessian` through it. Not started. Note the rule in `elkjax.projector` is
-  **first-order only**: its JVP body calls `jnp.linalg.eigh`, so a second derivative
-  falls back on JAX's default eigenvector rule and the hazard returns. Use the analytic
-  reference for 0a too — its stated kill criterion is "agreement with central FD", and
-  §8(b)'s own measurements show FD cannot serve near the engineered degeneracy.
+- **The self-consistent Fermi level.** 0a covers smearing at *fixed* mu. Fixed electron
+  number adds a second constraint whose rule §8b gives in closed form,
+  `dmu/deps_i = w_i f'_i / sum_j w_j f'_j`. Untested.
 - **0c** — `jax.jvp(match)` vs `dmatch.f90`. Not started; needs no SCF.
 - **0d** — `vmap(eigh)` vs `lax.map` at n=1000: **requires a GPU this machine does not
   have**. Deferred rather than faked on CPU.

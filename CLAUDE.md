@@ -1187,7 +1187,10 @@ Two reasons, both load-bearing: Phase 0 is explicitly "no Elk code", and elkpy's
 must not acquire a `jax` dependency at all (measured: 0.2 s of import time, plus a 40-thread XLA
 pool on the first array operation — see below). Install with
 `python3 -m pip install -e .[jax]`. Tests are `tests/test_jax_*.py` and self-skip when `jax` is
-unimportable, the same pattern `tests/test_structure.py` uses for ASE.
+unimportable, the same pattern `tests/test_structure.py` uses for ASE. They add ~22 s to the
+default suite (each Phase 0a test converges a real fixed point), so
+`-k "not calculation_ and not jax"` still gets elkpy's own 438 in ~1 s; the heavier sweeps are
+behind `ELKPY_RUN_SLOW_TESTS=1` and take ~3 min.
 
 ### Memory and CPU discipline — read before running any JAX in this repository
 
@@ -1232,11 +1235,20 @@ Phase 0e asks for production shapes that this machine cannot hold.
 | Item | What it settles | Status |
 |---|---|---|
 | 0b | safe-$K$ projector rule: does the $(f_i-f_j)/(\lambda_i-\lambda_j)$ `custom_jvp` fix the reassembly jitter, and what happens in the padding block | **done at synthetic $S$ — `docs/jax_port_phase0.md`**; item 0b(ii)'s *real* Cholesky-reduced LAPW overlap is Phase 1's first measurement |
-| 0a | reverse-mode implicit diff (`custom_vjp` + GMRES) through an SCF fixed point whose matvec passes through `eigh` at a multiplet | not started |
-| 0a′ | the same at second order — decides the full port over §9.2's hybrid | not started |
+| 0a | reverse-mode implicit diff (`custom_vjp` + GMRES) through an SCF fixed point whose matvec passes through `eigh` at a multiplet | **done — it works**, ≤1e-14 against a dense IFT reference on four spectra including an exactly degenerate one; the naive rule fails on the same machinery |
+| 0a′ | the same at second order — decides the full port over §9.2's hybrid | **done — blocked, and localised.** Reverse-over-reverse through the fixed point is fine; the safe-$K$ rule's own second derivative is not (`NaN`), and `jax.hessian` is refused outright because a `custom_vjp` cannot be forward-differentiated |
 | 0c | `jax.jvp(match)` against `dmatch.f90`'s analytic $d(\texttt{apwalm})/dr$ | not started |
 | 0d | `vmap(eigh)` vs `lax.map` at $n=1000$ on a real GPU | **deferred: no GPU** |
 | 0e | `jit` compile time and peak memory for one traced SCF step at production shapes | AOT-only, per the rules above |
+
+**Two traps that a badly chosen test walks straight past**, both measured here rather
+than reasoned about. A *direction* that is a single real diagonal entry makes the naive
+projector rule look correct in reverse mode (§0b), and a *perturbation that respects the
+symmetry protecting a degeneracy* makes it look correct everywhere — error 1.5e-14
+symmetric versus 4.7e-1 symmetry-broken on the same Hamiltonian (§0a), because neither
+the perturbation nor the observable then has a matrix element between the partners.
+Test along general directions, and break the symmetry; and always compare forward-mode
+against reverse-mode, which for a scalar-in scalar-out function must agree exactly.
 
 **Use an analytic reference, not finite differences, wherever a degeneracy is in play.** The
 study's own §8(b) measures FD failing at a multiplet — central FD of the *sorted* spectrum
