@@ -1,10 +1,15 @@
 # Continue here
 
 Working state as of 2026-09-06, so this can be picked up cold. **Both workstreams are
-now on `master`**: Workstream A landed via `elk-full-coverage`, and Workstream B's
-`jax-port` was fast-forwarded in earlier. Nothing is pushed — `origin` is still at the
-pre-merge `master`, and is now several commits behind. The `jax-port` branch still
-exists and points at an older commit; deleting it is safe.
+on `master` and `master` is pushed**: Workstream A landed via `elk-full-coverage`, and
+Workstream B's `jax-port` was fast-forwarded in earlier; `origin/master` is now current.
+The `elk-full-coverage` and `jax-port` branches still exist and point at older commits;
+deleting both is safe.
+
+**Phase 1i is the newest work**: smeared occupations and the self-consistent Fermi
+level, differentiated on Elk's own matrices, which is the first configuration in which
+the divided-difference kernel's near-degenerate branch is not vacuous. See §3's item 4
+and `docs/jax_port_phase1.md` §1i.
 
 **Phase 0 is closed and Phase 1 has started.** `hmlfv`/`olpfv` are transcribed and
 checked against Elk element-wise (`docs/jax_port_phase1.md`, patch 0014), the assembly
@@ -15,6 +20,7 @@ $k$-tangent `NaN` at $\Gamma$ and across every $k_z=0$ plane; **that is fixed to
 (§1g), so the projector derivative now works where the multiplets are.
 
 ```
+d2eb839  Differentiate a smeared occupation on Elk's own matrices  elkjax/phase1_smearing.py
 2306e08  Close the negative test, correct the study's own fixture
 4a4090f  Remove the two poles that made the k-tangent NaN at Gamma  elkjax/lapw.py
 bcc21f8  Write up the projector rule at a real multiplet
@@ -278,16 +284,31 @@ Weinert Poisson, XC) and two Phase 1 items are reachable without it.
    `rgkmax=6`, under two minutes with the ground state) gives AD $\pm0.184$, central FD
    $\pm0.0009$ and one-sided $\mp0.376$ on the Dirac pair, agreeing only in the trace.
 
-4. **Next: smeared occupations, on a real metallic LAPW matrix.** Everything in §1f is
-   a hard integer window, and for one of those the tolerance turns out to be **inert**:
-   both branches of the kernel are identically zero for a same-side pair ($f_i-f_j=0$
-   exactly, and $f'=0$), so §1f's plateau says nothing. With Fermi-Dirac occupations
-   $f_i-f_j$ is a genuine small number and the branch matters — which makes a metal the
-   only place the threshold is actually load-bearing. `smeared_projector` exists and is
-   checked at synthetic $S$ (0b-E, 0b-F); it has never seen an Elk matrix. Needs a
-   metallic fixture and nothing else — no new Fortran, no Phase 2. Note the fixed-$\mu$
-   caveat: the self-consistent Fermi level adds a second constraint whose rule §8b gives
-   in closed form, $d\mu/d\varepsilon_i = w_if'_i/\sum_j w_jf'_j$, still untested.
+4. **~~Smeared occupations, on a real metallic LAPW matrix.~~ DONE** (§1i,
+   `elkjax/phase1_smearing.py`, `tests/test_calculation_lapw_smearing.py`). The premise
+   was half right and the correction matters: smearing is what makes the branch's
+   *value* nonzero, but whether it **fires** is set by the assembly's roundoff, not by
+   the physics — and graphene, the metal, does not fire (Dirac pair split
+   $3.4\times10^{-7}$ Ha, $5\times10^4\times$ tol) while **gapped silicon does**
+   ($1.1\times10^{-15}$ Ha inside $\Gamma_{25'}$). So both fixtures were needed, and each
+   shows only one of two distinct failures: on graphene the quotient is exact to
+   $10^{-13}$ and JAX's eigenvector rule fails *proportionally in $w$* (3.9e-9, 3.9e-8,
+   2.8e-7 over two decades); on Si that rule returns `NaN` outright while the quotient is
+   wrong by up to 3.7e-3 — and at Elk's default `swidth` it is **exactly zero** against a
+   true kernel of $-3.2\times10^{-2}$, the two occupations being bitwise equal. The
+   oracle is analytic: `reference.fermi_divided_difference_kernel`, the logistic
+   difference quotient in a form with no subtraction in it, so it arbitrates between the
+   two branches rather than being a third opinion. The self-consistent Fermi level came
+   with it — `mu` is now a differentiable primal of `smeared_projector`, so
+   `fixed_number_projector` is just the composition; §8b's $d\mu$ rule is tested,
+   gauge-invariant at a multiplet, and **dominant rather than corrective** (dropping it
+   is wrong by 69x at a half-filled level). Its denominator is a physical singularity,
+   and `check_fermi_level_determined` refuses a gapped system at small width.
+   Two things left behind: §8b's k-point weights $w_j$ cancel at a single $k$ and so are
+   still untested (a zone-summed Fermi level is Phase 2), and the safe rule's floor on Si
+   is $2\times10^{-9}$ rather than $10^{-13}$ because the *other* pair sits $67\times$
+   ABOVE the tolerance and therefore takes the cancellation-prone quotient — the
+   tolerance is a cliff, and beating $10^{-9}$ needs the stable kernel inside the JVP.
 
 5. **Then: second derivatives on a real LAPW matrix.** `hard_window_projector`'s JVP
    calls `eigh` itself, so a second derivative falls back on JAX's default rule;
@@ -385,9 +406,15 @@ as the control that separates an AD bug from a real basis effect.
   3000 → 3 stops three to six orders of magnitude short of the gap at which its own
   refusal criterion is meant to fire, so it has to be extended below `soc_scale=1`
   (§0b(ii) point 5 — the spread is the unknown curvature of the gap in the scale).
-- **The self-consistent Fermi level.** 0a covers smearing at *fixed* μ. Fixed electron
-  number adds a second constraint whose rule §8b gives in closed form,
-  `dmu/deps_i = w_i f'_i / sum_j w_j f'_j`. Untested.
+- **~~The self-consistent Fermi level.~~ DONE** (§1i). `projector.fermi_level` is a
+  `custom_jvp` whose primal is a bisection (never differentiated) and whose tangent is
+  §8b's closed form. Tested against FD of a re-solved μ on synthetic spectra and on both
+  LAPW fixtures. Two findings: the rule is gauge-invariant at a multiplet even though it
+  uses `A_jj`, because inside a degenerate group f' is constant and the sum is a trace;
+  and its denominator vanishing is *physics*, not numerics — in a gap nothing responds,
+  μ is undetermined, and the honest answer is the refusal
+  `check_fermi_level_determined` now gives. Still open: the k-point weights, which
+  cancel at a single k.
 - **`sign_projector` covers hard windows only.** Smeared occupations at second order
   would need a Chebyshev expansion of the Fermi function. Separate work.
 

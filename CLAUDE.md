@@ -1182,7 +1182,7 @@ vendored tree:
 
 `docs/jax_port.md` (1,623 lines) is the design study, `docs/continue_here.md` §3 the cold-start
 summary, `docs/jax_port_phase0.md` the running log of what Phase 0 measured, and
-`docs/jax_port_phase1.md` the same for Phase 1, which is now under way. Verdict, in one line: **a research project justified by
+`docs/jax_port_phase1.md` the same for Phase 1, which is now under way (through §1i). Verdict, in one line: **a research project justified by
 differentiability, not by the GPU** — SIRIUS already does FP-LAPW on CUDA/ROCm with Elk as its
 reference, and Elk's hot spots are already near-peak BLAS-3. Nothing about the port is a plan of
 record; **Phase 0 (§6 of the study) is designed to kill it, not to start it**, and that is what
@@ -1392,13 +1392,47 @@ degenerate but not linearly split, as the in-fixture control where AD and centra
 agree. So `first_variational_eigenvalues` is safe for a trace and unsafe for an
 individual band inside a multiplet, asserted rather than documented.
 
+**Smeared occupations are done too (§1i), and they corrected their own premise.** A hard
+integer window cannot exercise the kernel's near-degenerate branch at all — both branches
+of a same-side pair are identically zero — so §1f's `tol` plateau said nothing about it;
+Fermi-Dirac occupations make the branch value $f'$, and the threshold becomes
+load-bearing. What was *expected* was that a metal is where it bites. What was measured is
+that **whether the branch fires is set by the assembly's roundoff, not by the physics**:
+graphene at $K$ — the metal, with the Fermi level exactly on the Dirac degeneracy
+(confirmed by the single-$k$ $\mu$ reproducing Elk's own zone-integrated `EFERMI.OUT` to
+$3.4\times10^{-9}$ Ha) — is split $3.4\times10^{-7}$ Ha and does **not** fire, while gapped
+Si at $\Gamma$ is split $1.1\times10^{-15}$ Ha inside $\Gamma_{25'}$ and does. Both were
+needed, because each shows only one of two distinct failures: on graphene the direct
+quotient is exact to $10^{-13}$ and it is JAX's own eigenvector rule that fails,
+**proportionally in the smearing width** (3.9e-9, 3.9e-8, 2.8e-7 across $w=10^{-3}$ to
+$10^{-1}$, since its absolute error is set by the splitting while the quantity it is
+measured against is $f'=1/4w$ — broader smearing is not gentler); on Si that rule returns
+`NaN` outright while the quotient survives but is wrong by up to 3.7e-3, and at Elk's
+default `swidth` is **exactly zero** against a true kernel of $-3.2\times10^{-2}$, the two
+occupations being bitwise equal. The oracle for all of this is analytic, not either
+candidate: `reference.fermi_divided_difference_kernel` writes the logistic difference
+quotient as $-\frac1{4w}\,\mathrm{sinhc}(z_{ij})/(\cosh u_i\cosh u_j)$, which contains no
+subtraction and so arbitrates between the branches. The **self-consistent Fermi level**
+came with it: `mu` is now a differentiable primal of `smeared_projector`, so
+`fixed_number_projector` is just the composition with `projector.fermi_level` (a
+`custom_jvp` over a never-differentiated bisection), and study §8(b)'s
+$d\mu=\sum_jf'_jA_{jj}/\sum_jf'_j$ is tested for the first time — gauge-invariant at a
+multiplet (inside a degenerate group $f'$ is constant, so the sum is a trace), and
+**dominant rather than corrective**: dropping it is wrong by 69x at a half-filled level.
+Its denominator vanishing is physics, not numerics — in a gap nothing responds and $\mu$ is
+undetermined, which `check_fermi_level_determined` refuses. Two limits left: §8(b)'s
+k-point weights cancel at a single $k$ and remain untested (a zone-summed Fermi level is
+Phase 2), and the safe rule's floor on Si is $2\times10^{-9}$ rather than $10^{-13}$
+because the *other* pair sits $67\times$ ABOVE the tolerance and therefore takes the
+cancellation-prone quotient — the tolerance is a cliff, and beating that needs the stable
+kernel inside the JVP rather than a better threshold.
+
 **Still open in Phase 1**: the radial integrals are inputs, not outputs (building them
 needs `genapwfr`/`genlofr`/`hmlrad`/`olprad` and through `vsmt` the muffin-tin potential
 — Phase 2); the POSITION derivative $d\varepsilon_j/d\mathbf R$ on displaced h-BN, which
-is harder than the $k$ one because moving an atom moves the radial integrals; smeared
-occupations (everything in §1f is a hard integer window, for which the tolerance branch is
-inert — a metal is the only place it bites); and second derivatives on a real LAPW matrix,
-which need `sign_projector` rather than the first-order rule.
+is harder than the $k$ one because moving an atom moves the radial integrals; and second
+derivatives on a real LAPW matrix, which need `sign_projector` rather than the first-order
+rule.
 
 **$\kappa(O)$ for a real LAPW overlap is measured, and the cheap estimate is
 useless.** Patch 0013 (§33) supplies real $H$ and $O$; `python3 -m elkjax.phase0b_overlap`

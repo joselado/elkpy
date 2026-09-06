@@ -773,6 +773,15 @@ say something worth stating on its own:
 > graphene's Dirac point. Whether the tolerance branch fires is therefore not predictable from the physics
 > and must be measured per run.
 
+The kernel entries themselves, at Elk's default `swidth`, make the same point from the
+other side. At graphene's Dirac pair the quotient and the branch **agree**
+($-2.49999999\times10^{2}$ vs $-2.49999998\times10^{2}$, a relative difference of
+$9.8\times10^{-13}$): the pair is degenerate *on the scale of $w$*, so the branch's value
+is right even though it is not needed. At the two neighbouring pairs, split by $0.39$ and
+$0.38$ Ha, the exact kernel is $-1.28$ and $-1.31$ while $f'$ is $-125$ — a hundredfold
+error. That is the argument against a generous tolerance stated numerically: the branch is
+correct only where the pair is unresolvable, and `tol` is what has to know the difference.
+
 ### What fails, and where
 
 Three routes, all avoiding or not avoiding a different thing: **naive** is JAX's own
