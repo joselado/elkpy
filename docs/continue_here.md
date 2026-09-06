@@ -21,11 +21,10 @@ Phase 2 items below it are ordered by cost. In short:
    Elk's, which §2d measured at 1.2e-4 relative. Needs `symlatc`/`lsplsymc`/`ieqatom`/
    `isymlat` exported (one more patch) and `rotrfmt` transcribed. Phase 2 can proceed
    without it by running `symtype=0`.
-3. **The total energy** (item 2f) — every ingredient now exists (`rfint`/`rfinp`, the
-   XC energy densities, the Hartree potential); what is left is `energy.f90`'s own
-   bookkeeping. Note §2d's warning: on a *symmetric* cell Elk's $v_{xc}$ and
-   $\varepsilon_{xc}$ are inconsistent at the $10^{-4}$ level, so agreement better
-   than that would be evidence of a mistake.
+3. **The Phase 3 boundary.** Phase 2's density-functional half is closed — the total
+   energy's reproduced terms match Elk to $10^{-13}$ (§2f) with `evalsum`, `engyts`
+   and `engynn` imported. What those three need is the second-variational step, the
+   occupations and a zone sum, which is where Phase 3 starts.
 4. **The two Phase 1 leftovers**: the position derivative $d\varepsilon/d\mathbf R$
    (needs moving radial integrals, so it waits on Phase 2); and smeared occupations at
    *second* order, which needs a Chebyshev expansion of the Fermi function —
@@ -554,7 +553,32 @@ named in item 12 need no Elk run and are the cheapest work available.
     density, so an AD-versus-FD check would confirm that JAX can differentiate a
     linear map.
 
-12. **The Phase 1 leftovers**, neither of which needs an Elk run. (`lax.scan` over the
+12. **~~The total energy at fixed input potential.~~ DONE** (§2f,
+    `elkjax/energy.py`). Every density-functional term of `energy.f90` matches
+    Elk's own exported scalars to $<10^{-13}$ relative on bulk Si and monolayer
+    h-BN, asserted term by term rather than through the total — `engykn` is $+579$
+    against `engyen`'s $-1219$, so an error of $10^{-3}$ in either would leave
+    `engytot` looking fine at $10^{-6}$. `evalsum`, `engyts` and `engynn` are
+    imported (the second-variational step, a zone sum, and the lattice), and the
+    module says so; this is the density-functional half, not a transcription of
+    `energy.f90`.
+
+    Patch 0017 also exports Elk's thirteen converged scalars, which is what makes
+    the comparison term-by-term at full precision instead of `INFO.OUT`'s print
+    width — a total that agrees to $10^{-8}$ says nothing about which convention
+    is right.
+
+    **§2d's prediction was wrong, and that is the finding.** §2d predicted that
+    $E_{v_{xc}}$ would inherit the symmetrisation gap at $10^{-4}$; it agrees at
+    $2.7\times10^{-16}$, because $\hat S$ is a group average — an orthogonal
+    projection — and $\rho$ is already in its range, so the leak lives entirely in
+    harmonics $\rho$ does not have. Measured: potentials differing by
+    $5.3\times10^{-3}$ pointwise, overlap with $\rho$ at $10^{-16}$ relative. What
+    survives of §2d is that an SCF iteration compares potentials *pointwise* and
+    still needs $\hat S$. **A prediction derived from a verified finding is not
+    itself verified** — write predictions where a later test will run into them.
+
+13. **The Phase 1 leftovers**, neither of which needs an Elk run. (`lax.scan` over the
     Newton-Schulz tape is **done**, §1m.) Smeared occupations at **second**
     order, which needs a Chebyshev expansion of the Fermi function — `sign_projector`
     is hard-window only, and §1i removed the tolerance from the smeared *first*

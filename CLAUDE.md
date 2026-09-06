@@ -1183,7 +1183,7 @@ vendored tree:
 `docs/jax_port.md` (1,623 lines) is the design study, `docs/continue_here.md` §3 the cold-start
 summary, `docs/jax_port_phase0.md` the running log of what Phase 0 measured,
 `docs/jax_port_phase1.md` the same for Phase 1 (through §1m), and
-`docs/jax_port_phase2.md` for Phase 2, which is under way (§§2a-2e). §2a is the LDA
+`docs/jax_port_phase2.md` for Phase 2, which is under way (§§2a-2f). §2a is the LDA
 exchange-correlation functional: `src/elkjax/xc.py` transcribes `xc_pwca.f90`, with
 `jax.grad` reproducing Elk's hand-coded $v_{xc}$ at machine precision against the study's
 stated $10^{-10}$, exchange exact against Dirac and its spin scaling, correlation
@@ -1239,7 +1239,25 @@ from `elkjax.integrate`, and two mutation tests remove one thing Elk does each (
 term *before* the multipoles are read; the outer region's own spline weights for
 $l>l_{\max}^{\rm i}$) and assert the answer moves — both mutants smooth, of the right order
 and wrong. Nothing there is differentiated, deliberately: Poisson is linear in $\rho$, so
-its linearisation is itself. Verdict, in one line: **a research project justified by
+its linearisation is itself. §2f assembles the **total energy** (`src/elkjax/energy.py`),
+which is the first thing in Phase 2 to use more than one of its own pieces at once — none
+of the checks above says the functional, the quadrature and the Poisson solve are
+consistent WITH EACH OTHER. Every density-functional term of `energy.f90` matches Elk's
+own exported scalars to $<10^{-13}$ relative on two structures, asserted term by term
+rather than through the total (`engykn` is $+579$ against `engyen`'s $-1219$, so an error
+of $10^{-3}$ in either would leave `engytot` looking fine at $10^{-6}$). `evalsum`,
+`engyts` and `engynn` are **imported** — they need the second-variational step, a zone sum
+and the lattice — so this is the density-functional half, not a transcription of
+`energy.f90`. Patch 0017 exports Elk's thirteen converged scalars precisely so the
+comparison is term-by-term at full precision rather than at `INFO.OUT`'s print width.
+**And it found §2d's prediction to be wrong**: §2d predicted $E_{v_{xc}}$ would inherit the
+symmetrisation gap at $10^{-4}$, and it agrees at $2.7\times10^{-16}$, because $\hat S$ is
+a group average — an orthogonal projection — and $\rho$ is already in its range, so
+$\langle\rho,\hat Sv\rangle=\langle\rho,v\rangle$ identically and the leak lives entirely
+in harmonics $\rho$ does not have (measured: 5.3e-3 pointwise, 1e-16 relative against
+$\rho$). What survives of §2d is that an SCF iteration compares potentials *pointwise* and
+still needs $\hat S$. **A prediction derived from a verified finding is not itself
+verified.** Verdict, in one line: **a research project justified by
 differentiability, not by the GPU** — SIRIUS already does FP-LAPW on CUDA/ROCm with Elk as its
 reference, and Elk's hot spots are already near-peak BLAS-3. Nothing about the port is a plan of
 record; **Phase 0 (§6 of the study) is designed to kill it, not to start it**, and that is what
