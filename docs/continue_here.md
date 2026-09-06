@@ -224,6 +224,37 @@ None of these is in the study, and each cost a wrong answer to find.
    Gram-Schmidt over 8→128 columns costs 0.44 s→32.4 s. And `vmap` over the k-axis is
    not a benchmark question: 40.2 GiB does not fit on a 40 GB device.
 
+### Start here next session
+
+The open items below are a mix of done and outstanding; this is the ranked entry
+point. **Phase 2 is not the next step** — it is a large piece of work (density,
+Weinert Poisson, XC) and two Phase 1 items are reachable without it.
+
+1. **Wire the Cholesky-reduced eigensolve to the safe-$K$ projector rule, on real
+   matrices.** `first_variational_eigenvalues` currently closes with a plain
+   `jnp.linalg.eigvalsh`, so at a multiplet it fails exactly the way item 0b
+   describes. `projector.py`'s rule exists and works — but **only ever at synthetic
+   $S$ with a prescribed $\kappa$**, which §3's own honest qualification flags as the
+   biggest hole left in Phase 0. Everything needed to close that is now in place: real
+   $H$ and $O$ at any $k$, a real $\kappa(O)$ from `elkjax.phase0b_overlap`, and the
+   tolerance $\epsilon\,\kappa\,\lVert L^{-1}HL^{-\dagger}\rVert$ (note the reduced
+   norm, not $\lVert H\rVert$). Self-contained, needs no new Fortran and no Phase 2.
+2. **Then the adversarial `soc_scale` sweep and the *required* refusal.** It depends
+   on (1), because the refusal criterion is a property of the projector rule rather
+   than of the assembly. Remember 0b(ii)'s knock-on: the study's 3000 → 3 sweep stops
+   three to six orders of magnitude above the gap where refusal is meant to fire, so
+   it must be extended below `soc_scale = 1`.
+3. **Not yet: the position derivative.** It is the study's stated Phase 1 gradient
+   criterion, but moving an atom moves the muffin-tin potential and hence the radial
+   integrals, which `hamiltonian.py` imports — so an honest $d\varepsilon/d\mathbf R$
+   needs Phase 2's `hmlrad`/`olprad`, not just AD plumbing. The $k$-derivative was
+   done first precisely because it does *not* have that dependency.
+
+One caution carried from this session for whatever comes next: the AD-vs-`genpmatk`
+comparison agreed to 0.2-1.4%, which is a **physics** agreement, not a correctness
+oracle. Keep a finite difference of the *same* code path beside every gradient check,
+as the control that separates an AD bug from a real basis effect.
+
 ### What is left, and what each needs
 
 - **~~Patch 0013 — the one Fortran job.~~ DONE** (`a8f45cc`, `docs/design.md` §33). A
