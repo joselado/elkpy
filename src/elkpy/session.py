@@ -21,6 +21,7 @@ from .parsers.eigenstates import (
     parse_orbital_projection_response,
     parse_parity_response,
     parse_symlist_response,
+    parse_lapw_response,
     parse_symmetry_response,
     parse_overlap_response,
     parse_projection_response,
@@ -573,6 +574,33 @@ class EigenstateSession:
         nstfv = state.evecsv.shape[0] // self._nspinor
         ops = compute_spin_operator(state.evecsv, nstfv, ist0, ist1)
         return SpinOperator(k=state.k, **ops)
+
+    def lapw_problem(self, k):
+        """Every ingredient of the first-variational LAPW eigenvalue problem
+        at one arbitrary k-point (fractional lattice coordinates): the G+k
+        set, the APW matching coefficients apwalm, the small derivative
+        matrices D that match() inverts to get them, the radial functions
+        behind those, the Hamiltonian and overlap matrices H and O with
+        their interstitial contributions separated out, and Elk's own
+        first-variational eigenvalues and eigenvectors.
+
+        This is an export for the JAX port (docs/jax_port.md), not a
+        physical observable: nothing upstream writes apwalm at all, so a
+        JAX transcription of match could previously be checked only against
+        its own defining equation (docs/jax_port_phase0.md item 0c), and
+        kappa(O) for a real LAPW overlap -- which sets the tolerance of the
+        port's projector rule -- had never been measured on anything but a
+        synthetic matrix.
+
+        Returns a dict; see parsers.eigenstates.parse_lapw_response for
+        every key, its shape, and the two conventions that matter (H and O
+        arrive Hermitised from the upper triangle Elk actually fills, and
+        atposc is Elk's own position, which `tshift` may have moved).
+        """
+        k = tuple(float(x) for x in k)
+        self._send(f"LAPW {_fmt(k[0])} {_fmt(k[1])} {_fmt(k[2])}")
+        tokens = self._read_until_sentinel()
+        return parse_lapw_response(tokens)
 
     def close(self, timeout=30):
         """Ask the session to quit and wait for it to exit; idempotent."""

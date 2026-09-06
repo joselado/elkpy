@@ -4269,3 +4269,111 @@ emitted by a named method (97.9%)**. The three that are not:
 Coverage is measured against the dispatch, not claimed: a code counts only
 when a named method actually places it in a task list it runs. `run_tasks()`
 could always reach all 146, which is exactly what this section improves on.
+
+## 33. The LAPW export: Elk's own first-variational eigenproblem, on demand
+
+This is the one entry in the patch series that adds no physics. It exports
+quantities Elk already computes so that the JAX port (`docs/jax_port.md`,
+Workstream B) has a reference for them, and it exists because the port
+otherwise had none: **nothing in `vendor/elk/src/` writes `apwalm`**, checked
+by grep across the whole tree. Patch **0013** adds a `LAPW` query to the task
+9002 session (`elkpy_lapwexport`, `EigenstateSession.lapw_problem(k)`), the
+same pattern as 0004-0010 — no new file, no `elk.f90` dispatch arm, no
+`Makefile` edit. There is no `physics.tex` part and no notebook, deliberately:
+the formalism is already §14's, the LAPW generalised eigenproblem
+$(H-\varepsilon O)v=0$, and this only hands its ingredients out.
+
+At one arbitrary $k$-point it writes: the $\mathbf{G+k}$ set (`igpig`, `vgpl`,
+`vgpc`, `gpc`); `apwalm`; the small derivative matrices $D_{ij}=d^{i-1}u_j/dr^{i-1}|_R$
+that `match` inverts, per $(\ell,\alpha)$; the last `npapw` radial points of
+each $u_{j\ell}$ and of the mesh they sit on, which is exactly what `polynm`
+fits; $H$ and $O$; their interstitial contributions **on their own**; and
+`evalfv`/`evecfv`. Elk's own `atposc`, `avec`, `omega`, `rmt`, `apword` travel
+with it, because the caller must not regenerate any of them (see the traps
+below).
+
+### Three details that are load-bearing, not cosmetic
+
+**Only the upper triangles of $H$ and $O$ are written**, because that is all
+Elk fills. `olpistl`/`hmlistl` run `do i=1,j`, and every muffin-tin
+contribution added afterwards (`olpaa`, `olpalo`, `olplolo` and the Hamiltonian
+counterparts) does the same. The lower triangle of the allocated array is never
+assigned, so exporting it would ship uninitialised memory. `parsers.eigenstates`
+Hermitises. Getting the *order* wrong is the failure this actually hit: the
+Fortran walks the triangle column by column, `numpy.triu_indices` walks it row
+by row, and the first version used the latter — which does not return a subtly
+wrong number, it returns a non-Hermitian matrix that `scipy.linalg.eigh`
+refuses outright. Pinned by `test_upper_triangle_reconstruction_is_hermitian`.
+
+**`tefvr` is forced to `.false.` while $H$ and $O$ are built**, then restored.
+When a crystal has an inversion centre `symmetry.f90` leaves `tefvr` true, and
+`olpaa`/`hmlaa` then accumulate through `rzmctmu` rather than `zmctmu`. That
+routine's `dgemv('T',2*l,j,...,c(1,j),2)` strides by two over the complex array
+as reals, so it adds **only the real part** of the muffin-tin APW-APW block —
+correct for the real symmetric solver `eveqnfvr` that consumes it, and silently
+wrong as an exported matrix. It stays Hermitian and positive definite either
+way, so nothing short of comparing eigenvalues catches it. Bulk silicon has an
+inversion centre, so this is the default case, not an exotic one.
+
+**The derivative matrices are recomputed, not captured.** `zgesv` overwrites
+its coefficient matrix in place, so `match` no longer holds $D$ when it
+returns. The four lines that build it are copied from `match.f90` — the same
+kind of copy patch 0008 makes of `getevecfv.f90`'s symmetry transformation, and
+the same maintenance cost on an upstream bump. Note `match` skips that
+construction entirely in its `omax == 1` fast path, dividing by
+`apwfr(nr,1,1,l,ias)` directly; the general construction reduces to exactly
+that at `ord = 1`.
+
+### What it settles for the port
+
+**Phase 0c's forward half, closed against Elk itself.** `src/elkjax/lapw.py`'s
+transcription of `match` had only its own defining equation to check against,
+and `docs/jax_port_phase0.md` records why that is necessary but not sufficient:
+dropping `genylmv`'s $4\pi(-i)^\ell$ prefactor multiplies each $\ell$ block by a
+constant and still passes the `dmatch` identity at 7e-16, because a constant
+commutes with $\partial/\partial\mathbf r_\alpha$. Element-wise agreement with
+Elk's array is blind to none of that. Measured on bulk Si at a generic
+$k$-point: **1.9e-15** relative in `match`'s `omax == 1` branch and **8.0e-13**
+in the general linear-solve branch (reached through a species file the test
+generates with `apword = 2`, since every species file Elk ships sets
+`apword = 1` and so never reaches it).
+
+**$\kappa(O)$ for a real LAPW overlap**, which the study's §8(b) tolerance
+$\epsilon\,\kappa(S)\,\lVert H\rVert$ depends on and which had only ever been
+measured on synthetic matrices. The numbers are in `docs/jax_port_phase0.md`;
+the finding that matters is that the cheap Cholesky-diagonal estimate §8(b)
+proposes is low by a factor of order $10^2$–$10^3$ on real data, against 140x
+on the synthetic case — and it is a *lower* bound, which is the dangerous
+direction for a tolerance meant to bound from above.
+
+### Traps for a caller, all of them measured
+
+- **Use Elk's `atposc`, never the input positions.** `tshift` is on by default
+  and moves the origin onto the inversion centre; for diamond silicon the two
+  atoms come back at $\pm(3.8475,3.8475,3.8475)$ rather than $(0,0,0)$ and
+  $(1/4,1/4,1/4)$. The structure factor uses Elk's frame. Same trap as §28 and
+  §31, in a third guise.
+- **Use Elk's `vgpc`/`gpc`, never a regenerated $\mathbf{G+k}$ set.** An
+  element-wise comparison of `apwalm` needs identical ordering, and
+  `gengkvec`'s ordering is not something to rediscover. Checking that a
+  regenerated set matches *as a set* is a separate question.
+- `rmt` is not the species file's value: `checkmt` shrinks it (2.1964 against
+  the file's 2.2 for silicon here). The export carries the value actually used.
+
+### Verification
+
+`tests/test_calculation_lapw_export.py`, 6 tests run twice (`apword` 1 and 2).
+The one that validates the export as a whole is
+`test_exported_matrices_reproduce_elks_own_eigenvalues`: `scipy.linalg.eigh` on
+the parsed, Hermitised $H$ and $O$ returns Elk's own `evalfv` to **1.7e-15**
+(2.7e-15 at `apword=2`). That is not a tautology — `evalfv` comes from
+`eveqnfv` through Elk's configured path, *before* the `tefvr` override — and it
+pins the column-major convention, the triangle fill and the whole assembly at
+once. Beside it: the APW-APW block of $O$ minus its interstitial part equals
+$\sum_{\ell m,i_o}\overline{A_{i}}A_{j}$ (that is `olpaa`'s `zmctmu` written
+out) to 3.6e-15, tying `apwalm` to $O$ through Elk's own assembly so a packing
+error would have to be shared by both to survive; $D$ against an independent
+`numpy` polynomial fit to the exported radial tails, 6.1e-14, which checks the
+tail alignment Phase 1 will build $D$ from; and the two-atom separation
+recovered from `atposc` modulo a lattice vector. `parsers.eigenstates` has its
+own token-level round trip needing no binary.

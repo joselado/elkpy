@@ -1,0 +1,295 @@
+--- a/src/elkpy_eigenstates.f90
++++ b/src/elkpy_eigenstates.f90
+@@ -1090,6 +1090,258 @@
+ !EOC
+ 
+ !BOP
++! !ROUTINE: elkpy_lapwexport
++! !INTERFACE:
++subroutine elkpy_lapwexport(vpl)
++! !USES:
++use modmain
++! !DESCRIPTION:
++!   Writes, to standard output, every ingredient of the first-variational
++!   LAPW eigenvalue problem at one arbitrary $k$-point: the $({\bf G+k})$
++!   set, the APW matching coefficients {\tt apwalm}, the small derivative
++!   matrices $D$ that {\tt match} inverts to obtain them, the radial
++!   functions those are built from, the Hamiltonian and overlap matrices
++!   $H$ and $O$ (with their interstitial contributions written separately),
++!   and Elk's own first-variational eigenvalues and eigenvectors.
++!
++!   This exists for the JAX port (docs/jax\_port.md): it is the reference
++!   {\tt vendor/elk/src/} does not otherwise provide. Nothing upstream
++!   writes {\tt apwalm} at all, so a JAX transcription of {\tt match} could
++!   until now only be checked against its own defining equation
++!   (docs/jax\_port\_phase0.md, item 0c), and $\kappa(O)$ for a real LAPW
++!   overlap -- which sets the tolerance of the port's projector rule -- had
++!   never been measured on anything but a synthetic matrix.
++!
++!   Three details of what is written are load-bearing rather than
++!   cosmetic.
++!
++!   {\bf Only the upper triangles of $H$ and $O$ are written}, because that
++!   is all Elk fills: {\tt olpistl}/{\tt hmlistl} run {\tt do i=1,j}, and
++!   every later contribution ({\tt olpaa}, {\tt olpalo}, {\tt olplolo} and
++!   their Hamiltonian counterparts) does the same. The lower triangle of
++!   the allocated array is never assigned, so writing it would export
++!   uninitialised memory. The caller Hermitises.
++!
++!   {\bf {\tt tefvr} is forced to {\tt .false.} while $H$ and $O$ are
++!   built}, and restored afterwards. When a crystal has an inversion centre
++!   Elk sets {\tt tefvr=.true.} ({\tt symmetry.f90}) and
++!   {\tt olpaa}/{\tt hmlaa} then accumulate through {\tt rzmctmu}, whose
++!   {\tt dgemv('T',...,c(1,j),2)} strides by two over the complex array and
++!   so adds {\bf only the real part} of the muffin-tin APW-APW
++!   contribution -- correct for the real symmetric solver {\tt eveqnfvr}
++!   that consumes it, and silently wrong as an exported matrix. The
++!   eigenvalues below are computed by {\tt eveqnfv} BEFORE this override,
++!   i.e. through Elk's own configured path, so that comparing them against
++!   a diagonalisation of the exported $H$, $O$ is a genuine check on the
++!   export rather than a tautology.
++!
++!   {\bf The derivative matrices $D$ are recomputed}, not captured from
++!   {\tt match}: {\tt zgesv} overwrites its coefficient matrix in place, so
++!   {\tt match} no longer holds $D$ by the time it returns. The four lines
++!   that build it are therefore copied from {\tt match.f90} -- the same
++!   kind of copy patch 0008 makes of {\tt getevecfv.f90}'s symmetry
++!   transformation, and the same maintenance cost: an upstream change to
++!   how {\tt match} sets up {\tt a} must be mirrored here. Note that
++!   {\tt match} skips this construction entirely in its {\tt omax==1} fast
++!   path, dividing by {\tt apwfr(nr,1,1,l,ias)} directly; the general
++!   construction below reduces to exactly that for {\tt ord=1}, which is
++!   the case for every species file shipped with Elk.
++!
++!   Written directly to unit 6 rather than returned in arguments: this is a
++!   dozen heterogeneous arrays whose shapes are module-derived, and handing
++!   them back would need allocatable dummy arguments, which require an
++!   explicit interface at the call site -- the same Fortran constraint that
++!   shaped {\tt elkpy\_diagonalize} (patch 0003).
++!
++! !REVISION HISTORY:
++!   Created 2026 (elkpy)
++!EOP
++!BOC
++implicit none
++! arguments
++real(8), intent(in) :: vpl(3)
++! local variables
++logical tefvr0
++integer is,ia,ias,ngp,nmatp
++integer l,lm,io,jo,ord,nr,ir,i,j
++real(8) vl(3),vc(3)
++! automatic arrays
++integer igpig(ngkmax)
++real(8) vgpl(3,ngkmax),vgpc(3,ngkmax),gpc(ngkmax)
++real(8) evalfv(nstfv),d(apwordmax,apwordmax)
++! allocatable arrays
++complex(8), allocatable :: sfacgp(:,:),apwalm(:,:,:,:)
++complex(8), allocatable :: h(:,:),o(:,:),hi(:,:),oi(:,:)
++complex(8), allocatable :: evecfv(:,:)
++! external functions
++real(8), external :: polynm
++if (spinsprl) then
++  write(*,*)
++  write(*,'("Error(elkpy_lapwexport): spin-spirals not supported by the &
++   &elkpy eigenstate session task")')
++  write(*,*)
++  stop
++end if
++allocate(sfacgp(ngkmax,natmtot))
++allocate(apwalm(ngkmax,apwordmax,lmmaxapw,natmtot))
++! generate the G+k vectors, structure factors and matching coefficients
++vl(1:3)=vpl(1:3)
++vc(1:3)=bvec(1:3,1)*vpl(1)+bvec(1:3,2)*vpl(2)+bvec(1:3,3)*vpl(3)
++call gengkvec(ngvc,ivg,vgc,vl,vc,gkmax,ngkmax,ngp,igpig,vgpl,vgpc,gpc)
++call gensfacgp(ngp,vgpc,ngkmax,sfacgp)
++call match(ngp,vgpc,gpc,sfacgp,apwalm)
++deallocate(sfacgp)
++nmatp=ngp+nlotot
++! Elk's own first-variational solution, through Elk's own configured path
++allocate(evecfv(nmatmax,nstfv))
++call eveqnfv(nmatp,ngp,igpig,vc,vgpc,apwalm,evalfv,evecfv)
++! now build H and O for export, with the real-matrix shortcut disabled
++allocate(h(nmatp,nmatp),o(nmatp,nmatp),hi(ngp,ngp),oi(ngp,ngp))
++tefvr0=tefvr
++tefvr=.false.
++call hmlfv(nmatp,ngp,igpig,vgpc,apwalm,h)
++call olpfv(nmatp,ngp,igpig,apwalm,o)
++tefvr=tefvr0
++! the interstitial contributions on their own, so that the muffin-tin
++! APW-APW block can be isolated from the exported matrices
++call hmlistl(ngp,igpig,vgpc,ngp,hi)
++call olpistl(ngp,igpig,ngp,oi)
++!--------------------!
++!     the export     !
++!--------------------!
++write(*,*) ngp,nlotot,nmatp,nstfv,apwordmax,lmmaxapw,natmtot,nspecies, &
++ lmaxapw,npapw,nmatmax
++write(*,*) omega
++do j=1,3
++  do i=1,3
++    write(*,*) avec(i,j)
++  end do
++end do
++do j=1,3
++  do i=1,3
++    write(*,*) bvec(i,j)
++  end do
++end do
++do i=1,3
++  write(*,*) vc(i)
++end do
++do ias=1,natmtot
++  write(*,*) idxis(ias)
++end do
++do is=1,nspecies
++  write(*,*) rmt(is)
++end do
++do is=1,nspecies
++  write(*,*) nrmt(is)
++end do
++do is=1,nspecies
++  do l=0,lmaxapw
++    write(*,*) apword(l,is)
++  end do
++end do
++do ias=1,natmtot
++  do i=1,3
++    write(*,*) atposc(i,idxia(ias),idxis(ias))
++  end do
++end do
++do i=1,ngp
++  write(*,*) igpig(i)
++end do
++do i=1,ngp
++  write(*,*) vgpl(1,i),vgpl(2,i),vgpl(3,i)
++end do
++do i=1,ngp
++  write(*,*) vgpc(1,i),vgpc(2,i),vgpc(3,i)
++end do
++do i=1,ngp
++  write(*,*) gpc(i)
++end do
++! apwalm, in the column-major order of apwalm(1:ngp,:,:,:)
++do ias=1,natmtot
++  do lm=1,lmmaxapw
++    do io=1,apwordmax
++      do i=1,ngp
++        write(*,*) dble(apwalm(i,io,lm,ias)),aimag(apwalm(i,io,lm,ias))
++      end do
++    end do
++  end do
++end do
++! the derivative matrices D, recomputed exactly as match.f90 builds them
++do ias=1,natmtot
++  is=idxis(ias)
++  nr=nrmt(is)
++  ir=nr-npapw+1
++  do l=0,lmaxapw
++    ord=apword(l,is)
++    do jo=1,ord
++      d(1,jo)=apwfr(nr,1,jo,l,ias)
++      do io=2,ord
++        d(io,jo)=polynm(io-1,npapw,rsp(ir,is),apwfr(ir,1,jo,l,ias),rmt(is))
++      end do
++    end do
++    write(*,*) ord
++    do jo=1,ord
++      do io=1,ord
++        write(*,*) d(io,jo)
++      end do
++    end do
++  end do
++end do
++! the last npapw radial points of each APW radial function, and of the mesh
++! they live on: enough to rebuild D from scratch through polynm
++do ias=1,natmtot
++  is=idxis(ias)
++  nr=nrmt(is)
++  ir=nr-npapw+1
++  do l=0,lmaxapw
++    do jo=1,apword(l,is)
++      do i=1,npapw
++        write(*,*) apwfr(ir+i-1,1,jo,l,ias)
++      end do
++    end do
++  end do
++end do
++do is=1,nspecies
++  nr=nrmt(is)
++  ir=nr-npapw+1
++  do i=1,npapw
++    write(*,*) rsp(ir+i-1,is)
++  end do
++end do
++! H and O, upper triangles only -- see the note above
++do j=1,nmatp
++  do i=1,j
++    write(*,*) dble(h(i,j)),aimag(h(i,j))
++  end do
++end do
++do j=1,nmatp
++  do i=1,j
++    write(*,*) dble(o(i,j)),aimag(o(i,j))
++  end do
++end do
++do j=1,ngp
++  do i=1,j
++    write(*,*) dble(hi(i,j)),aimag(hi(i,j))
++  end do
++end do
++do j=1,ngp
++  do i=1,j
++    write(*,*) dble(oi(i,j)),aimag(oi(i,j))
++  end do
++end do
++do i=1,nstfv
++  write(*,*) evalfv(i)
++end do
++do j=1,nstfv
++  do i=1,nmatp
++    write(*,*) dble(evecfv(i,j)),aimag(evecfv(i,j))
++  end do
++end do
++deallocate(apwalm,evecfv,h,o,hi,oi)
++end subroutine
++!EOC
++
++!BOP
+ ! !ROUTINE: elkpy_eigenstate_session
+ ! !INTERFACE:
+ subroutine elkpy_eigenstate_session
+@@ -1158,6 +1410,15 @@
+ !    the {\tt evecsv} block is what makes the spin current operator
+ !    $J^z_a=\tfrac12\{S_z,v_a\}$ of docs/design.md \S24 well defined, since
+ !    $S_z$ is built from {\tt evecsv} alone.
++!   \item {\tt LAPW k1 k2 k3} -- every ingredient of the first-variational
++!    LAPW eigenvalue problem at that $k$-point (see {\tt elkpy\_lapwexport}):
++!    the ${\bf G+k}$ set, the APW matching coefficients {\tt apwalm}, the
++!    derivative matrices $D$ that {\tt match} inverts, the radial functions
++!    behind them, $H$ and $O$ with their interstitial contributions written
++!    separately, and Elk's own {\tt evalfv}/{\tt evecfv}. An export for the
++!    JAX port (docs/jax\_port.md), not a physical observable: nothing
++!    upstream writes {\tt apwalm} at all. $H$ and $O$ carry only the upper
++!    triangle Elk fills.
+ !   \item {\tt PARITY k1 k2 k3 ist0 ist1} -- the inversion (parity) operator
+ !    $\langle\psi_m|\hat I|\psi_n\rangle$ over the band window
+ !    $[ist0,ist1]$, plus all {\tt nstsv} eigenvalues of the same
+@@ -1565,6 +1826,17 @@
+     call flush(6)
+     deallocate(idx,qmat)
+ 
++  case('LAPW')
++    read(line,*,iostat=ios) cmd,vpl(1),vpl(2),vpl(3)
++    if (ios /= 0) then
++      write(*,'("ELKPY_SESSION_ERROR malformed LAPW command")')
++      call flush(6)
++      cycle
++    end if
++    call elkpy_lapwexport(vpl)
++    write(*,'("ELKPY_SESSION_END")')
++    call flush(6)
++
+   case default
+     write(*,'("ELKPY_SESSION_ERROR unknown command: ",A)') trim(cmd)
+     call flush(6)

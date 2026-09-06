@@ -994,7 +994,12 @@ format-derived method as untested until its first real run.
   `PROJECTION` (atom-projection operators), §18 for `ORBITAL` (l-resolved s/p/d/f projectors,
   `ORBITAL_LABELS`), §22 for `MOMENTUM` (momentum/velocity matrix elements — the one query
   here that takes no band window, since `genpmatk`'s array is hard-dimensioned `nstsv`), and
-  §23 for `PARITY` (the inversion operator at a TRIM, for the Fu-Kane $Z_2$ indicators).
+  §23 for `PARITY` (the inversion operator at a TRIM, for the Fu-Kane $Z_2$ indicators),
+  and §33 for `LAPW` (`lapw_problem(k)` — every ingredient of the first-variational LAPW
+  eigenproblem at one k-point: the $\bf G+k$ set, `apwalm`, the derivative matrices $D$,
+  $H$ and $O$ with their interstitial parts separated, and Elk's own `evalfv`/`evecfv`;
+  an export for the JAX port, and the only route to `apwalm`, which nothing upstream
+  writes).
 - `src/elkpy/parsers/` — one small module per output file family (`info`, `totenergy`, `band` — reused
   for phonon dispersion, since `PHDISP.OUT` shares `BAND.OUT`'s exact layout — `dos`, reused for phonon
   DOS, `forces`, `geometry`, `effmass`, `volumetric`), each verified against real Elk output, not
@@ -1234,10 +1239,10 @@ Phase 0e asks for production shapes that this machine cannot hold.
 
 | Item | What it settles | Status |
 |---|---|---|
-| 0b | safe-$K$ projector rule: does the $(f_i-f_j)/(\lambda_i-\lambda_j)$ `custom_jvp` fix the reassembly jitter, and what happens in the padding block | **done at synthetic $S$ — `docs/jax_port_phase0.md`**; item 0b(ii)'s *real* Cholesky-reduced LAPW overlap is Phase 1's first measurement |
+| 0b | safe-$K$ projector rule: does the $(f_i-f_j)/(\lambda_i-\lambda_j)$ `custom_jvp` fix the reassembly jitter, and what happens in the padding block | **done at synthetic $S$ — `docs/jax_port_phase0.md`**. Item 0b(ii)'s *real* Cholesky-reduced LAPW overlap is now **measured** via patch 0013: $\kappa(O)\approx5\times10^3$ for bulk Si at a standard cutoff, so the tolerance is set — but the rule itself has still only been exercised at synthetic $S$ |
 | 0a | reverse-mode implicit diff (`custom_vjp` + GMRES) through an SCF fixed point whose matvec passes through `eigh` at a multiplet | **done — it works**, ≤1e-14 against a dense IFT reference on four spectra including an exactly degenerate one; the naive rule fails on the same machinery |
 | 0a′ | the same at second order — decides the full port over §9.2's hybrid | **done — it works**, via `projector.sign_projector` (matrix sign by Newton-Schulz: no eigensolve, so differentiable to any order); `grad(grad)` through the fixed point agrees with central FD to 1.2e-9 where the `eigh`-based rule gives `NaN`. Use `grad(grad)`, never `jax.hessian` — a `custom_vjp` cannot be forward-differentiated |
-| 0c | `jax.jvp(match)` against `dmatch.f90`'s analytic $d(\texttt{apwalm})/dr$ | **done — exact to 7e-16** in both modes (`src/elkjax/lapw.py` transcribes `match`, `gengkvec`, `gensfacgp`, `genylmv`, `sbessel`). The forward half is checked against SciPy and against the matching condition $DA=b$, but **not against Elk's own `apwalm`** — nothing in `vendor/elk/src/` exports it, so that needs patch 0013 |
+| 0c | `jax.jvp(match)` against `dmatch.f90`'s analytic $d(\texttt{apwalm})/dr$ | **done — exact to 7e-16** in both modes (`src/elkjax/lapw.py` transcribes `match`, `gengkvec`, `gensfacgp`, `genylmv`, `sbessel`), **and the forward half is now closed against Elk's own `apwalm`** by patch 0013 (§33): 1.9e-15 in `match`'s `omax==1` division branch and 8.0e-13 in its general linear-solve branch, the latter reachable only through a generated `apword=2` species file since every species file Elk ships sets `apword=1` |
 | 0d | `vmap(eigh)` vs `lax.map` at $n=1000$ on a real GPU | **timing deferred (no GPU); memory settled by 0e** — at production shapes a `lax.scan` accumulator holds 0.411 GiB of temporaries and `vmap` holds 40.2 GiB, so `vmap` over the k-axis does not fit on a 40 GB device whatever the timing says |
 | 0e | `jit` compile time and peak memory for one traced SCF step at production shapes | **done — `docs/jax_port_phase0.md`.** Compile time is FLAT in the shapes (0.46 s at both $(200,4)$ and $(3000,100)$) and **superlinear (exponent ≈1.85) in HLO op count** — isolated with the corrector, which is linear in its pass count, since Gram-Schmidt's own op count is quadratic in `n_lo` — while a `lax.scan` over 4x more radial points costs nothing. Design rule: `scan` repeated structure, unroll only what must be. Differentiating the step adds only ~1.2x |
 

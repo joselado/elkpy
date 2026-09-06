@@ -907,7 +907,7 @@ in the arithmetic.**
 | **0a.** Reverse-mode implicit diff wired as `jax.custom_vjp` + GMRES on the transposed operator, where the tangent operator routes through the safe-$K$ projector rule on a small Hamiltonian with an *engineered degenerate pair* — **DONE, `docs/jax_port_phase0.md`: it works** | whether reverse mode survives the coupling of B1 and B2 — which is the real risk, since the implicit solve's matvec **is** the JVP of one Kohn-Sham step and therefore passes through `eigh`'s derivative at every multiplet, on every GMRES iteration, and is then transposed | Agreement with central FD on the toy. Note what this is *not*: a smooth scalar fixed point with no eigensolve is already known to work (measured, $3.4\times10^{-10}$) and settles nothing. Do **not** use `lax.custom_root` with an iterative `tangent_solve` — measured, it raises `NotImplementedError`, which would read as a kill and is not one. |
 | **0a′.** The same, second order: `jax.hessian` through that fixed point — **DONE: blocked by the projector rule's own second derivative, not by the fixed point** | whether §8(f) items 2, 3 and 8 and all of Phase 5 exist | This is the item that actually decides the full port over the hybrid. Measured, `jax.hessian` through a `custom_vjp` fixed point works on a toy *without* an eigensolve; with one in the loop, the safe-$K$ rule must be twice-differentiable and the pad block must not be exactly degenerate. If it does not work, Phase 5's Hessian is forward-over-forward at $3N\times3N$ JVP cost, not $3N$ implicit solves — say so rather than quietly reporting a number. |
 | **0b.** safe-K projector `custom_jvp` + the $10^{-16}$ reassembly-jitter test, **and** the padding case — **DONE, `docs/jax_port_phase0.md`** | whether B1 has a working fix | Relative spread must be $\sim10^{-15}$, not the measured 159% of naive AD. Two sharpenings. (i) Include §3.2's own padding layout as a test case: $H_{\rm pad}=E_{\rm big}I$ makes a *bitwise* degeneracy and measured returns `NaN` from a projector gradient even for a non-degenerate physical spectrum — a Phase 1 developer meets this on day one. (ii) Repeat at $n\approx1000$ with a real Cholesky-reduced $S$, with a numeric criterion set at that size from the measured $\kappa(S)$, since the tolerance scales as $\epsilon\kappa(S)\|H\|$ and $\kappa(S)$ is unknown here. |
-| **0c.** `jax.jvp(match)` vs `dmatch.f90` — **DONE, `docs/jax_port_phase0.md`: exact to 7e-16** | whether the LAPW position-dependence is AD-tractable | Agreement to machine precision against $d(\texttt{apwalm})/dr = i(\mathbf G+\mathbf k)\,\texttt{apwalm}$. Exercises `sbessel`, `genylmv` (the `t4pil` trap) and `gensfacgp`, needs no SCF. If this fails nothing downstream is worth debugging. |
+| **0c.** `jax.jvp(match)` vs `dmatch.f90` — **DONE, `docs/jax_port_phase0.md`: exact to 7e-16, and the forward coefficients now agree with Elk's own `apwalm` to 1.9e-15 / 8.0e-13 in `match`'s two branches, via patch 0013** | whether the LAPW position-dependence is AD-tractable | Agreement to machine precision against $d(\texttt{apwalm})/dr = i(\mathbf G+\mathbf k)\,\texttt{apwalm}$. Exercises `sbessel`, `genylmv` (the `t4pil` trap) and `gensfacgp`, needs no SCF. If this fails nothing downstream is worth debugging. |
 | **0d.** `vmap(eigh)` vs `lax.map` at $n=1000$, complex128, on a real GPU | the k-axis structure, before any k-loop is written | Not a kill; a design fork. Ratio $\approx1$ means the eigensolve is not helped by batching and the case for an iterative solver becomes decisive. **Requires GPU access this study did not have** (§1 fact 4); budget a cloud instance, since nothing else in Phase 0 needs one. |
 | **0e.** `jit` compile time and peak device memory for **one** traced SCF step at production shapes ($n_{\rm mat}\approx3000$, $n_{\bf k}\approx100$) | whether hazard K is a real wall | No kill number is available in advance; the point is to have the number before Phase 3 designs around its absence. §8(d)'s reassuring 1.17–1.42x and 0.21–1.06 s are toy-scale ($n\le400$, 4 k-points) and must not be extrapolated: §3 proposes unrolled constructs (an 8-pass corrector, unrolled Gram–Schmidt, per-species `jit`s, a scan over ~700 radial points) inside a step that also contains per-k eigensolves, and XLA compile time grows superlinearly in HLO op count. |
 
@@ -915,6 +915,25 @@ in the arithmetic.**
 
 Build `match` → `hmlfv`/`olpfv` → Cholesky-reduced `eigh`, reading a converged `STATE.OUT` from
 the real binary as a fixed input.
+
+**The reference for every forward criterion below now exists.** Patch 0013
+(`docs/design.md` §33) adds a `LAPW` query to the task-9002 session that writes, at any
+$k$-point, the $\mathbf{G+k}$ set, `apwalm`, the derivative matrices $D$, the radial-function
+tails behind them, $H$ and $O$ (with their interstitial contributions separated, so the
+muffin-tin blocks can be compared one at a time rather than only in total), and Elk's own
+`evalfv`/`evecfv`. Two consequences for the plan as written. `match` is **already done and
+already checked** against Elk element-wise in both of its branches, so Phase 1's first
+build step is `hmlfv`/`olpfv`, not `match`. And the $\mathbf{G+k}$ set, positions and radii
+should be *taken* from the export rather than regenerated during the comparison —
+`gengkvec`'s ordering, `tshift`'s origin shift and `checkmt`'s radius shrink are three
+independent ways to produce a correct-looking transcription that cannot be compared
+element-wise.
+
+$\kappa(O)$ — the quantity the adversarial gradient criterion's refusal threshold is
+derived from — is measured rather than assumed: see `docs/jax_port_phase0.md`. It is of
+order $5\times10^3$ for bulk Si at a standard cutoff, and §8(b)'s cheap Cholesky-diagonal
+estimate is low by a factor of order $10^2$–$10^3$ on real overlaps, so that estimate must
+not be used to set the threshold.
 
 - **Forward:** reproduce `EVALFV` at 4 chosen k-points of bulk Si to $10^{-8}$ Ha absolute, and
   at 4 k-points of monolayer h-BN. Check the local-orbital block **gauge-invariantly** — `EVECFV`

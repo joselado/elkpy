@@ -140,3 +140,131 @@ def test_parse_momentum_response_round_trip():
     assert parsed_evecsv == pytest.approx(evecsv, abs=1e-12)
     assert parsed_pmat.shape == (ncomp, nstsv, nstsv)
     assert parsed_pmat == pytest.approx(pmat, abs=1e-12)
+
+
+def _upper_triangle_tokens(mat):
+    """The token order elkpy_lapwexport writes H and O in: `do j; do i=1,j`,
+    i.e. the UPPER triangle walked column by column. Elk fills nothing else
+    -- olpistl/hmlistl and every muffin-tin contribution run `do i=1,j` --
+    so the lower triangle of its array is uninitialised and deliberately not
+    written."""
+    tokens = []
+    for j in range(mat.shape[1]):
+        for i in range(j + 1):
+            tokens.append("%.17g" % mat[i, j].real)
+            tokens.append("%.17g" % mat[i, j].imag)
+    return tokens
+
+
+def test_upper_triangle_reconstruction_is_hermitian():
+    """The column-major upper triangle must come back as the full Hermitian
+    matrix. Reading it in numpy's own row-major triu order instead gives a
+    matrix that is not Hermitian at all, which is how this was caught: the
+    first real export failed scipy.linalg.eigh with "B is not positive
+    definite" rather than returning a subtly wrong number."""
+    from elkpy.parsers.eigenstates import _upper_triangle
+
+    rng = np.random.default_rng(7)
+    n = 6
+    a = rng.normal(size=(n, n)) + 1j * rng.normal(size=(n, n))
+    hermitian = a + a.conj().T
+    tokens = _upper_triangle_tokens(hermitian)
+    parsed, pos = _upper_triangle(tokens, 0, n)
+    assert pos == len(tokens)
+    assert parsed == pytest.approx(hermitian, abs=1e-12)
+    assert parsed == pytest.approx(parsed.conj().T, abs=1e-15)
+
+
+def _lapw_tokens(reference):
+    """Emit a LAPW response in exactly the order elkpy_lapwexport writes it."""
+    tokens = [str(reference[key]) for key in (
+        "ngp", "nlotot", "nmatp", "nstfv", "apwordmax", "lmmaxapw", "natmtot",
+        "nspecies", "lmaxapw", "npapw", "nmatmax")]
+    real = lambda x: "%.17g" % float(x)
+    tokens.append(real(reference["omega"]))
+    for name in ("avec", "bvec"):
+        tokens += [real(v) for v in reference[name].flatten(order="F")]
+    tokens += [real(v) for v in reference["vkc"]]
+    tokens += [str(int(v)) for v in reference["idxis"]]
+    tokens += [real(v) for v in reference["rmt"]]
+    tokens += [str(int(v)) for v in reference["nrmt"]]
+    tokens += [str(int(v)) for v in reference["apword"].flatten(order="F")]
+    tokens += [real(v) for v in reference["atposc"].flatten(order="F")]
+    tokens += [str(int(v)) for v in reference["igpig"]]
+    for name in ("vgpl", "vgpc"):
+        tokens += [real(v) for v in reference[name].flatten(order="F")]
+    tokens += [real(v) for v in reference["gpc"]]
+    for value in reference["apwalm"].flatten(order="F"):
+        tokens += [real(value.real), real(value.imag)]
+    for per_atom in reference["dmat"]:
+        for matrix in per_atom:
+            tokens.append(str(matrix.shape[0]))
+            tokens += [real(v) for v in matrix.flatten(order="F")]
+    for per_atom in reference["apwfr"]:
+        for per_l in per_atom:
+            for row in per_l:
+                tokens += [real(v) for v in row]
+    tokens += [real(v) for v in reference["rsp"].flatten()]
+    for name in ("hmat", "omat", "hmat_istl", "omat_istl"):
+        tokens += _upper_triangle_tokens(reference[name])
+    tokens += [real(v) for v in reference["evalfv"]]
+    for value in reference["evecfv"].flatten(order="F"):
+        tokens += [real(value.real), real(value.imag)]
+    return tokens
+
+
+def test_parse_lapw_response_round_trip():
+    """Every block of the LAPW export, round-tripped through the writer's own
+    ordering. The nested dmat/apwfr lists are ragged by construction --
+    apword varies with l -- which is why they are lists rather than arrays,
+    and why the parser has to read each block's own order count first."""
+    from elkpy.parsers.eigenstates import parse_lapw_response
+
+    rng = np.random.default_rng(11)
+    ngp, nlotot, lmaxapw, natmtot, nspecies, npapw = 5, 2, 1, 2, 2, 4
+    nmatp, nstfv, apwordmax = ngp + nlotot, 3, 2
+    lmmaxapw = (lmaxapw + 1) ** 2
+    apword = np.array([[1, 2], [2, 1]])          # (lmaxapw+1, nspecies)
+    idxis = np.array([1, 2])
+
+    def hermitian(n):
+        a = rng.normal(size=(n, n)) + 1j * rng.normal(size=(n, n))
+        return a + a.conj().T
+
+    reference = dict(
+        ngp=ngp, nlotot=nlotot, nmatp=nmatp, nstfv=nstfv,
+        apwordmax=apwordmax, lmmaxapw=lmmaxapw, natmtot=natmtot,
+        nspecies=nspecies, lmaxapw=lmaxapw, npapw=npapw, nmatmax=nmatp + 1,
+        omega=270.0125,
+        avec=rng.normal(size=(3, 3)), bvec=rng.normal(size=(3, 3)),
+        vkc=rng.normal(size=3), idxis=idxis,
+        rmt=rng.uniform(1, 3, size=nspecies),
+        nrmt=np.array([300, 400]),
+        apword=apword, atposc=rng.normal(size=(3, natmtot)),
+        igpig=np.arange(1, ngp + 1),
+        vgpl=rng.normal(size=(3, ngp)), vgpc=rng.normal(size=(3, ngp)),
+        gpc=rng.uniform(0.1, 4, size=ngp),
+        apwalm=(rng.normal(size=(ngp, apwordmax, lmmaxapw, natmtot))
+                + 1j * rng.normal(size=(ngp, apwordmax, lmmaxapw, natmtot))),
+        dmat=[[rng.normal(size=(apword[l, idxis[a] - 1],) * 2)
+               for l in range(lmaxapw + 1)] for a in range(natmtot)],
+        apwfr=[[rng.normal(size=(apword[l, idxis[a] - 1], npapw))
+                for l in range(lmaxapw + 1)] for a in range(natmtot)],
+        rsp=rng.uniform(1, 3, size=(nspecies, npapw)),
+        hmat=hermitian(nmatp), omat=hermitian(nmatp),
+        hmat_istl=hermitian(ngp), omat_istl=hermitian(ngp),
+        evalfv=rng.normal(size=nstfv),
+        evecfv=(rng.normal(size=(nmatp, nstfv))
+                + 1j * rng.normal(size=(nmatp, nstfv))),
+    )
+    parsed = parse_lapw_response(_lapw_tokens(reference))
+
+    for key, value in reference.items():
+        if key in ("dmat", "apwfr"):
+            for atom_ref, atom_got in zip(value, parsed[key]):
+                for ref, got in zip(atom_ref, atom_got):
+                    assert got == pytest.approx(ref, abs=1e-12)
+        elif isinstance(value, np.ndarray):
+            assert parsed[key] == pytest.approx(value, abs=1e-12), key
+        else:
+            assert parsed[key] == pytest.approx(value, abs=1e-12), key

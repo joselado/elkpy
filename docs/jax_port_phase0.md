@@ -11,6 +11,8 @@ PYTHONPATH=src taskset -c 0-3 python3 -m elkjax.phase0c     # the LAPW matching 
 ELKPY_RUN_SLOW_TESTS=1 PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
     tests/test_jax_projector.py tests/test_jax_fixedpoint.py \
     tests/test_jax_compile_cost.py tests/test_jax_lapw.py -q
+PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
+    tests/test_calculation_lapw_export.py -q       # 0c vs Elk, and kappa(O); needs the binary
 ```
 
 `taskset` is not decoration: `.claude/settings.json`'s `OMP_NUM_THREADS=1` does **not**
@@ -19,18 +21,24 @@ it, and `XLA_FLAGS=--xla_cpu_multi_thread_eigen=false` changes nothing). Peak RS
 1.7 GB for either driver; nothing here goes near the memory rules in CLAUDE.md.
 
 **Phase 0 was designed to kill the project. It did not.** Every item reachable on this
-machine is settled; what is left is 0d's timing (needs a GPU) and one Fortran export
-(patch 0013) that would let 0c's forward coefficients be compared against Elk's own. The
-honest qualification is that **nothing here has touched an LAPW Hamiltonian**: 0a and 0a′
-pass on a toy with an exactly degenerate spectrum, and 0c's radial derivative matrices
-are inputs rather than Elk's `apwfr`.
+machine is settled, and the only one left open is 0d's timing, which needs a GPU.
+
+Patch **0013** has since been written (`docs/design.md` §33) and closes the two things
+this document previously listed as outstanding, both now recorded below: 0c's forward
+coefficients agree with Elk's own `apwalm` element by element, in **both** of `match`'s
+branches, and $\kappa(O)$ has been measured on a real Cholesky-reduced LAPW overlap
+rather than a synthetic one. The remaining qualification is narrower than it was but
+still real: **0a and 0a′ have not touched an LAPW Hamiltonian**, passing on a toy with an
+exactly degenerate spectrum, and 0c's radial derivative matrices, though now checked
+against Elk's own, are still inputs to `elkjax.lapw` rather than built by it from
+`apwfr`.
 
 | Item | Status |
 |---|---|
-| 0b — safe-$K$ projector rule | **settled at synthetic $S$, below.** The rule is necessary and it works; item 0b(ii)'s *real* Cholesky-reduced LAPW overlap is still Phase 1's first measurement |
+| 0b — safe-$K$ projector rule | **settled at synthetic $S$, below.** The rule is necessary and it works. Item 0b(ii)'s *real* Cholesky-reduced LAPW overlap is now measured (§κ below) — $\kappa(O)\approx5\times10^3$, so the tolerance is set, though the rule itself has still only been exercised at synthetic $S$ |
 | 0a — reverse-mode implicit diff through the SCF fixed point | **settled, below.** It works, and it needs 0b's rule |
 | 0a′ — the same at second order | **settled, below.** Blocked with an `eigh`-based projector; **works** with an eigensolver-free one |
-| 0c — `jax.jvp(match)` vs `dmatch.f90` | **settled, below.** Exact to 7e-16; forward half checked against SciPy and against the matching condition, but **not yet against Elk's own `apwalm`** |
+| 0c — `jax.jvp(match)` vs `dmatch.f90` | **settled, below.** Exact to 7e-16, and the forward half now agrees with **Elk's own `apwalm`** to 1.9e-15 (division branch) and 8.0e-13 (solve branch), via patch 0013 |
 | 0d — `vmap(eigh)` vs `lax.map` on a GPU | timing still deferred (no GPU); its **memory** half is settled in §0e — 0.411 GiB under `lax.scan` against 40.2 GiB under `vmap` |
 | 0e — compile time and peak memory at production shapes | **settled, below.** Flat in the shapes; superlinear (≈1.85) in HLO op count |
 
@@ -566,16 +574,53 @@ $\partial/\partial{\bf r}_\alpha$. That is asserted as its own test. Item 0c's
 criterion cannot validate the port; only the forward checks can, and the strongest of
 those still lives inside this package.
 
-### What is not done
+### Closed against Elk itself (patch 0013)
 
-**The forward coefficients have never been compared against Elk's own.** Nothing in
-`vendor/elk/src/` writes `apwalm` (checked), so that needs a new export — patch 0013 in
-the tracked series, which under CLAUDE.md's core constraint is a commitment to
-maintaining it across Elk upgrades. The matching condition is a strong substitute, being
-the definition rather than a comparison, but it cannot catch a misreading shared between
-this transcription and the check. `apwfr`'s own normalisation is one such: assumed
-rather than verified, and Phase 1's work since $D$ is an input here. ($D$'s index layout
-is no longer among them — the continuity check above pins it.)
+This was written up as "not done": nothing in `vendor/elk/src/` writes `apwalm`
+(checked), so the matching condition above — the definition rather than a comparison —
+was the strongest check available, and it cannot catch a misreading shared between the
+transcription and the check. `apwfr`'s own normalisation was exactly such a shared
+assumption.
+
+Patch 0013 (`docs/design.md` §33) exports `apwalm` and the derivative matrices $D$ at an
+arbitrary $k$-point through a `LAPW` query on the task-9002 session.
+`elkjax.lapw.match`, handed **Elk's own** $\mathbf{G+k}$ set, $D$, `atposc`, `rmt` and
+$\Omega$, reproduces Elk's array element by element on bulk Si at a generic $k$-point,
+$|\mathbf{G+k}|R\in[0.40,6.97]$, $l_{\max}=8$, 153 vectors:
+
+| `match` branch | reached by | relative error |
+|---|---|---|
+| `omax == 1`, a plain division | every species file Elk ships | **1.9e-15** |
+| general, `zgesv` / `jnp.linalg.solve` | a generated `apword = 2` species file | **8.0e-13** |
+
+Both atoms agree separately, so the structure factor is checked at two distinct
+positions rather than at one. The general branch is three orders worse and that is
+expected, not a defect: $D$'s rows are $u(R)$ and $u'(R)$, whose magnitudes differ by
+orders, so the $2\times2$ solve is far worse conditioned than a division.
+
+**Reaching the second branch at all required generating a species file.** Every species
+file Elk ships sets `apword = 1` — plain APW plus local orbitals — so `match`'s general
+path is dead code in any stock calculation, and had it been wrong nothing in this project
+would have noticed. The test writes an order-2 copy of `Si.in` (derivative orders 0 and
+1, the textbook LAPW basis $u_l$ and $\partial u_l/\partial E$) and runs the whole
+comparison a second time through it.
+
+Two things travel with the result and close their own assumptions. $D$ itself is checked
+against an **independent** reconstruction — `numpy`'s polynomial fit through the same
+`npapw` exported radial points, differentiated analytically, rather than a transcription
+of `polynm` — agreeing to 6.1e-14; that also pins the alignment of the exported `apwfr`
+and `rsp` tails, which is what Phase 1 will build $D$ from. And the APW-APW block of the
+exported overlap, minus its interstitial part, equals
+$\sum_{\ell m,i_o}\overline{A_{i,i_o,\ell m}}\,A_{j,i_o,\ell m}$ to 3.6e-15 — `olpaa`'s
+`zmctmu` written out — which ties `apwalm` to $O$ through Elk's own assembly, so a
+packing error would have to be shared by the coefficients and the matrix to survive.
+
+What is still assumed: `apwfr`'s normalisation is no longer *unverified* in the sense
+that the coefficients built from it match Elk's, but $D$ remains an **input** to
+`elkjax.lapw` rather than something it builds from the radial Schrödinger solutions.
+Constructing it — `genapwfr` plus `polynm` — is Phase 1.
+
+### What is not done
 
 One hazard is recorded rather than fixed: `spherical_harmonics` is differentiable in
 $\hat v$ away from the z-axis and returns **`NaN`** on it, since for $m\neq0$ the phase

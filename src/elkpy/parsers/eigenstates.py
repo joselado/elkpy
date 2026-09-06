@@ -259,3 +259,165 @@ def parse_symmetry_response(tokens):
     requested crystal symmetry -- see EigenstateSession.symmetry_operator().
     """
     return parse_parity_response(tokens)
+
+
+def _upper_triangle(tokens, pos, n):
+    """Read n*(n+1)/2 real/imag pairs written as `do j=1,n; do i=1,j` and
+    return the full Hermitian (n, n) matrix.
+
+    Elk fills only the upper triangle of H and O -- olpistl/hmlistl run
+    `do i=1,j`, and every muffin-tin contribution added afterwards does the
+    same -- so the lower triangle of the allocated array is never assigned
+    and elkpy_lapwexport deliberately does not write it. Hermitising here is
+    therefore reconstruction, not a convenience: taking the array as it
+    stands would put uninitialised memory into every subsequent norm,
+    condition number and eigenvalue.
+    """
+    ntri = n * (n + 1) // 2
+    flat, pos = _take(tokens, pos, 2 * ntri, float)
+    reim = np.array(flat).reshape(ntri, 2)
+    values = reim[:, 0] + 1j * reim[:, 1]
+    mat = np.zeros((n, n), dtype=complex)
+    # `do j; do i=1,j` walks the upper triangle COLUMN by column, i.e. sorted
+    # by (column, row). np.triu_indices sorts by (row, column) instead, so it
+    # is the wrong order and silently produces a non-Hermitian matrix.
+    # np.tril_indices with its two index arrays swapped is exactly the order
+    # wanted: the lower triangle read row-major is (0,0),(1,0),(1,1),... whose
+    # transpose is (0,0),(0,1),(1,1),... -- upper, column-major.
+    rows, cols = np.tril_indices(n)
+    mat[cols, rows] = values
+    lower = np.tril_indices(n, -1)
+    mat[lower] = np.conj(mat.T[lower])
+    return mat, pos
+
+
+def parse_lapw_response(tokens):
+    """Parse the token stream of a LAPW response -- every ingredient of the
+    first-variational LAPW eigenvalue problem at one k-point (see
+    elkpy_lapwexport, patches/0013).
+
+    Returns a dict with, in the order the Fortran writes them:
+
+      ngp, nlotot, nmatp, nstfv, apwordmax, lmmaxapw, natmtot, nspecies,
+      lmaxapw, npapw, nmatmax   -- ints, the shapes
+      omega                     -- unit cell volume (Bohr^3)
+      avec, bvec                -- (3, 3), columns are the lattice /
+                                   reciprocal lattice vectors (Elk's own
+                                   avec(:, j) convention, atomic units)
+      vkc                       -- (3,) the k-point in Cartesian a.u.
+      idxis                     -- (natmtot,) 1-based species of each atom
+      rmt                       -- (nspecies,) muffin-tin radii
+      nrmt                      -- (nspecies,) radial points per sphere
+      apword                    -- (lmaxapw+1, nspecies) APW order per l
+      atposc                    -- (3, natmtot) Cartesian atomic positions,
+                                   AS ELK HOLDS THEM: `tshift` may have moved
+                                   the origin relative to the input file, and
+                                   the matching coefficients' structure factor
+                                   uses these, not the input positions
+      igpig                     -- (ngp,) 1-based index into Elk's G-vector set
+      vgpl, vgpc                -- (3, ngp) G+k in lattice / Cartesian coords
+      gpc                       -- (ngp,) |G+k|
+      apwalm                    -- (ngp, apwordmax, lmmaxapw, natmtot) complex
+      dmat                      -- list over atoms of a list over l of the
+                                   (ord, ord) real derivative matrix D that
+                                   match inverts; ord = apword[l, is] varies
+                                   with l, hence a nested list rather than an
+                                   array
+      apwfr                     -- same nesting, the last npapw radial points
+                                   of each APW radial function u_{jl}(r)
+      rsp                       -- (nspecies, npapw) the radial mesh points
+                                   those sit on
+      hmat, omat                -- (nmatp, nmatp) complex Hermitian
+      hmat_istl, omat_istl      -- (ngp, ngp) complex Hermitian, the
+                                   interstitial contributions ALONE, so the
+                                   muffin-tin APW-APW block can be isolated:
+                                   omat[:ngp, :ngp] - omat_istl is exactly
+                                   sum_{lm,io} conj(A_{i,io,lm}) A_{j,io,lm}
+                                   (olpaa's zmctmu), which is the sharpest
+                                   available check of apwalm against Elk's own
+                                   assembly
+      evalfv                    -- (nstfv,) first-variational eigenvalues (Ha)
+      evecfv                    -- (nmatp, nstfv) complex eigenvectors
+
+    hmat/omat are returned Hermitised from the upper triangle Elk writes; see
+    _upper_triangle. evalfv/evecfv come from eveqnfv through Elk's OWN
+    configured path (before elkpy_lapwexport disables the tefvr real-matrix
+    shortcut to build the exported matrices), so diagonalising hmat/omat and
+    recovering evalfv is a real check on the export rather than a tautology.
+    """
+    pos = 0
+    head, pos = _take(tokens, pos, 11, int)
+    (ngp, nlotot, nmatp, nstfv, apwordmax, lmmaxapw, natmtot, nspecies,
+     lmaxapw, npapw, nmatmax) = head
+    out = dict(zip(
+        ("ngp", "nlotot", "nmatp", "nstfv", "apwordmax", "lmmaxapw",
+         "natmtot", "nspecies", "lmaxapw", "npapw", "nmatmax"), head))
+    (out["omega"],), pos = _take(tokens, pos, 1, float)
+    flat, pos = _take(tokens, pos, 9, float)
+    out["avec"] = np.array(flat).reshape(3, 3, order="F")
+    flat, pos = _take(tokens, pos, 9, float)
+    out["bvec"] = np.array(flat).reshape(3, 3, order="F")
+    flat, pos = _take(tokens, pos, 3, float)
+    out["vkc"] = np.array(flat)
+    flat, pos = _take(tokens, pos, natmtot, int)
+    out["idxis"] = np.array(flat)
+    flat, pos = _take(tokens, pos, nspecies, float)
+    out["rmt"] = np.array(flat)
+    flat, pos = _take(tokens, pos, nspecies, int)
+    out["nrmt"] = np.array(flat)
+    flat, pos = _take(tokens, pos, (lmaxapw + 1) * nspecies, int)
+    # written `do is; do l` with l innermost
+    apword = np.array(flat).reshape(lmaxapw + 1, nspecies, order="F")
+    out["apword"] = apword
+    flat, pos = _take(tokens, pos, 3 * natmtot, float)
+    out["atposc"] = np.array(flat).reshape(3, natmtot, order="F")
+    flat, pos = _take(tokens, pos, ngp, int)
+    out["igpig"] = np.array(flat)
+    flat, pos = _take(tokens, pos, 3 * ngp, float)
+    out["vgpl"] = np.array(flat).reshape(3, ngp, order="F")
+    flat, pos = _take(tokens, pos, 3 * ngp, float)
+    out["vgpc"] = np.array(flat).reshape(3, ngp, order="F")
+    flat, pos = _take(tokens, pos, ngp, float)
+    out["gpc"] = np.array(flat)
+    n = ngp * apwordmax * lmmaxapw * natmtot
+    flat, pos = _take(tokens, pos, 2 * n, float)
+    reim = np.array(flat).reshape(n, 2)
+    values = reim[:, 0] + 1j * reim[:, 1]
+    # `do ias; do lm; do io; do igp` -- exactly column-major over
+    # apwalm(1:ngp, :, :, :), so an order="F" reshape restores the array
+    out["apwalm"] = values.reshape(
+        ngp, apwordmax, lmmaxapw, natmtot, order="F")
+    dmat = []
+    for ias in range(natmtot):
+        per_l = []
+        for l in range(lmaxapw + 1):
+            (ord_,), pos = _take(tokens, pos, 1, int)
+            flat, pos = _take(tokens, pos, ord_ * ord_, float)
+            per_l.append(np.array(flat).reshape(ord_, ord_, order="F"))
+        dmat.append(per_l)
+    out["dmat"] = dmat
+    apwfr = []
+    for ias in range(natmtot):
+        is_ = out["idxis"][ias] - 1
+        per_l = []
+        for l in range(lmaxapw + 1):
+            per_o = []
+            for _ in range(apword[l, is_]):
+                flat, pos = _take(tokens, pos, npapw, float)
+                per_o.append(np.array(flat))
+            per_l.append(np.array(per_o))
+        apwfr.append(per_l)
+    out["apwfr"] = apwfr
+    flat, pos = _take(tokens, pos, nspecies * npapw, float)
+    out["rsp"] = np.array(flat).reshape(nspecies, npapw)
+    out["hmat"], pos = _upper_triangle(tokens, pos, nmatp)
+    out["omat"], pos = _upper_triangle(tokens, pos, nmatp)
+    out["hmat_istl"], pos = _upper_triangle(tokens, pos, ngp)
+    out["omat_istl"], pos = _upper_triangle(tokens, pos, ngp)
+    flat, pos = _take(tokens, pos, nstfv, float)
+    out["evalfv"] = np.array(flat)
+    flat, pos = _take(tokens, pos, 2 * nmatp * nstfv, float)
+    reim = np.array(flat).reshape(nmatp * nstfv, 2)
+    values = reim[:, 0] + 1j * reim[:, 1]
+    out["evecfv"] = values.reshape(nmatp, nstfv, order="F")
+    return out
