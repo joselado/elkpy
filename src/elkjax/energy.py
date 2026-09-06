@@ -39,7 +39,7 @@ import numpy as np
 
 import jax.numpy as jnp
 
-from . import grid, integrate, poisson, xc
+from . import grid, integrate, poisson, symmetry, xc
 
 __all__ = ["madelung", "coulomb_terms", "exchange_correlation_terms",
            "kohn_sham_potentials", "terms", "report"]
@@ -91,7 +91,7 @@ def coulomb_terms(vclmt, vclir, groundstate):
                 engyhar=engyhar, engycl=engynn + engyen + engyhar)
 
 
-def kohn_sham_potentials(groundstate):
+def kohn_sham_potentials(groundstate, symmetrise=False):
     r"""The pointwise :math:`v_{xc}`, :math:`\varepsilon_x`, :math:`\varepsilon_c`.
 
     Muffin tin via the angular grid (§2d) and interstitial pointwise (§2a), both
@@ -99,9 +99,17 @@ def kohn_sham_potentials(groundstate):
     the energy densities do not, which is Elk's own asymmetry and not a choice
     made here.
 
-    The muffin-tin :math:`v_{xc}` returned is NOT symmetrised -- see §2d.  On a
-    symmetric cell it is therefore not Elk's ``vxcmt``, and
-    :func:`exchange_correlation_terms` inherits that.
+    ``symmetrise=True`` applies §2g's operator to the muffin-tin
+    :math:`v_{xc}`, which is what makes it Elk's ``vxcmt`` rather than
+    something $1.2\\times10^{-4}$ away from it (§2d) -- necessary for an SCF
+    iteration, which compares potentials pointwise, and *irrelevant* to
+    everything in this module, since §2f showed the difference is orthogonal to
+    :math:`\\rho`.  It defaults to off so that the energy terms are computed
+    from the raw functional and the two facts stay separable.
+
+    The energy densities are never symmetrised: Elk does not symmetrise them
+    either (``potxc.f90:55-58``), and doing so here would break the exact
+    agreement §2d measured.
     """
     natmtot = int(groundstate["natmtot"])
     out = {}
@@ -116,6 +124,13 @@ def kohn_sham_potentials(groundstate):
                                               groundstate, ias))
     for key in ("vxcmt", "exmt", "ecmt"):
         out[key] = jnp.stack(out[key])
+
+    if symmetrise:
+        dense = jnp.stack([poisson.dense(out["vxcmt"][ias], groundstate, ias)
+                           for ias in range(natmtot)])
+        moved = symmetry.symmetrise(dense, groundstate)
+        out["vxcmt"] = jnp.stack([poisson.pack(moved[ias], groundstate, ias)
+                                  for ias in range(natmtot)])
 
     rho = jnp.asarray(groundstate["rhoir"])
     ex, ec, vx, _, vc, _ = xc.pwca(0.5 * rho, 0.5 * rho)
@@ -136,12 +151,16 @@ def exchange_correlation_terms(potentials, groundstate):
     return out
 
 
-def terms(groundstate, poisson_potential=True):
+def terms(groundstate, poisson_potential=True, symmetrise=False):
     """Every term of ``energy.f90`` this phase can build, plus the total.
 
     ``poisson_potential=False`` substitutes Elk's own ``vclmt``/``vclir`` for
     the ones §2e builds, which isolates the Poisson solve from the quadrature:
     if the two differ, the Coulomb terms are the reason.
+
+    ``symmetrise`` must change nothing, and that is a result rather than a
+    default: §2f measured the symmetrisation leak to be orthogonal to
+    :math:`\\rho`, so both settings give the same energy to roundoff.
     """
     if poisson_potential:
         vclmt, vclir = poisson.coulomb_potential(groundstate)
@@ -152,7 +171,7 @@ def terms(groundstate, poisson_potential=True):
         vclir = jnp.asarray(groundstate["vclir"])
     out = dict(coulomb_terms(vclmt, vclir, groundstate))
     out.update(exchange_correlation_terms(
-        kohn_sham_potentials(groundstate), groundstate))
+        kohn_sham_potentials(groundstate, symmetrise=symmetrise), groundstate))
 
     # imported: these need the second-variational step and the zone sum
     evalsum = float(groundstate["evalsum"])

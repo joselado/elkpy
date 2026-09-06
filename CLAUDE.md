@@ -1183,7 +1183,7 @@ vendored tree:
 `docs/jax_port.md` (1,623 lines) is the design study, `docs/continue_here.md` §3 the cold-start
 summary, `docs/jax_port_phase0.md` the running log of what Phase 0 measured,
 `docs/jax_port_phase1.md` the same for Phase 1 (through §1m), and
-`docs/jax_port_phase2.md` for Phase 2, which is under way (§§2a-2f). §2a is the LDA
+`docs/jax_port_phase2.md` for Phase 2, which is under way (§§2a-2g). §2a is the LDA
 exchange-correlation functional: `src/elkjax/xc.py` transcribes `xc_pwca.f90`, with
 `jax.grad` reproducing Elk's hand-coded $v_{xc}$ at machine precision against the study's
 stated $10^{-10}$, exchange exact against Dirac and its spin scaling, correlation
@@ -1257,7 +1257,19 @@ $\langle\rho,\hat Sv\rangle=\langle\rho,v\rangle$ identically and the leak lives
 in harmonics $\rho$ does not have (measured: 5.3e-3 pointwise, 1e-16 relative against
 $\rho$). What survives of §2d is that an SCF iteration compares potentials *pointwise* and
 still needs $\hat S$. **A prediction derived from a verified finding is not itself
-verified.** Verdict, in one line: **a research project justified by
+verified.** §2g closes §2d's remaining consequence with patch **0018**, and the design
+choice is the content: `symrfmt`'s operator is **exported rather than transcribed**,
+because `rotrflm`'s Euler-angle and Wigner-$D$ construction has no consumer inside Elk
+but `symrfmt` itself — so a re-derivation would have no independent check except
+agreement with what it replaces, and `ieqatom`/`tfeqat`/the inverse lattice rotation
+would have to come with it. `elkpy_gsexport` calls `symrfmt` on basis vectors, giving one
+$l_{\max}^{\rm o}$-square matrix per ordered atom pair (a rotation is diagonal in the
+radial index and does not mix $l$, so the inner region uses its top-left block), and
+applying it takes the pointwise `vxcmt` gap from 5.3e-3 to **6.4e-14**. One measurement
+worth keeping: the operator is idempotent to 1e-16 on a CUBIC lattice and only 1.2e-11 on
+a hexagonal one, growing with $l$ — Elk's own `roteuler`, whose inverse trigonometry is
+exact when the Cartesian `symlatc` entries are $0$ and $\pm1$ and is not otherwise. That
+bounds how idempotent `symrfmt` can be, not its accuracy in use. Verdict, in one line: **a research project justified by
 differentiability, not by the GPU** — SIRIUS already does FP-LAPW on CUDA/ROCm with Elk as its
 reference, and Elk's hot spots are already near-peak BLAS-3. Nothing about the port is a plan of
 record; **Phase 0 (§6 of the study) is designed to kill it, not to start it**, and that is what

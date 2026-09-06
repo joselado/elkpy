@@ -833,6 +833,16 @@ def _parse_poisson(tokens, pos, out, nspecies, natmtot, nrmt, nrmtmax):
                       second-variational step and the zone sum, so they are
                       what a Phase 2 total energy imports rather than
                       reproduces
+      symop        -- (natmtot, natmtot, lmmaxo, lmmaxo) `symrfmt`'s operator,
+                      `symop[ias, jas]` mapping atom `jas`'s harmonics to atom
+                      `ias`'s.  EXPORTED rather than transcribed: `rotrflm`'s
+                      Euler-angle and Wigner-D construction has no consumer
+                      but `symrfmt`, so a re-derivation would have no
+                      independent check, and Elk's whole atom bookkeeping
+                      would have to come with it.  The inner region uses this
+                      matrix's top-left `lmmaxi` block, since `rotrfmt` calls
+                      `rotrflm` separately on the two regions with the same
+                      rotation
     """
     pair, pos = _take(tokens, pos, 2, int)
     out["npsd"], out["lnpsd"] = pair
@@ -854,6 +864,12 @@ def _parse_poisson(tokens, pos, out, nspecies, natmtot, nrmt, nrmtmax):
              "engytot")
     flat, pos = _take(tokens, pos, len(names), float)
     out.update(zip(names, flat))
+    lmmaxo = int(out["lmmaxo"])
+    flat, pos = _take(tokens, pos, (natmtot * lmmaxo) ** 2, float)
+    # written jas-slowest, then the source harmonic, then ias, then the
+    # destination harmonics
+    block = np.array(flat).reshape(natmtot, lmmaxo, natmtot, lmmaxo)
+    out["symop"] = np.ascontiguousarray(block.transpose(2, 0, 3, 1))
     return pos
 
 

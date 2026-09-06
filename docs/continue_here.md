@@ -17,10 +17,10 @@ Phase 2 items below it are ordered by cost. In short:
 1. **`rhomag`** (item 2b) — the density from the eigenvectors, which is now the ONLY
    thing between here and a closed SCF loop: the Poisson solve landed (§2e) and the
    XC half was already there (§§2a-2b). Not started.
-2. **`symrfmt`** (~1 h) — needed the moment a symmetric cell's potential must match
-   Elk's, which §2d measured at 1.2e-4 relative. Needs `symlatc`/`lsplsymc`/`ieqatom`/
-   `isymlat` exported (one more patch) and `rotrfmt` transcribed. Phase 2 can proceed
-   without it by running `symtype=0`.
+2. **~~`symrfmt`~~ DONE** (§2g, patch 0018) — the operator is *exported* rather than
+   transcribed, so Elk's Euler-angle/Wigner-$D$ construction and its atom bookkeeping
+   are not re-derived at all. Applying it takes the pointwise `vxcmt` gap from 5.3e-3
+   to 6.4e-14.
 3. **The Phase 3 boundary.** Phase 2's density-functional half is closed — the total
    energy's reproduced terms match Elk to $10^{-13}$ (§2f) with `evalsum`, `engyts`
    and `engynn` imported. What those three need is the second-variational step, the
@@ -578,7 +578,27 @@ named in item 12 need no Elk run and are the cheapest work available.
     still needs $\hat S$. **A prediction derived from a verified finding is not
     itself verified** — write predictions where a later test will run into them.
 
-13. **The Phase 1 leftovers**, neither of which needs an Elk run. (`lax.scan` over the
+13. **~~`symrfmt`.~~ DONE** (§2g, patch 0018, `elkjax/symmetry.py`). §2d's remaining
+    consequence, closed: applying the operator takes the pointwise `vxcmt` gap from
+    $5.3\times10^{-3}$ to $6.4\times10^{-14}$ on both structures.
+
+    **The design choice is the content.** `rotrflm`'s Euler-angle and Wigner-$D$
+    construction has no consumer inside Elk but `symrfmt` itself, so a Python
+    re-derivation would have no independent check except agreement with what it
+    replaces — and `ieqatom`, `tfeqat` and the *inverse* lattice rotation in the
+    rotate-into-equivalent loop would have to come with it. Patch 0018 calls
+    `symrfmt` on basis vectors and exports the resulting linear operator instead,
+    so none of that is transcribed and none of it can be got wrong here. Same call
+    as `wprmt` in 0017, but stronger: there the alternative had a defining equation
+    to check against, here it does not.
+
+    One measurement worth keeping: **idempotence is exact ($10^{-16}$) on a cubic
+    lattice and only $1.2\times10^{-11}$ on a hexagonal one**, growing with $l$.
+    That is Elk's own `roteuler`, whose inverse trigonometry is exact when the
+    Cartesian `symlatc` entries are $0$ and $\pm1$. It bounds how idempotent
+    `symrfmt` can be, not the operator's accuracy in use.
+
+14. **The Phase 1 leftovers**, neither of which needs an Elk run. (`lax.scan` over the
     Newton-Schulz tape is **done**, §1m.) Smeared occupations at **second**
     order, which needs a Chebyshev expansion of the Fermi function — `sign_projector`
     is hard-window only, and §1i removed the tolerance from the smeared *first*
@@ -710,6 +730,16 @@ grid.py        the interstitial FFT grid: G-vectors at each slot, spectral
 integrate.py   item 2c: rfint/rfinp -- the cell integral and inner product
 radial.py      item 1k: hmlrad/olprad -- the muffin-tin radial integrals, from
                the potential.  The vsmt packing is the load-bearing part
+poisson.py     item 2c: potcoul -- rtozfmt, zpotclmt's exact radial
+               solution, the nuclear term, and zpotcoul's pseudocharge and
+               boundary matching.  Everything Elk needs that is NOT exported
+               is rebuilt here from lapw.py
+symmetry.py    symrfmt, applied.  The OPERATOR is exported (patch 0018), not
+               transcribed -- rotrflm has no consumer but symrfmt itself
+energy.py      item 2f: energy.f90's density-functional terms.  evalsum,
+               engyts and engynn are imported and it says so
+phase1_scan.py item 1m: the Newton-Schulz tape unrolled vs lax.scan, in
+               compile time and HLO instruction count
 radial_functions.py  item 1k: rschrodint/genapwfr/genlofr -- the radial
                Schrodinger equation on Elk's own mesh, with Elk's own
                predictor-corrector (transcribed, not improved)
@@ -736,7 +766,10 @@ PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
     tests/test_calculation_lapw_position.py \
     tests/test_calculation_xc.py tests/test_calculation_poisson.py \
     tests/test_calculation_integrate.py \
-    tests/test_calculation_muffin_tin_xc.py -q
+    tests/test_calculation_muffin_tin_xc.py \
+    tests/test_calculation_poisson_solve.py \
+    tests/test_calculation_energy.py \
+    tests/test_calculation_symmetrise.py -q
 ```
 
 **`taskset` is not decoration.** `.claude/settings.json`'s `OMP_NUM_THREADS=1` does not

@@ -210,3 +210,26 @@ def test_the_outer_region_uses_its_own_spline_weights(silicon):
     scale = np.abs(correct).max()
     assert scale > 1e-8
     assert np.abs(padded - correct).max() / scale > 1e-6
+
+
+def test_the_radial_equation_residual_is_a_diagnostic_that_still_runs(silicon):
+    """`intra_sphere_residual` evaluates the defining equation on the solution.
+
+    It owes Elk nothing -- the radial Poisson equation, not a reference -- and
+    it is the weakest instrument in this file, because differentiating twice on
+    Elk's logarithmic mesh by a five-point polynomial fit is what limits it, not
+    the solve.  Measured: 8e-7 median for l=0 on silicon.  It is asserted at a
+    tolerance that would catch a gross error and nothing finer, and it is
+    tested at all so that it cannot quietly stop working and be quoted later as
+    if it had been.
+    """
+    from elkjax import poisson
+    lmaxo = int(silicon["lmaxo"])
+    rho = poisson.real_to_complex(
+        poisson.dense(silicon["rhomt"][0], silicon, 0), lmaxo)
+    potential = np.asarray(poisson.intra_sphere(rho, silicon, 0))
+    residual, scale = poisson.intra_sphere_residual(
+        potential, np.asarray(rho), silicon, 0, 0, 0)
+    live = scale > 1e-8 * scale.max()
+    assert live.sum() > 100
+    assert np.median(np.abs(residual[live]) / scale[live]) < 1e-4

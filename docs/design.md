@@ -4510,7 +4510,7 @@ the eigensolver's choice of basis is free to rotate. So the separation between
 the two rules is a mechanism, not a number: the test now asserts growth in the
 smearing width and a widening separation instead of a fixed factor.
 
-### Patches 0016 and 0017: the ground state, and the Poisson solve's own inputs
+### Patches 0016-0018: the ground state, the Poisson inputs, and the symmetrisation operator
 
 Patch **0016** adds a `GROUNDSTATE` query — the converged density and
 potentials on the grids Elk holds them on, taking **no k-point**, which is why
@@ -4554,6 +4554,25 @@ relative and `vclmt` to 4e-20 ($\ell=0$) and 7e-14 ($\ell>0$) on two
 structures, with the monopole identity $\sqrt{4\pi}q_{00}=N_{\rm MT}-Z$
 recovering the nuclear charges as exact integers from an independent code
 path.
+
+Patch **0018** makes the same call one step further. `potxc.f90` symmetrises
+the muffin-tin $v_{xc}$ and not its energy densities, so a pointwise
+transcription of the functional reproduces `exmt`/`ecmt` exactly and misses
+`vxcmt` by $1.2\times10^{-4}$ relative. Closing that needs `symrfmt`, and
+transcribing `symrfmt` means transcribing `rotrflm` — `roteuler`'s Euler-angle
+extraction, a real-harmonic Wigner-$D$ construction, and the improper-rotation
+$(-1)^\ell$ branch — **whose only consumer inside Elk is `symrfmt` itself**, so
+a re-derivation would have no independent check except agreement with the thing
+it replaces. It would also drag in `ieqatom`, `tfeqat` and the *inverse*
+lattice rotation of the rotate-into-equivalent-atoms loop.
+
+So `elkpy_gsexport` calls upstream `symrfmt` on basis vectors and writes back
+the linear operator: one $l_{\max}^{\rm o}$-square matrix per ordered atom
+pair, which is the whole of it, a rotation being diagonal in the radial index
+and not mixing $\ell$. None of Elk's symmetry bookkeeping is transcribed, so
+none of it can be got wrong on this side; what is tested is the operator's
+application. Applying it takes the `vxcmt` gap to $6.4\times10^{-14}$
+(§2g).
 
 
 ### What the port does with it

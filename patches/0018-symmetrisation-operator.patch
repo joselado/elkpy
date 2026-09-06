@@ -1,0 +1,54 @@
+--- a/src/elkpy_eigenstates.f90
++++ b/src/elkpy_eigenstates.f90
+@@ -1646,7 +1646,9 @@
+ !BOC
+ implicit none
+ ! local variables
+-integer is,ias,ig,i
++integer is,ias,jas,ig,i,lm
++! allocatable arrays
++real(8), allocatable :: symop(:,:)
+ write(*,*) natmtot,nspecies,ngtot,ngvec,lmaxi,lmmaxi,lmaxo,lmmaxo,npmtmax
+ write(*,*) ngvc
+ write(*,*) ngridg(1),ngridg(2),ngridg(3)
+@@ -1760,6 +1762,40 @@
+ write(*,'(4ES25.16E3)') engymad,engyen,engyhar,engycl
+ write(*,'(4ES25.16E3)') engynn,engyx,engyc,engyts
+ write(*,'(4ES25.16E3)') engytot
++! --- the muffin-tin symmetrisation operator (patch 0018) ---
++! potxc symmetrises vxcmt and bxcmt and NOT exmt/ecmt, so a transcription that
++! applies the functional pointwise reproduces the energy densities exactly and
++! misses vxcmt by 1.2e-4 relative (docs/jax_port_phase2.md 2d). What is needed
++! to close that is symrfmt's operator, and it is EXPORTED rather than
++! transcribed on purpose: rotrflm's Euler-angle and Wigner-D construction is
++! two hundred lines whose only consumer is symrfmt itself, so a re-derivation
++! would have no independent check, and the whole of symrfmt's atom bookkeeping
++! (ieqatom, tfeqat, the INVERSE lattice rotation in the rotate-into-equivalent
++! loop) would have to be transcribed with it.
++!
++! The operator is built by calling symrfmt on basis vectors. A rotation is
++! diagonal in the radial index and does not mix l, so one lmmaxo x lmmaxo
++! matrix per ORDERED atom pair is the whole of it: setting harmonic lm at the
++! last radial point of atom jas and reading the last radial point of atom ias
++! gives M(ias,jas)[lm',lm], and the inner region -- which carries only lmmaxi
++! harmonics -- uses that matrix's top-left lmmaxi block, since rotrfmt calls
++! rotrflm separately on the two regions with the same rotation.
++!
++! Written jas-slowest, then lm (the source harmonic), then ias, then lmmaxo
++! values (the destination harmonics).
++allocate(symop(npmtmax,natmtot))
++do jas=1,natmtot
++  do lm=1,lmmaxo
++    symop(:,:)=0.d0
++    symop(npmt(idxis(jas))-lmmaxo+lm,jas)=1.d0
++    call symrfmt(nrmt,nrmti,npmt,npmtmax,symop)
++    do ias=1,natmtot
++      i=npmt(idxis(ias))-lmmaxo
++      write(*,'(4ES25.16E3)') symop(i+1:i+lmmaxo,ias)
++    end do
++  end do
++end do
++deallocate(symop)
+ end subroutine
+ !EOC
+ 

@@ -28,6 +28,7 @@ $V_s$ itself, which is what this phase is for.
 | **2e** symmetrisation | not started |
 | **2d′** the muffin-tin angular transform | **done** (§2d): `rbsht`/`rfsht` are mutual inverses to 2.7e-12 and give `exmt`/`ecmt` exactly. `vxcmt` misses by 1.2e-4 relative **because `potxc.f90:55-58` symmetrises the potential and not the energy density** — on a `symtype=0` ground state the same code gives 1.4e-14 |
 | **2c′** the Weinert Poisson solve | **done** (§2e, patch 0017): `vclir` to 1.6e-15 relative and `vclmt` to 4e-20 (l=0) / 7e-14 (l>0) on two structures. The monopole identity recovers Z = 14, 5, 7 exactly from a separate code path, and two mutation tests pin the step order and the region split — both mutants are smooth, of the right order and wrong |
+| **2d″** `symrfmt` | **done** (§2g, patch 0018): the operator is EXPORTED rather than transcribed, so Elk's Euler-angle/Wigner-D construction and atom bookkeeping are not re-derived at all. Applying it takes the pointwise `vxcmt` gap from 5.3e-3 to 6.4e-14. Idempotent to 1e-16 on a cubic lattice and 1.2e-11 on a hexagonal one — Elk's own `roteuler`, not the export |
 | **2f** total energy at fixed input potential | **done** (§2f, `elkjax/energy.py`): every density-functional term of `energy.f90` matches Elk's own exported scalars to <1e-13 relative on two structures, asserted term by term. `evalsum`, `engyts` and `engynn` are imported — they need the second-variational step, a zone sum, and the lattice. **§2d's prediction of a 1e-4 error here was wrong**: symmetrisation is an orthogonal projection and rho is in its range, so the leak is orthogonal to the density (1e-16 relative, measured) |
 
 ---
@@ -669,3 +670,78 @@ find that the argument skipped a step. **A prediction derived from a verified
 finding is not itself verified**, and the cheapest way to keep that honest is to
 write predictions down where a later test will run into them — which is what
 happened here.
+
+---
+
+## 2g. `symrfmt`, exported rather than transcribed
+
+### What was at stake
+
+§2d found the asymmetry — `potxc` symmetrises `vxcmt` and `bxcmt`, not
+`exmt`/`ecmt` — and §2f found that it costs nothing in any integral against
+$\rho$. What it does cost is the *pointwise* comparison, and an SCF iteration is
+pointwise: a loop that builds $v_{xc}$ from a density and hands it to the next
+Hamiltonian must produce Elk's `vxcmt`, not something $1.2\times10^{-4}$ away
+from it. So closing the loop needs $\hat S$.
+
+### The design choice, which is the interesting part
+
+Transcribing `symrfmt` means transcribing `rotrflm`: `roteuler`'s extraction of
+Euler angles from a Cartesian rotation, a real-harmonic Wigner-$D$ construction,
+and the improper-rotation $(-1)^l$ branch. Two hundred lines of convention whose
+**only consumer inside Elk is `symrfmt` itself** — so a Python re-derivation
+would have no independent check except agreement with the thing it replaces. And
+it does not stop there: `symrfmt`'s atom bookkeeping would have to come too —
+`ieqatom` (the atom an operation maps *into* the target), `tfeqat`, and the
+**inverse** lattice rotation `isymlat(lsplsymc(isym))` in the
+rotate-into-equivalent-atoms loop.
+
+Patch **0018** exports the operator instead. `elkpy_gsexport` calls upstream
+`symrfmt` on basis vectors and writes back what comes out, so **none of that
+bookkeeping is transcribed and none of it can be got wrong here**. What is tested
+is the operator's *application*, which has no convention in it at all.
+
+This is the same call `wprmt` got in patch 0017 — "no closed form worth
+retyping" — but stronger, because there the alternative had a defining equation
+to check against and here it does not.
+
+The operator is one $l_{\max}^{\rm o}$-square matrix per **ordered atom pair**,
+and that is the whole of it: a rotation is diagonal in the radial index (so the
+mesh does not enter) and does not mix $l$ (so the inner region, carrying only
+$l_{\max}^{\rm i}$ harmonics, uses the same matrix's top-left block — `rotrfmt`
+calls `rotrflm` separately on the two regions with the same rotation). For bulk
+Si that is $2^2\times49^2$ doubles.
+
+### What it closes, and what it measures
+
+| check | result |
+|---|---|
+| pointwise $v_{xc}[\rho]$ against Elk's `vxcmt` | 5.3e-3 (§2d) |
+| $\hat S\,v_{xc}[\rho]$ against the same | **6.4e-14** |
+| $\hat S\rho-\rho$ | 7e-18 — §2d's premise, asserted |
+| $\hat S^2-\hat S$, bulk Si | 1e-16 |
+| $\hat S^2-\hat S$, monolayer h-BN | **1.2e-11** |
+| `symtype=0`: $\hat S$ against $\mathbb 1$ | exact, including zero between atoms |
+
+Two of those need comment.
+
+**The cross-atom block is not zero**, and that is what makes silicon a real
+fixture here: its two equivalent atoms give `symop[0,1]` entries of $0.5$, so the
+operator mixes *sites* and not only harmonics. On a cell where every atom is
+alone in its species — h-BN's B and N — the off-diagonal blocks vanish
+identically (measured: exactly $0.0$), and the file would be testing an angular
+rotation only.
+
+**Idempotence is exact on a cubic lattice and not on a hexagonal one**, by five
+orders of magnitude, and the residual grows with $l$ within h-BN
+($2.5\times10^{-12}$ at $l=1$ to $1.2\times10^{-11}$ at $l=5$). That is Elk's own
+arithmetic: `roteuler`'s inverse trigonometry is exact when the Cartesian
+`symlatc` entries are $0$ and $\pm1$, and hexagonal ones carry $\tfrac12$ and
+$\tfrac{\sqrt3}2$; the $l$ dependence is the Wigner-$D$ order compounding the
+angle error. It bounds how idempotent `symrfmt` **can** be, not the operator's
+accuracy in use — which applies it once, and holds at $10^{-14}$ on both
+structures.
+
+The test asserts that contrast rather than covering both with one loose
+tolerance. A single $10^{-10}$ would say the operator is good to $10^{-10}$
+everywhere: wrong in one direction and uninformative in the other.
