@@ -4374,6 +4374,20 @@ $\sum_{\ell m,i_o}\overline{A_{i}}A_{j}$ (that is `olpaa`'s `zmctmu` written
 out) to 3.6e-15, tying `apwalm` to $O$ through Elk's own assembly so a packing
 error would have to be shared by both to survive; $D$ against an independent
 `numpy` polynomial fit to the exported radial tails, 6.1e-14, which checks the
-tail alignment Phase 1 will build $D$ from; and the two-atom separation
-recovered from `atposc` modulo a lattice vector. `parsers.eigenstates` has its
-own token-level round trip needing no binary.
+tail alignment Phase 1 will build $D$ from; the $\mathbf{G+k}$ set against an
+independent enumeration of every integer triple with
+$|\mathbf{G+k}|<{\tt rgkmax}/\min({\tt rmt})$, which agrees exactly and is what
+`elkjax.lapw.gkvectors` assumes; the exported `evecfv` against the exported $H$
+and $O$ ($HV=OV\varepsilon$ to 1.5e-15, $V^\dagger OV=\mathbb 1$ to 5.8e-15,
+and the occupied-subspace projector $VV^\dagger O$ idempotent to 1.3e-14 —
+which is the gauge-invariant object Phase 1's forward criterion is stated on,
+and which, since `evecfv` comes from `eveqnfvr` and never sees the complex
+matrices, is a second and independent confirmation that the `tefvr` override
+exports the right ones); and the two-atom separation recovered from `atposc`
+modulo a lattice vector. `parsers.eigenstates` has its own token-level round
+trip needing no binary.
+
+Run on monolayer h-BN as well (`elkjax.phase0b_overlap`), the export
+self-check holds at 3.4e-14 on a **two-species** cell — the only one in this
+work — which exercises `idxis`'s indexing into `rmt`/`nrmt`/`apword` and
+`apword`'s own per-$\ell$ variation. Bulk silicon cannot.

@@ -281,3 +281,35 @@ def test_the_gk_set_is_exactly_the_cutoff_sphere(exported):
     enumerated = {tuple(v) for v in candidates[lengths < gkmax]}
     exported_set = {tuple(v) for v in np.round(gvectors).astype(int).T}
     assert enumerated == exported_set
+
+
+def test_exported_eigenvectors_solve_the_exported_eigenproblem(exported):
+    """evecfv satisfies H V = O V diag(evalfv) and V^H O V = 1.
+
+    Nothing else here touches evecfv, and Phase 1's forward criterion is
+    stated on it -- gauge-invariantly, as the occupied-subspace projector
+    P = V V^H O, since EVECFV is arbitrary within a degenerate multiplet.
+    So this checks the object that criterion will be measured against, and
+    that it is idempotent.
+
+    It also confirms the tefvr reasoning from the other direction. evecfv
+    comes out of eveqnfvr, Elk's real symmetric solver, which never forms
+    the complex matrices at all; H and O are built afterwards with the
+    shortcut disabled. A residual of order machine epsilon between the two
+    is evidence that the exported matrices are the ones Elk's own solution
+    belongs to -- had the real-part-only accumulation survived into the
+    export, this residual would be O(1) rather than 1e-15.
+    """
+    hamiltonian, overlap = exported["hmat"], exported["omat"]
+    vectors, values = exported["evecfv"], exported["evalfv"]
+    nstfv = exported["nstfv"]
+
+    gram = vectors.conj().T @ overlap @ vectors
+    assert np.abs(gram - np.eye(nstfv)).max() < 1e-12
+
+    residual = hamiltonian @ vectors - (overlap @ vectors) * values[None, :]
+    assert np.abs(residual).max() < 1e-12 * np.linalg.norm(hamiltonian, 2)
+
+    occupied = vectors[:, :4]                      # silicon's valence manifold
+    projector = occupied @ occupied.conj().T @ overlap
+    assert np.linalg.norm(projector @ projector - projector) < 1e-11
