@@ -111,3 +111,45 @@ def trim(values, groundstate):
     spectrum = to_reciprocal(values, ngridg)
     return to_real(
         jnp.where(jnp.asarray(_keep_mask(groundstate)), spectrum, 0.0), ngridg)
+
+
+# ---------------------------------------------------------------------------
+# The muffin-tin angular grid
+# ---------------------------------------------------------------------------
+
+def _sht(packed, groundstate, ias, forward):
+    idxis = np.asarray(groundstate["idxis"]) - 1
+    is_ = int(idxis[ias])
+    nr = int(np.asarray(groundstate["nrmt"])[is_])
+    nri = int(np.asarray(groundstate["nrmti"])[is_])
+    lmmaxi = int(groundstate["lmmaxi"])
+    lmmaxo = int(groundstate["lmmaxo"])
+    prefix = "rfsh" if forward else "rbsh"
+    inner = jnp.asarray(groundstate[prefix + "ti"])
+    outer = jnp.asarray(groundstate[prefix + "to"])
+    packed = jnp.asarray(packed)
+    head = jnp.reshape(
+        jnp.reshape(packed[:lmmaxi * nri], (nri, lmmaxi)) @ inner.T, (-1,))
+    start = lmmaxi * nri
+    stop = start + lmmaxo * (nr - nri)
+    tail = jnp.reshape(
+        jnp.reshape(packed[start:stop], (nr - nri, lmmaxo)) @ outer.T, (-1,))
+    return jnp.concatenate([head, tail, packed[stop:]])
+
+
+def to_angular(packed, groundstate, ias):
+    r"""`rbsht.f90`: muffin-tin harmonic coefficients -> values on the angular
+    grid, one radial point at a time.
+
+    This is how Elk applies a nonlinear functional inside a sphere -- the
+    functional is pointwise in real space and not in the harmonic basis, and
+    the two do not commute (`docs/jax_port_phase2.md` §2a measures by how
+    much).  The packing is preserved: `lmmaxi` values per radial point over
+    the inner region and `lmmaxo` over the outer.
+    """
+    return _sht(packed, groundstate, ias, forward=False)
+
+
+def from_angular(values, groundstate, ias):
+    """`rfsht.f90`: the inverse of `to_angular`."""
+    return _sht(values, groundstate, ias, forward=True)

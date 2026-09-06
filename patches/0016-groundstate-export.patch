@@ -1,6 +1,6 @@
 --- a/src/elkpy_eigenstates.f90
 +++ b/src/elkpy_eigenstates.f90
-@@ -1595,6 +1595,132 @@
+@@ -1595,6 +1595,139 @@
  !EOC
  
  !BOP
@@ -75,6 +75,13 @@
 +do is=1,nspecies
 +  write(*,'(4ES25.16E3)') wr2mt(1:nrmt(is),is)
 +end do
++! the spherical-harmonic <-> angular-grid transform matrices (genshtmat), so a
++! muffin-tin function can be evaluated pointwise and transformed back -- which
++! is how potxcmt applies a nonlinear functional inside a sphere
++write(*,'(4ES25.16E3)') rbshti(1:lmmaxi,1:lmmaxi)
++write(*,'(4ES25.16E3)') rfshti(1:lmmaxi,1:lmmaxi)
++write(*,'(4ES25.16E3)') rbshto(1:lmmaxo,1:lmmaxo)
++write(*,'(4ES25.16E3)') rfshto(1:lmmaxo,1:lmmaxo)
 +! the reciprocal-lattice set the interstitial functions live on
 +do ig=1,ngtot
 +  write(*,*) ivg(1,ig),ivg(2,ig),ivg(3,ig)
@@ -133,7 +140,7 @@
  ! !ROUTINE: elkpy_eigenstate_session
  ! !INTERFACE:
  subroutine elkpy_eigenstate_session
-@@ -1672,6 +1798,14 @@
+@@ -1672,6 +1805,14 @@
  !    JAX port (docs/jax\_port.md), not a physical observable: nothing
  !    upstream writes {\tt apwalm} at all. $H$ and $O$ carry only the upper
  !    triangle Elk fills.
@@ -148,7 +155,7 @@
  !   \item {\tt PARITY k1 k2 k3 ist0 ist1} -- the inversion (parity) operator
  !    $\langle\psi_m|\hat I|\psi_n\rangle$ over the band window
  !    $[ist0,ist1]$, plus all {\tt nstsv} eigenvalues of the same
-@@ -1743,6 +1877,11 @@
+@@ -1743,6 +1884,11 @@
    if (ios /= 0) cycle
    select case(trim(cmd))
  

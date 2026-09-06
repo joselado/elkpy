@@ -26,6 +26,7 @@ $V_s$ itself, which is what this phase is for.
 | **2c** the Weinert Poisson solver | not started |
 | **2d** a GGA functional | **done for PBE (`xctype=20`)** (§2b): energy densities exact against Elk's own `exir`/`ecir` (4e-16), and `jax.grad` of the discretised energy reproduces Elk's hand-coded potential to 2.4e-5 median — with the gap identified as discretise-then-differentiate versus differentiate-then-discretise, not as an error in either |
 | **2e** symmetrisation | not started |
+| **2d′** the muffin-tin angular transform | **done, with an anomaly** (§2d): `rbsht`/`rfsht` are mutual inverses to 2.7e-12 and give `exmt`/`ecmt` exactly, but `vxcmt` misses by 1.2e-4 relative — localised to correlation, not a function of the density, and unexplained |
 | **2f** total energy at fixed input potential | **partly** (§2c): the cell integral and inner product are built (`rfint`/`rfinp`), so the charge integrates to the electron count within 1.1e-14 — the study's forward criterion asks 1e-8 — and $E_x$/$E_c$ match Elk's own INFO.OUT to 1e-9. The total energy needs the density and the Poisson solve |
 
 ---
@@ -143,13 +144,8 @@ while writing it: `vsig` is allocated `ngvc` long, **not** `ngvec` —
 `genvsig` builds it on the coarse grid — so the first version of the export
 read past the end of the array.
 
-**What the muffin-tin side would take.** Elk builds $v_{xc}^{\rm MT}$ on an
-angular grid and keeps $l_{\max}^{\rm o}$ harmonics of the result, so a
-transcription needs `rbsht`/`rfsht`. Measured here, treating the density as if
-it were spherical reproduces Elk's $\ell=0$ channel to **8e-16 over most of
-the sphere** and to 1.4e-2 at worst, where the non-spherical part of the
-density reaches 35% of the spherical part. So the angular machinery is needed
-only in the outer shell — which is where to look first if it ever disagrees.
+**The muffin-tin side is in §2d below**, and it is where the one unexplained
+measurement of this phase lives.
 
 ### Through `plot1d`, and why that tolerance is what it is
 
@@ -333,3 +329,68 @@ $10^{-8}$ electrons" — is met at $10^{-14}$, and the machinery every remaining
 energy component needs exists and is checked. The other half, the total energy
 at a fixed input potential, needs the density (`rhomag`) and the Weinert
 Poisson solve, neither of which is started.
+
+
+---
+
+## 2d. The muffin-tin angular transform, and one thing that does not add up
+
+### What was built
+
+A nonlinear functional cannot be applied in the spherical-harmonic basis, so
+Elk evaluates it on an angular grid: `rbsht` maps the $l_{\max}$ coefficients
+at each radial point to $l_{\max}$ values on that grid, the functional is
+applied pointwise, `rfsht` maps back. `elkjax.grid.to_angular`/`from_angular`
+transcribe the pair; patch 0016 exports the four matrices (`rbshti`, `rfshti`,
+`rbshto`, `rfshto`), which are small — $l_{\max}^{\rm i}=1$ and
+$l_{\max}^{\rm o}=6$ give $4^2+49^2$ doubles each way.
+
+| quantity | agreement with Elk |
+|---|---|
+| `rfsht(rbsht(rho)) - rho` | 2.7e-12 |
+| `exmt` from the angular-grid density | **1.8e-15** |
+| `ecmt` from the angular-grid density | **2.8e-16** |
+| `vxcmt` from the same | **5.3e-3** on a scale of 45 (1.2e-4 relative) |
+
+The first three say the transform is right and the density it is applied to is
+right. The fourth does not follow from them, and it should.
+
+### What has been ruled out
+
+* **It is entirely in correlation.** Elk's own $v_x$ equals $\tfrac43$ times
+  its own $\varepsilon_x$ to roundoff at every point, and $\varepsilon_x$
+  itself is exact, so the exchange half is right.
+* **It is not a density error.** $\varepsilon_c$ agrees to 2.8e-16 at the very
+  same points, and $\varepsilon_c$ and $v_c$ have comparable sensitivity to
+  $\rho$ — a $\delta\rho$ big enough to produce this would show in both.
+* **It is not a function of $\rho$.** Points at $\rho=11.2$ disagree while
+  points at $\rho=0.78$ agree; the two sets overlap in density. What it tracks
+  is *radius*, growing smoothly from below $10^{-9}$ at $r=0.30$ Bohr to
+  $5.3\times10^{-3}$ at $R_{\rm MT}$.
+* **It is not the interstitial's story.** The identical transcription
+  reproduces Elk's `vxcir` to 4.4e-16 (§2a) over an overlapping density range.
+* **It is not mixing.** `vsmt - vclmt - vxcmt` is $1.7\times10^{-7}$ on a
+  scale of $9\times10^{7}$, so the exported potentials are mutually
+  consistent, and comparing against `vsmt - vclmt` instead gives the identical
+  $5.3\times10^{-3}$.
+* **It is not a post-processing filter.** `potks` trims only `vxcir`, and no
+  routine outside `potxc`/`oepmain` writes `vxcmt` at all (grep-verified).
+
+That is where it stands. `tests/test_calculation_muffin_tin_xc.py` asserts the
+solid results *and* pins the anomaly's size and its
+not-a-function-of-density character, so a later change that explains it makes
+the test fail — which is the point of pinning it rather than leaving it in
+prose.
+
+### Why this is worth a section rather than a footnote
+
+The two exact rows above are what make the fourth interesting. If the density
+or the transform were wrong, $\varepsilon_x$ and $\varepsilon_c$ would be wrong
+too, and they are exact to roundoff. So one of the following is true and it is
+not yet known which: Elk's muffin-tin $v_c$ is computed from something other
+than the angular-grid density that its own $\varepsilon_c$ is computed from; or
+the export carries a `vxcmt` from a different state than its `exmt`/`ecmt`
+despite `potxcmt` writing all three in the same loop; or there is a reading of
+`xcifc`'s unpolarised branch that has been missed. **Do not build the
+muffin-tin GGA or the total energy on this path until it is settled** — the
+interstitial path is exact and is the one to extend meanwhile.

@@ -311,6 +311,14 @@ def parse_lapw_response(tokens):
                                    avec(:, j) convention, atomic units)
       vkc                       -- (3,) the k-point in Cartesian a.u.
       idxis                     -- (natmtot,) 1-based species of each atom
+      rbshti, rfshti,
+      rbshto, rfshto            -- (lmmaxi, lmmaxi) / (lmmaxo, lmmaxo), the
+                                   backward and forward spherical-harmonic
+                                   transforms (`genshtmat`).  `rbsht` maps
+                                   harmonic coefficients to values on an
+                                   angular grid so a nonlinear functional can
+                                   be applied pointwise inside a sphere;
+                                   `rfsht` maps back
       rlmt, wr2mt               -- (nspecies, max nrmt) the radial mesh and
                                    its r^2-weighted quadrature weights
                                    (`wsplint`, a Simpson-like rule -- not
@@ -684,6 +692,14 @@ def parse_groundstate_response(tokens):
       nrmt, nrmti, npmt         -- (nspecies,) radial points, inner-region
                                    radial points, packed muffin-tin length
       idxis                     -- (natmtot,) 1-based species of each atom
+      rbshti, rfshti,
+      rbshto, rfshto            -- (lmmaxi, lmmaxi) / (lmmaxo, lmmaxo), the
+                                   backward and forward spherical-harmonic
+                                   transforms (`genshtmat`).  `rbsht` maps
+                                   harmonic coefficients to values on an
+                                   angular grid so a nonlinear functional can
+                                   be applied pointwise inside a sphere;
+                                   `rfsht` maps back
       rlmt, wr2mt               -- (nspecies, max nrmt) the radial mesh and
                                    its r^2-weighted quadrature weights
                                    (`wsplint`, a Simpson-like rule -- not
@@ -753,6 +769,10 @@ def parse_groundstate_response(tokens):
             flat, pos = _take(tokens, pos, int(nrmt[is_]), float)
             arr[is_, :int(nrmt[is_])] = flat
         out[key] = arr
+    for key, n in (("rbshti", lmmaxi), ("rfshti", lmmaxi),
+                   ("rbshto", lmmaxo), ("rfshto", lmmaxo)):
+        flat, pos = _take(tokens, pos, n * n, float)
+        out[key] = np.array(flat).reshape(n, n, order="F")
     flat, pos = _take(tokens, pos, 3 * ngtot, int)
     out["ivg"] = np.array(flat).reshape(3, ngtot, order="F")
     flat, pos = _take(tokens, pos, ngtot, int)
