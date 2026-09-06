@@ -1237,7 +1237,7 @@ Phase 0e asks for production shapes that this machine cannot hold.
 | 0b | safe-$K$ projector rule: does the $(f_i-f_j)/(\lambda_i-\lambda_j)$ `custom_jvp` fix the reassembly jitter, and what happens in the padding block | **done at synthetic $S$ — `docs/jax_port_phase0.md`**; item 0b(ii)'s *real* Cholesky-reduced LAPW overlap is Phase 1's first measurement |
 | 0a | reverse-mode implicit diff (`custom_vjp` + GMRES) through an SCF fixed point whose matvec passes through `eigh` at a multiplet | **done — it works**, ≤1e-14 against a dense IFT reference on four spectra including an exactly degenerate one; the naive rule fails on the same machinery |
 | 0a′ | the same at second order — decides the full port over §9.2's hybrid | **done — it works**, via `projector.sign_projector` (matrix sign by Newton-Schulz: no eigensolve, so differentiable to any order); `grad(grad)` through the fixed point agrees with central FD to 1.2e-9 where the `eigh`-based rule gives `NaN`. Use `grad(grad)`, never `jax.hessian` — a `custom_vjp` cannot be forward-differentiated |
-| 0c | `jax.jvp(match)` against `dmatch.f90`'s analytic $d(\texttt{apwalm})/dr$ | not started |
+| 0c | `jax.jvp(match)` against `dmatch.f90`'s analytic $d(\texttt{apwalm})/dr$ | **done — exact to 7e-16** in both modes (`src/elkjax/lapw.py` transcribes `match`, `gengkvec`, `gensfacgp`, `genylmv`, `sbessel`). The forward half is checked against SciPy and against the matching condition $DA=b$, but **not against Elk's own `apwalm`** — nothing in `vendor/elk/src/` exports it, so that needs patch 0013 |
 | 0d | `vmap(eigh)` vs `lax.map` at $n=1000$ on a real GPU | **timing deferred (no GPU); memory settled by 0e** — at production shapes a `lax.scan` accumulator holds 0.411 GiB of temporaries and `vmap` holds 40.2 GiB, so `vmap` over the k-axis does not fit on a 40 GB device whatever the timing says |
 | 0e | `jit` compile time and peak memory for one traced SCF step at production shapes | **done — `docs/jax_port_phase0.md`.** Compile time is FLAT in the shapes (0.46 s at both $(200,4)$ and $(3000,100)$) and **superlinear (exponent ≈1.85) in HLO op count** — isolated with the corrector, which is linear in its pass count, since Gram-Schmidt's own op count is quadratic in `n_lo` — while a `lax.scan` over 4x more radial points costs nothing. Design rule: `scan` repeated structure, unroll only what must be. Differentiating the step adds only ~1.2x |
 
@@ -1257,6 +1257,14 @@ symmetric versus 4.7e-1 symmetry-broken on the same Hamiltonian (§0a), because 
 the perturbation nor the observable then has a matrix element between the partners.
 Test along general directions, and break the symmetry; and always compare forward-mode
 against reverse-mode, which for a scalar-in scalar-out function must agree exactly.
+
+**A green gradient test does not validate a transcription.** Measured on 0c: dropping
+`genylmv`'s $4\pi(-i)^l$ prefactor multiplies each $\ell$ block by a fixed complex
+number, and the result still passes the exact `dmatch` identity to 7e-16 — a constant
+factor commutes with $\partial/\partial\mathbf r_\alpha$. Every AD check here needs a
+forward check beside it, and the strongest available without Elk is the quantity's own
+defining equation (for `match`, the matching condition $DA=b$ rebuilt independently),
+not a comparison of its pieces.
 
 **Use an analytic reference, not finite differences, wherever a degeneracy is in play.** The
 study's own §8(b) measures FD failing at a multiplet — central FD of the *sorted* spectrum

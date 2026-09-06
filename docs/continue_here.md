@@ -220,23 +220,18 @@ of the mixer's internal ridge; unrolled linear mixing converges normally. Elk's 
 - **The self-consistent Fermi level.** 0a covers smearing at *fixed* mu. Fixed electron
   number adds a second constraint whose rule §8b gives in closed form,
   `dmu/deps_i = w_i f'_i / sum_j w_j f'_j`. Untested.
-- **0c — the only Phase 0 item left, and the first that touches Elk.**
-  `jax.jvp(match)` vs `dmatch.f90`. It needs `match.f90` transcribed into JAX (with
-  `sbessel`, `genylmv`'s `t4pil` trap and `gensfacgp`), and a reference: nothing in
-  `vendor/elk/src/` exports `apwalm` today (checked), so it also needs a small export
-  hook as patch 0013. The binary at `build/elk/src/elk` is already built here. This is
-  the first real transcription work rather than a JAX-only experiment.
-- **0d** — the *timing* half still needs a GPU this machine does not have. Its **memory**
-  half is answered by 0e and is not close: at production shapes a `lax.scan` accumulator
-  holds 0.411 GiB of temporaries against `vmap`'s 40.2 GiB, so `vmap` over the k-axis
-  does not fit on a 40 GB device whatever the GPU timing turns out to be.
-- **0e — done.** Compile time is FLAT in the shapes (0.46 s at both (200,4) and
-  (3000,100)), so hazard K is not a wall from problem size; it is roughly **quadratic in
-  unrolled op count** (0.44 s to 32.4 s for Gram-Schmidt over 8 to 128 columns) while a
-  `lax.scan` over 4x more radial points costs nothing. Design rule: `scan` repeated
-  structure, unroll only what must be — and note §3.2's unrolled Gram-Schmidt over the
-  local-orbital block is exactly the construct that would bite, since `nlotot` runs to
-  the low hundreds for a heavy cell. All of it AOT: nothing was executed.
+- **0c — done, with one gap.** `src/elkjax/lapw.py` transcribes `match`, `gengkvec`,
+  `gensfacgp`, `genylmv` and `sbessel`; `jax.jvp` against `dmatch`'s
+  `i(G+p) apwalm` is exact to 7e-16, and so is reverse mode. The forward half is
+  checked against SciPy (Bessel 4.3e-14, Ylm 9.7e-16) and against the matching
+  condition `D A = b` rebuilt independently (1.0e-11) — but **never against Elk's own
+  apwalm**, because nothing in `vendor/elk/src/` exports it. That is the next Fortran
+  job: a small export as **patch 0013**, which under CLAUDE.md's core constraint is a
+  commitment to maintain it across Elk upgrades, so it is a decision rather than a
+  chore. Two conventions are assumed rather than verified until then: the layout of the
+  derivative matrix D, and `apwfr`'s normalisation. Both are Phase 1 `apwfr` work.
+  Note also the lesson: dropping `genylmv`'s `t4pil` prefactor still passes the
+  `dmatch` identity exactly, since a constant factor commutes with d/dr.
 - **κ(S) for a real LAPW overlap has still never been measured**, and §8b's cheap
   Cholesky-diagonal estimate underestimates a synthetic κ=1e6 by 140x — the dangerous
   direction, since the tolerance is meant to be an upper bound.

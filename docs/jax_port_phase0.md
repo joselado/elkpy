@@ -7,9 +7,10 @@ what was run, the numbers it produced, and what it settles. Reproduce with
 PYTHONPATH=src taskset -c 0-3 python3 -m elkjax.phase0b     # the projector rule
 PYTHONPATH=src taskset -c 0-3 python3 -m elkjax.phase0a     # the SCF fixed point
 PYTHONPATH=src taskset -c 0-3 python3 -m elkjax.phase0e     # compile cost, AOT only
+PYTHONPATH=src taskset -c 0-3 python3 -m elkjax.phase0c     # the LAPW matching coefficients
 ELKPY_RUN_SLOW_TESTS=1 PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
     tests/test_jax_projector.py tests/test_jax_fixedpoint.py \
-    tests/test_jax_compile_cost.py -q
+    tests/test_jax_compile_cost.py tests/test_jax_lapw.py -q
 ```
 
 `taskset` is not decoration: `.claude/settings.json`'s `OMP_NUM_THREADS=1` does **not**
@@ -22,7 +23,7 @@ it, and `XLA_FLAGS=--xla_cpu_multi_thread_eigen=false` changes nothing). Peak RS
 | 0b — safe-$K$ projector rule | **settled at synthetic $S$, below.** The rule is necessary and it works; item 0b(ii)'s *real* Cholesky-reduced LAPW overlap is still Phase 1's first measurement |
 | 0a — reverse-mode implicit diff through the SCF fixed point | **settled, below.** It works, and it needs 0b's rule |
 | 0a′ — the same at second order | **settled, below.** Blocked with an `eigh`-based projector; **works** with an eigensolver-free one |
-| 0c — `jax.jvp(match)` vs `dmatch.f90` | not started |
+| 0c — `jax.jvp(match)` vs `dmatch.f90` | **settled, below.** Exact to 7e-16; forward half checked against SciPy and against the matching condition, but **not yet against Elk's own `apwalm`** |
 | 0d — `vmap(eigh)` vs `lax.map` on a GPU | deferred: no GPU on this machine |
 | 0e — compile time and peak memory at production shapes | AOT-only (`elkjax.memory.compiled_cost`) |
 
@@ -468,3 +469,94 @@ every repeated structure and unroll only what genuinely must be**. Elk's `nlotot
 the low hundreds for a heavy cell, so §3.2's unrolled Gram-Schmidt over the local-orbital
 block is precisely the construct that would put a step into the tens of seconds per
 compile — per shape, and a different `ngridk` or `rgkmax` is a different shape.
+
+---
+
+## 0c. The LAPW matching coefficients, differentiated
+
+Study §6 item 0c: "`jax.jvp(match)` vs `dmatch.f90` — whether the LAPW position
+dependence is AD-tractable. Agreement to machine precision against
+$d(\texttt{apwalm})/dr = i({\bf G+p})\,\texttt{apwalm}$. If this fails nothing
+downstream is worth debugging."
+
+### Why this item is unlike the rest of Phase 0
+
+Its reference is **exact and free**. The atomic position enters `match` through exactly
+one factor — the structure factor $e^{i({\bf G+p})\cdot{\bf r}_\alpha}$ — and neither
+the radial derivative matrix $D_{ij}$ nor the Bessel functions move with the atom. That
+is why `dmatch.f90` is 26 lines and a single expression. So this item needs no reference
+implementation, no finite differences and no tolerance argument, which is the opposite
+situation from 0a and 0b.
+
+`elkjax.lapw` transcribes `match.f90` along with `gengkvec`, `gensfacgp`, `genylmv` and
+`sbessel`. The derivative matrix $D$ is an **input**: building it from `apwfr` needs the
+radial Schrödinger solutions and `polynm`'s divided-difference fit, which is Phase 1.
+
+### Result: exact, in both modes
+
+At $l_{\max}=8$ with 729 G+k vectors and $|{\bf G+p}|R_{\rm MT}\in[0.13,8.59]$
+(bulk-silicon magnitudes), against $i({\bf G+p})_p A$:
+
+| | relative error |
+|---|---|
+| `jax.jvp`, direction $x$ / $y$ / $z$ | 7.2e-16, 4.8e-16, 3.7e-16 |
+| `jax.grad` contracted against a random cotangent | 5.2e-15 |
+
+Reverse mode is checked as well as forward because forces come from reverse mode, and
+for a scalar contraction the two must agree exactly — the check that costs nothing and
+would have caught §0b's mistake immediately.
+
+### The forward half, which is where the actual risk is
+
+An exact derivative of the wrong function is worthless, and the `dmatch` identity is
+blind to almost every way `match` can be wrong. Three independent checks, none needing
+Elk:
+
+| check | worst error | what it sees |
+|---|---|---|
+| $j_l(x)$ vs SciPy, $x=10^{-10}\ldots40$ | 4.3e-14 | both recurrence branches and the switch |
+| $dj_l/dx$ from `jax.jacfwd` vs SciPy | 1.3e-14 | that the recurrence is differentiable |
+| $Y_{lm}$ vs SciPy, in Elk's packed layout | 9.7e-16 | values, Condon-Shortley, $lm=l(l+1)+m$ |
+| $DA=b$ with $b$ rebuilt from SciPy | 1.0e-11 | the **assembly** |
+
+The last is the one with teeth. SciPy validates the special functions but sees nothing
+of $1/\sqrt\Omega$, the conjugation, the `t4pil` prefactor, the packing or the linear
+solve. The matching condition does, because it *is* the definition: the coefficients
+exist precisely so that the muffin-tin function and the interstitial plane wave agree in
+value and in the first $M_l-1$ derivatives at $R_\alpha$. Rebuilding
+$b_i=(4\pi i^l/\sqrt\Omega)|{\bf G+p}|^{i-1}j^{(i-1)}_l(|{\bf G+p}|R_\alpha)
+e^{i({\bf G+p})\cdot{\bf r}_\alpha}Y^*_{lm}$ from SciPy — with the $4\pi i^l$
+written out rather than hidden inside `genylmv` — makes a prefactor or conjugation slip
+unable to cancel between the two sides.
+
+Two branch details worth recording, both measured rather than assumed. **Miller's
+downward Bessel recurrence alone is not enough**: at $l_{\max}=8$ it is good to 2e-15
+for $x\le3$ and wrong by **7.6e-2** at $x=20$, so Elk's switch to upward recurrence at
+$x=l_{\max}$ is load-bearing and is reproduced here. And **`genylmv`'s `t4pil`
+prefactor is $4\pi(-i)^l$**, which `match` then conjugates — measured ratio
+$4\pi i^l$ per $l$ block, which is exactly where `match.f90`'s own documented
+$b_i\propto4\pi i^l$ comes from.
+
+### The reason a green 0c is necessary and not sufficient
+
+Dropping the `t4pil` prefactor multiplies each $l$ block by a fixed complex number. The
+result stays finite, smooth, correctly shaped, exactly right for $l=0$ — **and it passes
+the `dmatch` identity to 7e-16**, because a constant factor commutes with
+$\partial/\partial{\bf r}_\alpha$. That is asserted as its own test. Item 0c's
+criterion cannot validate the port; only the forward checks can, and the strongest of
+those still lives inside this package.
+
+### What is not done
+
+**The forward coefficients have never been compared against Elk's own.** Nothing in
+`vendor/elk/src/` writes `apwalm` (checked), so that needs a new export — patch 0013 in
+the tracked series, which under CLAUDE.md's core constraint is a commitment to
+maintaining it across Elk upgrades. The matching condition is a strong substitute, being
+the definition rather than a comparison, but it cannot catch a misreading shared between
+this transcription and the check: the layout of $D$ (rows = derivative order, columns =
+APW order $j$), and `apwfr`'s own normalisation, are assumed rather than verified. Both
+are Phase 1's `apwfr` work.
+
+Also deliberately out of scope: differentiating with respect to the **lattice** rather
+than the position. That moves ${\bf G+p}$ itself and so does need the Bessel derivatives
+in anger — they are implemented and SciPy-checked above, but the stress path is Phase 4.
