@@ -1242,7 +1242,7 @@ Phase 0e asks for production shapes that this machine cannot hold.
 
 | Item | What it settles | Status |
 |---|---|---|
-| 0b | safe-$K$ projector rule: does the $(f_i-f_j)/(\lambda_i-\lambda_j)$ `custom_jvp` fix the reassembly jitter, and what happens in the padding block | **done at synthetic $S$ — `docs/jax_port_phase0.md`**. Item 0b(ii)'s *real* Cholesky-reduced LAPW overlap is now **measured** via patch 0013: $\kappa(O)\approx5\times10^3$ for bulk Si at a standard cutoff, so the tolerance is set — but the rule itself has still only been exercised at synthetic $S$ |
+| 0b | safe-$K$ projector rule: does the $(f_i-f_j)/(\lambda_i-\lambda_j)$ `custom_jvp` fix the reassembly jitter, and what happens in the padding block | **done, and now closed against REAL matrices** by Phase 1f — the rule is exercised on Elk's own Cholesky-reduced $\tilde H$ at a symmetry multiplet, with $\kappa(O)\approx5\times10^3$ measured per run rather than prescribed |
 | 0a | reverse-mode implicit diff (`custom_vjp` + GMRES) through an SCF fixed point whose matvec passes through `eigh` at a multiplet | **done — it works**, ≤1e-14 against a dense IFT reference on four spectra including an exactly degenerate one; the naive rule fails on the same machinery |
 | 0a′ | the same at second order — decides the full port over §9.2's hybrid | **done — it works**, via `projector.sign_projector` (matrix sign by Newton-Schulz: no eigensolve, so differentiable to any order); `grad(grad)` through the fixed point agrees with central FD to 1.2e-9 where the `eigh`-based rule gives `NaN`. Use `grad(grad)`, never `jax.hessian` — a `custom_vjp` cannot be forward-differentiated |
 | 0c | `jax.jvp(match)` against `dmatch.f90`'s analytic $d(\texttt{apwalm})/dr$ | **done — exact to 7e-16** in both modes (`src/elkjax/lapw.py` transcribes `match`, `gengkvec`, `gensfacgp`, `genylmv`, `sbessel`), **and the forward half is now closed against Elk's own `apwalm`** by patch 0013 (§33): 1.9e-15 in `match`'s `omax==1` division branch and 8.0e-13 in its general linear-solve branch, the latter reachable only through a generated `apword=2` species file since every species file Elk ships sets `apword=1` |
@@ -1312,14 +1312,62 @@ matrices inherit `match`'s ill-conditioned general branch (1.3e-12 vs 9.8e-15) b
 SPECTRUM does not (3.8e-15 either way) — a near-null-space rotation inside the APW order
 space, which eigenvalues are blind to.
 
+**The eigensolve is now wired to the safe-$K$ projector rule, and 0b is closed against
+real matrices** (§1f, `src/elkjax/phase1_projector.py`,
+`tests/test_calculation_lapw_projector.py`). `hamiltonian.py` gained `cholesky_reduce`,
+`projector_tolerance` ($\epsilon\,\kappa(O)\,\lVert\tilde H\rVert$, measured per run
+from a dense `eigvalsh` — §8b's Cholesky estimate is uninformative), `occupied_window`
+(the host-side refusal) and `occupied_projector`. Bulk Si at $\Gamma$ supplies the
+disputed configuration by SYMMETRY rather than by construction: the $\Gamma_{25'}$
+triplet inside a window whose boundary is open by 0.093 Ha. Measured there, the naive
+route is wrong by 3.9e-1 in forward mode and returns `NaN` in reverse, against 2.2e-11
+for the safe one; at a generic $k$ on the same ground state both agree to 2e-13, which
+is what makes it a measurement of the rule rather than of the fixture. The naive error
+tracks $1/\delta\lambda$ across three fixtures spanning ten decades of splitting
+(3.8e-13 at 2.6e-2 Ha, 1.1e-10 at 1.9e-5 Ha, total failure at 5.1e-15 Ha). The
+projector reproduces Elk's own occupied subspace — as $YY^\dagger$ with
+$Y=L^\dagger C$, a projector comparison because `evecfv` is arbitrary inside the
+triplet — to 5e-14, six orders inside the study's own $10^{-8}$ criterion.
+
+**Three findings from doing it.** (i) The tolerance is a *resolution* floor, not a
+symmetry statement: Elk's matrices split the $\Gamma_{25'}$ triplet **unevenly**,
+5.1e-15 Ha for one pair and 3.53e-9 Ha for the other, the second 68x ABOVE the
+5.21e-11 Ha tolerance, so cutting the triplet at `nocc=3` is refused while cutting the
+SAME triplet at `nocc=2` is accepted and returns a finite derivative of a subspace that
+is not physically separable. The refusal is necessary, not sufficient — window the whole
+degenerate group, as §13 already does for Berry curvature. Tightening `epspot` 1e-6 →
+1e-9 leaves that 3.53e-9 identical to twelve digits, so it is not SCF convergence;
+source open. (ii) **`soc_scale` cannot move the first-variational spectrum at all** —
+`socfr` enters only `eveqnsv`, with zero occurrences in `hmlfv`/`olpfv`/`hmlaa`/
+`hmlalo`/`hmllolo`/`olpaa`/`olpalo`/`olplolo`/`eveqnfv`/`hmlrad`/`olprad`
+(grep-verified) — so the study's adversarial sweep is "refuse always", not a threshold
+crossing, and is withdrawn as written; its content is delivered by cutting a real
+multiplet instead. (iii) **The $k$-tangent is `NaN` at $\Gamma$** while the value there
+is exact — see the next paragraph.
+
+**The Phase 1 blocker is now a removable pole in `match`, and there are two of them.**
+At any basis function with $\mathbf G+\mathbf k$ on the $z$-axis, $Y_{\ell m}(\hat v)$
+has no derivative (the direction is undefined) and $\lvert\mathbf G+\mathbf k\rvert$ is
+$\sqrt\cdot$ at zero; fixing only the first leaves the second, which is invisible until
+it is. $\mathbf G=0$ is in every basis, so this is every reciprocal-lattice point, and
+in a slab cell $\mathbf G=(0,0,\pm2\pi/c)$ is too, so it is the **entire $k_z=0$
+plane** — all of a 2D material's physics, the $K$ point included. Combined with (i),
+the safe-$K$ rule and the $k$-derivative are currently usable in DISJOINT places, since
+multiplets live at high-symmetry points. Both poles are removable:
+$j_\ell(gR)Y_{\ell m}(\hat g)$ is a regular solid harmonic (a polynomial in the
+Cartesian components) times an even series in $g^2$, so running
+`spherical_harmonics`' own recursion with $\cos\theta\to z$,
+$\sin\theta e^{i\phi}\to x+iy$, $\beta\to\beta r^2$ gives $r^\ell Y_{\ell m}$ exactly,
+and pairing it with $j_\ell^{(i_o)}(x)/x^{\ell-i_o}$ means neither $\hat g$ nor
+$\lvert g\rvert$ is ever formed. Two tests pin the broken behaviour and must FLIP
+rather than be deleted.
+
 **Still open in Phase 1**: the radial integrals are inputs, not outputs (building them
 needs `genapwfr`/`genlofr`/`hmlrad`/`olprad` and through `vsmt` the muffin-tin potential
 — Phase 2); the POSITION derivative $d\varepsilon_j/d\mathbf R$ on displaced h-BN, which
-is harder than the $k$ one because moving an atom moves the radial integrals; the
-adversarial `soc_scale` sweep with a *required* refusal (0b(ii): must extend below
-`soc_scale = 1`); and the negative test at an exact degeneracy. Nothing here is wired to
-`projector.py`'s safe-$K$ rule or to a per-run $\kappa(O)$, so at a multiplet this
-pipeline fails exactly the way 0b describes.
+is harder than the $k$ one because moving an atom moves the radial integrals; smeared
+occupations (everything in §1f is a hard integer window); and second derivatives on a
+real LAPW matrix, which need `sign_projector` rather than the first-order rule.
 
 **$\kappa(O)$ for a real LAPW overlap is measured, and the cheap estimate is
 useless.** Patch 0013 (§33) supplies real $H$ and $O$; `python3 -m elkjax.phase0b_overlap`

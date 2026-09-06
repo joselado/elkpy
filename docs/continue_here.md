@@ -7,12 +7,19 @@ pre-merge `master`, and is now several commits behind. The `jax-port` branch sti
 exists and points at an older commit; deleting it is safe.
 
 **Phase 0 is closed and Phase 1 has started.** `hmlfv`/`olpfv` are transcribed and
-checked against Elk element-wise (`docs/jax_port_phase1.md`, patch 0014); the only open
-Phase 0 item is still 0d's timing, which needs a GPU.
+checked against Elk element-wise (`docs/jax_port_phase1.md`, patch 0014), the assembly
+is differentiable in $k$, and the eigensolve is now wired to the safe-$K$ projector rule
+and measured at a real multiplet (§1f). The only open Phase 0 item is still 0d's timing,
+which needs a GPU. **The Phase 1 blocker is now a removable pole in `match`** — the
+$k$-tangent is `NaN` at $\Gamma$ and across every $k_z=0$ plane; see §3's ranked item 2.
 
 ```
-NEW      Assemble the LAPW Hamiltonian and overlap in JAX      src/elkjax/hamiltonian.py
-NEW      (docs)                                                patches/0014, docs/jax_port_phase1.md
+NEW      Wire the eigensolve to the safe-K projector rule      src/elkjax/phase1_projector.py
+8bf83b5  Give the continuation document a single ranked entry point
+7b2c157  Write up the k-derivative and the Hellmann-Feynman gap it measured
+a37a726  Differentiate the LAPW spectrum in k                  elkjax/hamiltonian.py
+a3a6906  Document the LAPW assembly
+6118322  Assemble the LAPW Hamiltonian and overlap in JAX      patches/0014
 2ae2528  Record the merge in the continuation document
 4be2933  Correct the soc_scale shortfall to a range
 096d2eb  Close the kappa table with h-BN at the higher cutoff
@@ -194,7 +201,8 @@ check it before relying on the verdict, since the verdict rests on it.
 **The honest qualification, and it is not small: nothing in Phase 0 has touched an LAPW
 Hamiltonian.** 0a/0a′ pass on a toy with an exactly degenerate spectrum, 0b's overlaps
 are synthetic with a prescribed κ(S), and 0c's radial derivative matrices are inputs
-rather than Elk's own `apwfr`.
+rather than Elk's own `apwfr`. **0b is now closed against real matrices** by Phase 1f
+(§1f of `docs/jax_port_phase1.md`); 0a/0a′ are not.
 
 ### Three findings worth carrying into Phase 1
 
@@ -230,21 +238,51 @@ The open items below are a mix of done and outstanding; this is the ranked entry
 point. **Phase 2 is not the next step** — it is a large piece of work (density,
 Weinert Poisson, XC) and two Phase 1 items are reachable without it.
 
-1. **Wire the Cholesky-reduced eigensolve to the safe-$K$ projector rule, on real
-   matrices.** `first_variational_eigenvalues` currently closes with a plain
-   `jnp.linalg.eigvalsh`, so at a multiplet it fails exactly the way item 0b
-   describes. `projector.py`'s rule exists and works — but **only ever at synthetic
-   $S$ with a prescribed $\kappa$**, which §3's own honest qualification flags as the
-   biggest hole left in Phase 0. Everything needed to close that is now in place: real
-   $H$ and $O$ at any $k$, a real $\kappa(O)$ from `elkjax.phase0b_overlap`, and the
-   tolerance $\epsilon\,\kappa\,\lVert L^{-1}HL^{-\dagger}\rVert$ (note the reduced
-   norm, not $\lVert H\rVert$). Self-contained, needs no new Fortran and no Phase 2.
-2. **Then the adversarial `soc_scale` sweep and the *required* refusal.** It depends
-   on (1), because the refusal criterion is a property of the projector rule rather
-   than of the assembly. Remember 0b(ii)'s knock-on: the study's 3000 → 3 sweep stops
-   three to six orders of magnitude above the gap where refusal is meant to fire, so
-   it must be extended below `soc_scale = 1`.
-3. **Not yet: the position derivative.** It is the study's stated Phase 1 gradient
+1. **~~Wire the Cholesky-reduced eigensolve to the safe-$K$ projector rule.~~ DONE**
+   (`docs/jax_port_phase1.md` §1f). The rule is needed and it works on Elk's own
+   matrices: at bulk Si's $\Gamma_{25'}$ triplet the naive route is wrong by 3.9e-1 in
+   forward mode and returns `NaN` in reverse, against 2.2e-11 for the safe one; at a
+   generic $k$ both agree to 2e-13, which is what makes it a measurement of the rule
+   rather than of the fixture. The refusal is in (`occupied_window`), and the
+   projector reproduces Elk's own occupied subspace to 5e-14.
+
+2. **Remove the two poles in `elkjax.lapw.match`.** This is now the blocker, and it
+   was found by (1): the $k$-tangent of the assembly is `NaN` at $\Gamma$ — and at
+   **every $k_z=0$ point of a slab cell**, since $\mathbf G=(0,0,\pm2\pi/c)$ is then in
+   the basis — while the value there is exact. Two independent causes, both at a basis
+   function with $\mathbf G+\mathbf k$ on the $z$-axis: $Y_{\ell m}(\hat v)$ has no
+   derivative where the direction is undefined, and $\lvert\mathbf G+\mathbf k\rvert$
+   is $\sqrt\cdot$ at zero. **Fixing only the first leaves the second**, and the second
+   is invisible until it is. Both are removable — $j_\ell(gR)Y_{\ell m}(\hat g)$ is a
+   regular solid harmonic times an even series in $g^2$ — by running
+   `spherical_harmonics`' own recursion with $\cos\theta\to z$,
+   $\sin\theta e^{i\phi}\to x+iy$, $\beta\to\beta r^2$ (which yields
+   $r^\ell Y_{\ell m}$ exactly) and pairing it with $j_\ell^{(i_o)}(x)/x^{\ell-i_o}$
+   carrying its own small-$x$ series. Keep `spherical_harmonics` as the `genylmv`
+   transcription the 0c tests check; add `solid_harmonics` beside it. The checks that
+   must go with it: `solid/r^l == spherical` off-axis; the existing element-wise
+   `apwalm` comparison against Elk still green **and repeated at $\Gamma$**; the
+   `dmatch` identity untouched; `jvp(match)` in $k$ at $\Gamma$ finite and agreeing
+   with central FD of the matrix elements. Two tests currently pin the broken
+   behaviour and must flip rather than be deleted
+   (`test_calculation_lapw_projector.py::test_the_k_derivative_is_not_available_at_gamma`
+   and the $z$-axis pin in `test_jax_lapw.py`).
+
+   Why it matters more than it looks: multiplets live at high-symmetry points, so
+   after (1) the safe-$K$ rule and the $k$-derivative are usable in **disjoint**
+   places.
+
+3. **~~The adversarial `soc_scale` sweep.~~ WITHDRAWN as written** — `soc_scale`
+   cannot move the first-variational spectrum at all. `socfr` enters only
+   `eveqnsv`; it appears zero times in `hmlfv`/`olpfv`/`hmlaa`/`hmlalo`/`hmllolo`/
+   `olpaa`/`olpalo`/`olplolo`/`eveqnfv`/`hmlrad`/`olprad` (grep-verified). The
+   first-variational Dirac point is therefore exactly degenerate at every scale and
+   the sweep is "refuse always", not a threshold crossing. Its actual content — a
+   refusal that is *required* to fire at a stated threshold — is delivered in §1f by
+   cutting Si's $\Gamma_{25'}$ triplet instead, with no extra ground state.
+   Reinstating a continuous sweep needs the second-variational step.
+
+4. **Not yet: the position derivative.** It is the study's stated Phase 1 gradient
    criterion, but moving an atom moves the muffin-tin potential and hence the radial
    integrals, which `hamiltonian.py` imports — so an honest $d\varepsilon/d\mathbf R$
    needs Phase 2's `hmlrad`/`olprad`, not just AD plumbing. The $k$-derivative was
@@ -293,10 +331,17 @@ as the control that separates an AD bug from a real basis effect.
   needs a $k$-independent basis and LAPW's is not one. So `genpmatk` is not a
   machine-precision oracle for a band velocity (this is why §22's own test needs
   `rel=2e-2`), and the remaining gradient criteria must FD the same code path.
+- **~~Nothing here is wired to `projector.py`'s safe-$K$ rule or a per-run
+  $\kappa(O)$.~~ DONE** (§1f). Two findings from doing it. A symmetry-required
+  degeneracy comes out of Elk's assembly split by anywhere between $10^{-15}$ and
+  $10^{-5}$ Ha — Si's $\Gamma_{25'}$ triplet splits *unevenly*, 5.1e-15 for one pair and
+  3.53e-9 for the other, the second being 68x **above** the tolerance — so the refusal
+  detects unresolvability, not symmetry, and is necessary but not sufficient; window the
+  whole degenerate group as `docs/design.md` §13 already does for Berry curvature. And
+  tightening `epspot` 1e-6 → 1e-9 leaves that 3.53e-9 identical to twelve digits, so it
+  is not SCF convergence — source still open.
 - **The POSITION derivative is still open**, and is harder than the $k$ one: moving an
   atom moves the muffin-tin potential and hence the radial integrals, which are imported.
-  So is the adversarial `soc_scale` sweep, and the negative test at a degeneracy —
-  nothing here is wired to `projector.py`'s safe-$K$ rule or a per-run $\kappa(O)$.
 - **0d's timing needs a GPU instance.** Do not fake it on CPU; the study's own 1.03x CPU
   number settles nothing. The memory half is already answered and points the other way.
   **This is now the only open Phase 0 item.**
@@ -337,7 +382,10 @@ lapw.py        match, gengkvec, gensfacgp, genylmv, sbessel
 phase0a/b/c/e  the experiment drivers, one per item
 phase0b_overlap.py  item 0b(ii): kappa(O) on real Elk overlaps. The one module here
                that imports elkpy and needs no JAX at all
-hamiltonian.py Phase 1a: olpfv/hmlfv, the muffin-tin half of H and O
+hamiltonian.py Phase 1a: olpfv/hmlfv, the muffin-tin half of H and O; the
+               k-dependent assembly; the Cholesky reduction, the per-run
+               tolerance, the occupied projector and its refusal
+phase1_projector.py  item 1f: the rule wired to the eigensolve, on real matrices
 ```
 
 ```bash
