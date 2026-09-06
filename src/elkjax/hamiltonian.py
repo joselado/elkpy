@@ -371,3 +371,130 @@ def assemble_from_export(export):
 
     return (muffin_tin_hamiltonian(export) + _pad(export["hmat_istl"]),
             muffin_tin_overlap(export) + _pad(export["omat_istl"]))
+
+
+# ---------------------------------------------------------------------------
+# The k-dependent pipeline
+# ---------------------------------------------------------------------------
+#
+# Everything above takes `apwalm` from the export and so is frozen at one
+# k-point.  The functions below rebuild it with `elkjax.lapw.match` instead,
+# which makes the whole assembly a differentiable function of k -- the first
+# thing in the port that is.  Two observations make it possible without any
+# new Fortran:
+#
+#   * The overlap's interstitial block IS the characteristic function,
+#     O^I_ij = Theta(G_i - G_j), and Theta does not depend on k at all.
+#   * The Hamiltonian's is
+#     H^I_ij = V_s(G_i - G_j) + 1/2 (G_i+k).(G_j+k) Theta(G_i - G_j),
+#     so V_s -- the one ingredient that belongs to Phase 2 -- can be RECOVERED
+#     as a matrix from the two exported blocks at the exported k, and then
+#     held fixed while k varies.  No Fourier index mapping is needed: the
+#     subtraction is elementwise in (i, j).
+#
+# The radial integrals and the Gaunt array are k-independent, so the only
+# k-dependence left is through `match` (item 0c, already checked against Elk
+# element-wise) and that explicit kinetic term.
+
+
+def interstitial_potential_matrix(export):
+    """V_s(G_i - G_j) as a matrix, recovered from the exported blocks.
+
+    ``hmlistl`` computes ``vsig(ig) + (G_i+k).(G_j+k)/2 * cfunig(ig)`` and
+    ``olpistl`` computes ``cfunig(ig)`` for the same ``ig``, so subtracting
+    the second (scaled) from the first leaves ``vsig`` with no need to know
+    which pair (i, j) maps to which G-vector difference.
+
+    This is a way of holding a Phase 2 quantity fixed, not of computing it:
+    :math:`V_s` is the interstitial Kohn-Sham potential and follows the
+    density.  It is exactly right for varying k at a fixed ground state,
+    which is what a band velocity is.
+    """
+    ngp = int(export["ngp"])
+    gk = np.asarray(export["vgpc"])[:, :ngp]                 # (3, ngp), G + k0
+    kinetic = 0.5 * (gk.T @ gk)
+    return np.asarray(export["hmat_istl"]) - kinetic * np.asarray(
+        export["omat_istl"])
+
+
+def _reciprocal_vectors(export):
+    """The pure G-vectors of the basis, i.e. the exported G+k minus k."""
+    ngp = int(export["ngp"])
+    return (np.asarray(export["vgpc"])[:, :ngp]
+            - np.asarray(export["vkc"])[:, None]).T            # (ngp, 3)
+
+
+def matching_coefficients(export, vgkc):
+    """`apwalm` at an arbitrary k, in Elk's own array layout.
+
+    Rebuilds it through `elkjax.lapw.match` -- verified element-wise against
+    Elk's array by patch 0013 -- rather than taking the exported one, so the
+    result is differentiable in k.  The G-vector SET is held fixed: it is a
+    property of the cutoff and changes discontinuously with k, which is not a
+    problem for a derivative at a point but does mean this is only valid for
+    k near the exported one.
+    """
+    from . import lapw
+
+    gkc = jnp.linalg.norm(vgkc, axis=1)
+    idxis = np.asarray(export["idxis"]) - 1
+    atposc = np.asarray(export["atposc"])
+    rmt = np.asarray(export["rmt"])
+    omega = float(export["omega"])
+    lmaxapw = int(export["lmaxapw"])
+    per_atom = []
+    for ias in range(int(export["natmtot"])):
+        dmat = [jnp.asarray(m, dtype=complex) for m in export["dmat"][ias]]
+        per_atom.append(lapw.match(
+            lmaxapw, vgkc, gkc, jnp.asarray(atposc[:, ias]), dmat,
+            float(rmt[int(idxis[ias])]), omega))
+    return jnp.stack(per_atom, axis=-1)     # (ngp, ordmax, lmmaxapw, natmtot)
+
+
+def eigenproblem_at(export, kc, vsig=None):
+    """(H, O) at an arbitrary Cartesian k-point, built entirely here.
+
+    Only the ground state is imported: the radial integrals, the Gaunt array,
+    the recovered :math:`V_s` and the characteristic function are all
+    k-independent and come from the export, while `apwalm` and the kinetic
+    term are rebuilt.  At ``kc = export["vkc"]`` this must reproduce Elk's own
+    matrices, which is the forward check that makes the derivative meaningful.
+    """
+    if vsig is None:
+        vsig = interstitial_potential_matrix(export)
+    gvec = jnp.asarray(_reciprocal_vectors(export))
+    vgkc = gvec + jnp.asarray(kc)[None, :]
+    apwalm = matching_coefficients(export, vgkc)
+    local = dict(export)
+    local["apwalm"] = apwalm
+    kinetic = 0.5 * (vgkc @ vgkc.T)
+    istl_h = jnp.asarray(vsig) + kinetic * jnp.asarray(export["omat_istl"])
+    nmatp, ngp = int(export["nmatp"]), int(export["ngp"])
+
+    def _pad(block):
+        return jnp.zeros((nmatp, nmatp), dtype=complex).at[:ngp, :ngp].add(block)
+
+    return (muffin_tin_hamiltonian(local) + _pad(istl_h),
+            muffin_tin_overlap(local) + _pad(jnp.asarray(export["omat_istl"])))
+
+
+def first_variational_eigenvalues(export, kc, vsig=None):
+    """The first-variational spectrum at an arbitrary Cartesian k.
+
+    The generalised problem :math:`Hv = \\varepsilon Ov` is reduced to a
+    standard one by Cholesky, :math:`\\tilde H = L^{-1}HL^{-\\dagger}` with
+    :math:`O = LL^\\dagger` -- the same reduction Elk's own `eveqnfv` makes
+    through LAPACK's ``zhegv``, and the one whose conditioning
+    :math:`\\kappa(O)` Phase 0b(ii) measured (about 5e3 at a standard cutoff,
+    so the safe-K tolerance must be recomputed per run rather than assumed).
+
+    Differentiable in ``kc``.  An INDIVIDUAL eigenvalue's derivative is only
+    meaningful where that eigenvalue is non-degenerate -- at a multiplet
+    ``eigh``'s own derivative rule divides by a vanishing gap (Phase 0b) and
+    the sorted branch is not differentiable at all -- so a caller wanting a
+    degenerate group must differentiate its trace.
+    """
+    h, o = eigenproblem_at(export, kc, vsig=vsig)
+    chol = jnp.linalg.cholesky(o)
+    reduced = jnp.linalg.solve(chol, jnp.linalg.solve(chol, h).conj().T).conj().T
+    return jnp.linalg.eigvalsh(reduced)

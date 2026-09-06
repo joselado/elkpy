@@ -27,6 +27,8 @@ Three fixtures, and each one catches something the others cannot:
 Skipped without the elk binary, and without jax.
 """
 
+import importlib.util
+
 import numpy as np
 import pytest
 
@@ -36,9 +38,8 @@ from elkpy.structure import Structure
 pytestmark = [
     pytest.mark.skipif(not config.default_elk_binary().is_file(),
                        reason="elk binary not built; see docs/design.md #8"),
-    pytest.mark.skipif(
-        pytest.importorskip("importlib").util.find_spec("jax") is None,
-        reason="jax not installed; pip install -e .[jax]"),
+    pytest.mark.skipif(importlib.util.find_spec("jax") is None,
+                       reason="jax not installed; pip install -e .[jax]"),
 ]
 
 SI_AVEC = [(5.13, 5.13, 0.00), (5.13, 0.00, 5.13), (0.00, 5.13, 5.13)]
@@ -81,13 +82,21 @@ def _module_tmp(tmp_path_factory):
 
 
 def _export(structure, workdir, sppath=None, **kwargs):
+    """The LAPW export at KPOINT, plus Elk's own momentum matrix there.
+
+    `pmat` rides along under a key of its own because it is the independent
+    Fortran reference for the k-derivative below -- genpmatk, which shares no
+    code with hmlfv/olpfv.
+    """
     from elkpy.calculation import Calculation
     calc = Calculation(structure=structure, workdir=workdir, **kwargs)
     if sppath is not None:
         calc.sppath = sppath
     calc.ensure_ground_state()
     with calc.eigenstate_session() as session:
-        return session.lapw_problem(KPOINT)
+        export = session.lapw_problem(KPOINT)
+    export["_pmat"] = np.asarray(calc.get_momentum_matrix(KPOINT).pmat)
+    return export
 
 
 @pytest.fixture(scope="module")
@@ -205,3 +214,131 @@ def test_hbn_nitrogen_has_two_l0_local_orbitals(exports):
     assert worst > 1e-4, (
         f"hlolo's l2=0 block is symmetric to {worst:.1e}; the ordering this "
         "test exists to pin would then be unobservable")
+
+
+
+# ---------------------------------------------------------------------------
+# The k-dependent pipeline
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_k_pipeline_reproduces_elk_at_the_exported_point(case, exports):
+    """H, O and the spectrum rebuilt as a FUNCTION of k, evaluated back at
+    the exported k.
+
+    Everything k-dependent is rebuilt here -- `apwalm` through
+    `elkjax.lapw.match` and the interstitial kinetic term -- so this is a much
+    stronger statement than the frozen-apwalm assembly above: it also pins
+    the recovery of V_s from the two exported interstitial blocks, and the
+    Cholesky reduction.
+    """
+    from elkjax import hamiltonian as ham
+
+    export = exports[case]
+    kc = np.asarray(export["vkc"])
+    h, o = (np.asarray(m) for m in ham.eigenproblem_at(export, kc))
+    # Looser than TOL, and only at apword=2: `match`'s general branch solves a
+    # 2x2 whose rows are u(R) and u'(R), whose magnitudes differ by orders, so
+    # it is far worse conditioned than the omax==1 division. Phase 0c measured
+    # exactly that -- 1.9e-15 against Elk's apwalm in the fast branch, 8.0e-13
+    # in this one -- and the matrices inherit it. Measured here: 9.8e-15 (Si,
+    # apword=1), 3.3e-14 (h-BN), 1.3e-12 (Si, apword=2).
+    matrix_tol = 1e-11 if int(np.max(export["apword"])) > 1 else TOL
+    assert np.abs(h - export["hmat"]).max() < matrix_tol
+    assert np.abs(o - export["omat"]).max() < matrix_tol
+    # The SPECTRUM does not inherit it: 3.8e-15 even at apword=2, because the
+    # conditioning shows up as a near-null-space rotation inside the APW order
+    # space, which the eigenvalues are blind to.
+    evalfv = np.asarray(export["evalfv"])
+    w = np.asarray(ham.first_variational_eigenvalues(export, kc))
+    assert np.abs(w[:len(evalfv)] - evalfv).max() < 1e-13
+
+
+def test_k_derivative_matches_finite_differences_of_itself(exports):
+    """jax.grad through match, the assembly, the Cholesky and eigvalsh.
+
+    Against central differences of the SAME function, so this tests the AD
+    plumbing and nothing else -- no physics reference, no convention. That
+    separation is deliberate: the comparison against Elk's own momentum
+    matrix below does NOT agree to machine precision, and without this
+    control there would be no way to tell an AD bug from the real effect.
+
+    Bulk Si at a generic k has no degeneracy in the low bands (checked), so
+    individual eigenvalues are differentiable; at a multiplet neither the
+    sorted branch nor eigh's own derivative rule would be (Phase 0b).
+    """
+    import jax
+    import jax.numpy as jnp
+    from elkjax import hamiltonian as ham
+
+    export = exports["si_apword1"]
+    kc = np.asarray(export["vkc"])
+    vsig = ham.interstitial_potential_matrix(export)
+    w = np.asarray(ham.first_variational_eigenvalues(export, kc, vsig=vsig))
+    step = 1e-5
+    for n in (0, 3, 7):
+        assert min(w[n] - w[n - 1] if n else np.inf, w[n + 1] - w[n]) > 1e-3
+        grad = np.asarray(jax.grad(
+            lambda k: ham.first_variational_eigenvalues(export, k, vsig=vsig)[n]
+        )(jnp.asarray(kc)))
+        fd = np.array([
+            (float(ham.first_variational_eigenvalues(
+                export, kc + np.eye(3)[a] * step, vsig=vsig)[n])
+             - float(ham.first_variational_eigenvalues(
+                 export, kc - np.eye(3)[a] * step, vsig=vsig)[n])) / (2 * step)
+            for a in range(3)])
+        assert np.abs(grad - fd).max() < 1e-7
+
+
+def _velocity_gap(export, bands=(0, 3, 7)):
+    """max relative difference between d(eps)/dk from AD and Elk's p_nn."""
+    import jax
+    import jax.numpy as jnp
+    from elkjax import hamiltonian as ham
+
+    kc = np.asarray(export["vkc"])
+    vsig = ham.interstitial_potential_matrix(export)
+    pmat = export["_pmat"]
+    out = {}
+    for n in bands:
+        grad = np.asarray(jax.grad(
+            lambda k: ham.first_variational_eigenvalues(export, k, vsig=vsig)[n]
+        )(jnp.asarray(kc)))
+        p = np.array([pmat[a, n, n].real for a in range(3)])
+        out[n] = np.abs(grad - p).max() / np.abs(p).max()
+    return out
+
+
+def test_k_derivative_and_elks_momentum_differ_by_muffin_tin_incompleteness(
+        exports):
+    """d(eps)/dk and <p> are NOT the same object in a finite LAPW basis.
+
+    The Hellmann-Feynman identity v_nn = d(eps_n)/dk holds for a complete,
+    k-INDEPENDENT basis. The LAPW basis is neither: H and O both depend on k
+    (through `match`), so what jax.grad returns is
+    v^dag (dH/dk - eps dO/dk) v, while genpmatk returns <psi|-i grad|psi>.
+
+    Measured on bulk Si: they agree in sign and to 0.2-1.4%, and the gap is
+    FLAT in rgkmax (2.336e-3, 2.339e-3, 2.340e-3 at 7, 8, 9 for band 0, while
+    the eigenvalue itself converges), so it is not the plane-wave cutoff. It
+    is the muffin-tin linearisation -- raising `apword` from 1 to 2, i.e.
+    augmenting with du/dE as well as u, cuts it by up to 4x. That is what
+    this asserts: the direction of the effect, not a tolerance.
+
+    Practical consequence for the port, and for anyone using elkpy's own
+    get_momentum_matrix as a band velocity: genpmatk is not a
+    machine-precision reference for a k-derivative, which is why
+    tests/test_calculation_momentum.py's own Hellmann-Feynman check needs
+    rel=2e-2.
+    """
+    plain = _velocity_gap(exports["si_apword1"])
+    augmented = _velocity_gap(exports["si_apword2"])
+    for n, gap in plain.items():
+        assert gap < 5e-2, f"band {n}: {gap:.2e} is too large to be incompleteness"
+        assert gap > 1e-4, (
+            f"band {n}: {gap:.2e} -- if the two agreed to machine precision "
+            "the premise of this test would be wrong, not merely its bound")
+    assert augmented[7] < 0.5 * plain[7], (
+        f"band 7: apword=2 gave {augmented[7]:.2e} against apword=1's "
+        f"{plain[7]:.2e}; the muffin-tin attribution rests on this shrinking")
