@@ -398,7 +398,14 @@ abstract shapes, so the 26.8 GiB this machine cannot hold was never allocated; p
 for the whole sweep is 1.4 GB. The shapes, dtype, loop structure and op-count-inflating
 constructs are the real ones; the *arithmetic* inside them is a stand-in, since `match`,
 Weinert and XC are Phase 1 and 2 work. These are therefore a lower bound on the real
-step's cost — the useful direction for a "is this a wall?" question.
+step's cost — the useful direction for a "is this a wall?" question — and the bound is
+loose in exactly the direction §5's own design pushes, since §5 puts
+`apwfr`/`lofr`/`socfr` *inside* the fixed point, so a real step also carries the radial
+ODE and the density/potential pass. One factor can be measured rather than guessed:
+compiling `jax.grad` of the step, the unit a Phase 3 gradient actually builds, costs
+0.45 s against 0.36 s undifferentiated at $(800,4)$, 1.67 s against 1.57 s with 32 local
+orbitals, and 0.51 s at the full $(3000,100)$ with temporaries unchanged at 0.411 GiB.
+Differentiation is a ~1.2x factor here, not a 20x one.
 
 ### Compile time is flat in the shapes
 
@@ -446,11 +453,15 @@ At one fixed shape ($n_{\rm mat}=800$, $n_{\bf k}=4$), varying only how much is 
 | 256-pass corrector | 16.47 | 0.029 |
 | `lax.scan` over 2800 radial points instead of 700 | 0.37 | 0.029 |
 
-The growth is roughly **quadratic in the unrolled op count** — a 4x longer Gram-Schmidt
-costs 17.6x (exponent 2.07), a 4x longer corrector 12.9x (exponent 1.85) — and it is
-invisible in the memory column, so it cannot be traded against buffers. Meanwhile
-quadrupling a `lax.scan`'s trip count costs **nothing**, because a scan is a loop in the
-HLO rather than a tape.
+Two factors are being conflated if this is read as one exponent, and the corrector is
+what separates them. Modified Gram-Schmidt over $n_{\rm lo}$ columns emits
+$O(n_{\rm lo}^2)$ inner bodies by construction — 36 at 8 columns, 8256 at 128 — so its
+apparent exponent 2.07 in $n_{\rm lo}$ is mostly the *op count itself* growing
+quadratically. The corrector is linear in its pass count, and it gives 1.28 s → 16.47 s
+for 64 → 256 passes: **compile time is superlinear, exponent ≈1.85, in HLO op count**.
+Neither shows up in the memory column, so op count cannot be traded against buffers.
+Meanwhile quadrupling a `lax.scan`'s trip count costs **nothing**, because a scan is a
+loop in the HLO rather than a tape.
 
 The design rule follows directly, and it is the useful output of this item: **`scan`
 every repeated structure and unroll only what genuinely must be**. Elk's `nlotot` runs to

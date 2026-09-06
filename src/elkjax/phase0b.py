@@ -160,7 +160,10 @@ def experiment_c(n=6, nocc=3, jitter=1e-16, nrepeat=6):
     """Reassembly jitter: perturb :math:`H` at 1e-16 and watch the gradient move.
 
     The true answer moves by ~1e-16; anything larger is the AD route amplifying
-    rounding.  Study §8(b) reports 159% spread naive, 4.3e-15 with the rule.
+    rounding.  Study §8(b) reports 159% spread naive, 4.3e-15 with the rule;
+    measured here, 64%.  The naive figure is a rounding accident and is not stable
+    across builds -- only its order of magnitude means anything, which is why the
+    test asserts a loose bound rather than the number.
     """
     evals = np.array([-2.0, 1.0, 1.0, 3.0, 4.0, 5.0])
     m = np.diag(np.arange(float(n))).astype(complex)

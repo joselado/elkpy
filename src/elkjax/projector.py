@@ -49,11 +49,14 @@ Second-order work needs the rule made recursive, or forward-over-forward.
 
 import functools
 
+import numpy as np
+
 import jax
 import jax.numpy as jnp
 
 __all__ = [
     "sign_projector",
+    "check_sign_window",
     "divided_difference_kernel",
     "hard_window_projector",
     "naive_hard_window_projector",
@@ -192,11 +195,20 @@ def sign_projector(h, nocc, *, steps=30, mu=None):
     ``stop_gradient``-ed too.
 
     Cost and limits.  Convergence needs roughly
-    :math:`\log(\|H\|/\Delta)/\log(3/2)` iterations for a gap :math:`\Delta`, so a
-    hard case wants more ``steps``; the iteration is unrolled, which is exactly the tape
-    the study warns about at production shapes.  **Hard windows only** — smeared
-    occupations would need a Chebyshev expansion of the Fermi function instead, which is
-    a different piece of work.
+    :math:`\log(\|H-\mu\|_2/\Delta)/\log(3/2)` iterations for a gap :math:`\Delta`,
+    and for an all-electron Hamiltonian **the numerator is set by the deepest core
+    level, not by the valence bandwidth** -- with core states 1000+ Ha below
+    :math:`\mu` and a 1 eV gap that ratio is :math:`\sim3\times10^4`, so ~25-30
+    steps.  Keeping the core out of the second-variational block, as Elk does, cuts
+    it to ~10.  The iteration is unrolled, which is exactly the tape the study warns
+    about at production shapes.
+
+    Two limits.  **Hard windows only** -- smeared occupations would need a Chebyshev
+    expansion of the Fermi function instead.  And if :math:`\mu` lands *outside* the
+    gap, because ``evals[nocc-1:nocc+1]`` straddles a multiplet rather than the two
+    sides of a boundary, this returns a wrong projector **silently** -- nothing in
+    the Newton-Schulz iteration notices.  :func:`check_sign_window` is the host-side
+    guard, in the spirit of ``elkpy.parsers.symmetry.check_window_gap``.
     """
     n = h.shape[-1]
     eye = jnp.eye(n, dtype=h.dtype)
@@ -210,3 +222,26 @@ def sign_projector(h, nocc, *, steps=30, mu=None):
     for _ in range(steps):
         x = 1.5 * x - 0.5 * (x @ x @ x)
     return 0.5 * (eye - x)
+
+
+def check_sign_window(h, nocc, tol=None):
+    r"""Refuse a band window whose boundary is not gapped, before it fails silently.
+
+    :func:`sign_projector` places :math:`\mu` midway between ``evals[nocc-1]`` and
+    ``evals[nocc]``; if those two are a degenerate pair rather than the two sides of a
+    gap, :math:`\mu` is inside a multiplet and the returned operator is not the
+    projector onto anything.  Returns the gap; raises ``ValueError`` when it is below
+    ``tol`` (default: :math:`10^3\,\epsilon\|H\|`).
+    """
+    evals = np.asarray(jnp.linalg.eigvalsh(h))
+    if nocc <= 0 or nocc >= evals.size:
+        raise ValueError(f"nocc={nocc} is not a proper window of {evals.size} states")
+    gap = float(evals[nocc] - evals[nocc - 1])
+    if tol is None:
+        tol = 1e3 * np.finfo(np.float64).eps * float(np.abs(evals).max())
+    if gap <= tol:
+        raise ValueError(
+            f"band window boundary gap {gap:.3e} is below {tol:.3e}: mu would sit "
+            f"inside a multiplet and sign_projector would return a wrong operator "
+            f"without failing. Window the whole degenerate group instead.")
+    return gap

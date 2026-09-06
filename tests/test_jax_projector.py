@@ -231,6 +231,21 @@ def test_the_default_tolerance_resolves():
     assert np.isfinite(float(jax.grad(fn)(0.0)))
 
 
+def test_the_sign_projector_refuses_an_ungapped_window():
+    """`sign_projector` fails SILENTLY if mu lands inside a multiplet, so it is guarded.
+
+    Nothing in the Newton-Schulz iteration notices that mu is not in a gap; the returned
+    operator is simply not the projector onto anything.  Same role as
+    `elkpy.parsers.symmetry.check_window_gap`.
+    """
+    h = jnp.array(ref.hermitian_from_spectrum(ENCLOSED, 0))
+    assert pj.check_sign_window(h, NOCC) > 1.0          # the gapped window is fine
+    with pytest.raises(ValueError, match="inside a multiplet"):
+        pj.check_sign_window(h, 2)                      # ... this one splits the pair
+    with pytest.raises(ValueError, match="not a proper window"):
+        pj.check_sign_window(h, 0)
+
+
 def test_kernel_agrees_with_the_numpy_reference():
     evals = np.linalg.eigvalsh(ref.hermitian_from_spectrum(ENCLOSED, 0))
     occ, docc = ref.fermi_dirac(evals, 2.0, 0.3)

@@ -115,14 +115,22 @@ def scf_step(n_mat, n_k, *, nocc=None, k_axis="scan", radial=700, lmmax=49,
     return step
 
 
-def measure(n_mat, n_k, *, k_axis="scan", **options):
-    """Compile at these shapes without executing, returning time and buffer sizes."""
+def measure(n_mat, n_k, *, k_axis="scan", differentiate=False, **options):
+    """Compile at these shapes without executing, returning time and buffer sizes.
+
+    ``differentiate=True`` compiles ``grad`` of a scalar reduction of the step instead,
+    which is the unit a Phase 3 SCF gradient actually has to build.
+    """
     step = scf_step(n_mat, n_k, k_axis=k_axis, **options)
+    if differentiate:
+        inner = step
+        step = jax.grad(lambda v, h, s: jnp.sum(inner(v, h, s) ** 2))
     avals = (jax.ShapeDtypeStruct((n_mat,), jnp.float64),
              jax.ShapeDtypeStruct((n_k, n_mat, n_mat), jnp.complex128),
              jax.ShapeDtypeStruct((n_k, n_mat, n_mat), jnp.complex128))
     seconds, stats = memory.compiled_cost(step, *avals)
-    return dict(n_mat=n_mat, n_k=n_k, k_axis=k_axis, seconds=seconds,
+    return dict(n_mat=n_mat, n_k=n_k, k_axis=k_axis, differentiate=differentiate,
+                seconds=seconds,
                 arguments=stats.argument_size_in_bytes,
                 temp=stats.temp_size_in_bytes,
                 output=stats.output_size_in_bytes,
