@@ -29,6 +29,7 @@ $V_s$ itself, which is what this phase is for.
 | **2d′** the muffin-tin angular transform | **done** (§2d): `rbsht`/`rfsht` are mutual inverses to 2.7e-12 and give `exmt`/`ecmt` exactly. `vxcmt` misses by 1.2e-4 relative **because `potxc.f90:55-58` symmetrises the potential and not the energy density** — on a `symtype=0` ground state the same code gives 1.4e-14 |
 | **2c′** the Weinert Poisson solve | **done** (§2e, patch 0017): `vclir` to 1.6e-15 relative and `vclmt` to 4e-20 (l=0) / 7e-14 (l>0) on two structures. The monopole identity recovers Z = 14, 5, 7 exactly from a separate code path, and two mutation tests pin the step order and the region split — both mutants are smooth, of the right order and wrong |
 | **2d″** `symrfmt` | **done** (§2g, patch 0018): the operator is EXPORTED rather than transcribed, so Elk's Euler-angle/Wigner-D construction and atom bookkeeping are not re-derived at all. Applying it takes the pointwise `vxcmt` gap from 5.3e-3 to 6.4e-14. Idempotent to 1e-16 on a cubic lattice and 1.2e-11 on a hexagonal one — Elk's own `roteuler`, not the export |
+| **2b** the density from the eigenvectors | **interstitial half done** (§2h, patch 0019, `elkjax/density.py`): exact (9e-16) on an unreduced mesh, 16% off on a reduced one because `symrf` is not applied, and the residual is `rhonorm`'s uniform shift — identified by switching `trhonorm` off, 2.82e-05 to 2.8e-18. The muffin-tin half needs the core states and is not done |
 | **2f** total energy at fixed input potential | **done** (§2f, `elkjax/energy.py`): every density-functional term of `energy.f90` matches Elk's own exported scalars to <1e-13 relative on two structures, asserted term by term. `evalsum`, `engyts` and `engynn` are imported — they need the second-variational step, a zone sum, and the lattice. **§2d's prediction of a 1e-4 error here was wrong**: symmetrisation is an orthogonal projection and rho is in its range, so the leak is orthogonal to the density (1e-16 relative, measured) |
 
 ---
@@ -745,3 +746,99 @@ structures.
 The test asserts that contrast rather than covering both with one loose
 tolerance. A single $10^{-10}$ would say the operator is good to $10^{-10}$
 everywhere: wrong in one direction and uninformative in the other.
+
+---
+
+## 2h. The interstitial valence density, and the circle closing
+
+### What was at stake
+
+§§2a-2g all run in one direction: from a density to potentials to a total
+energy. An SCF loop needs the other direction too — eigenvectors back to a
+density — and until that exists the chain is a line, not a circle.
+
+`rhomagv` → `rhomagk` is that step. This section does its **interstitial**
+half.
+
+### The formula, and why it is exact rather than approximate
+
+For a non-magnetic ground state `rhomagk`'s `rmk3` branch is
+
+$$\rho^{\rm I}(\mathbf r)=\frac1\Omega\sum_{\mathbf k}w_{\mathbf k}
+\sum_n f_{n\mathbf k}\bigl|\psi_{n\mathbf k}(\mathbf r)\bigr|^2 ,$$
+
+with $\psi$ built by scattering `evecfv(igp, n)` into the coarse FFT grid at
+`igfc(igkig(igp))` and transforming. **In the interstitial an LAPW state is a
+plain plane-wave sum** — no augmentation, no radial functions — so there is no
+approximation here at all: the only truncation is the basis's own, and it is the
+same truncation on both sides of the comparison.
+
+Patch **0019** adds a `DENSITYK` query carrying exactly what `rhomagv` feeds to
+`rhomagk`: `wkpt`, `vkl`, `occsv`, `ngk`, `igkig`, and `evecfv` read back through
+`getevecfv` the same way `rhomagv` reads it, plus `ngdgc`/`ngtc`/`igfc`. It is a
+query of its own because it is per-$k$ **and** over the whole zone, where `LAPW`
+is one $k$-point of the caller's choosing and `GROUNDSTATE` is $k$-independent.
+Rebuilding the $k$-set from `ngridk` would differ whenever `reducek` is nonzero,
+which is the default.
+
+### Three results
+
+| | |
+|---|---|
+| unreduced mesh (`symtype=0`), `trhonorm` off | **9.0e-16** relative |
+| symmetry-reduced mesh (Elk's default, 3 k-points) | **16%** |
+| `rhonorm`'s shift, on vs off | 2.82e-05 vs **2.8e-18** |
+
+**The first is the transcription.** Exact, as the plane-wave argument says it
+should be.
+
+**The second is the scope, and it is asserted rather than written down as a
+caveat.** `rhomagv` calls `symrf` on the accumulated density, and on a reduced
+mesh that is not the identity. 16% is a missing step, not a tolerance. This is
+the same shape as §2g's muffin-tin `symrfmt` — in the interstitial, where the
+operator is `symrfir` — and closing it would be the same kind of patch. The test
+asserts the disagreement, so if `symrfir` is ever applied here the test fails and
+gets rewritten rather than widened.
+
+**The third identifies `rhonorm` by measurement.** `rhonorm` adds a *uniform
+constant* $(N-N_{\rm calc})/\Omega$ rather than rescaling, so a correct
+transcription differs from Elk's stored density by a constant — asserted as a
+constant, which is sharper than any tolerance, since a constant is a
+one-parameter family that a pointwise error would break (measured spread
+1.7e-17). Switching `trhonorm` off then takes the constant itself to 2.8e-18.
+Either measurement alone would only bound the discrepancy; the pair names it.
+$\Omega$ times the shift is $7.6\times10^{-3}$ electrons, which is the
+normalisation deficit of a converged density.
+
+### The comparison introduces no error of its own
+
+Elk's `rhoir` lives on the **fine** grid ($28^3$ here) and `rhomagk` accumulates
+on the **coarse** one ($15^3$). `rfirctof` bridges them by transforming the
+coarse function, copying its `ngvc` components into the fine array and zeroing
+the rest — so the fine density carries no content the coarse one did not, and
+taking those same components back is lossless. `elkjax.density.coarsen` does
+that, and the property it relies on is **asserted on Elk's own `rhoir`** rather
+than assumed: if `rhoir` ever carried content beyond `ngvc`, every comparison in
+the file would quietly acquire an aliasing error instead of failing.
+
+This is also why the comparison is made on the coarse grid rather than
+interpolating upward: `rfirctof` goes through `rzfftifc`'s real-to-complex packed
+representation with its own `nfgrz`/`igrzf` indexing, which is one more set of
+conventions to get wrong for no gain.
+
+### The mutation test
+
+`igkig` takes a basis function to a global $\mathbf G$ index and `igfc` takes
+that to a coarse FFT slot. Dropping the second step leaves a density that is
+smooth, non-negative and correctly normalised — a permutation of the Fourier
+content is still a density — and differs from Elk by 16%. Nothing structural
+notices, which is why it is pinned.
+
+### What is not done
+
+The muffin-tin half. `rhomagk` calls `wfmtsv` on the coarse *radial* mesh, then
+`rhomagsh` converts spherical coordinates to harmonics, `rfmtctof` interpolates
+to the fine radial mesh, and `rhocore` adds the core density — which brings in
+`gencore`/`rdirac` and a core-state solver. The magnetic branches (`rmk1`,
+`rmk2`) are not transcribed either. So Phase 2 now has **both directions of the
+interstitial** and only one direction of the muffin tin.

@@ -14,9 +14,10 @@ gets from Perdew's hand-derived expression, and the two agree.
 **Where to start.** §3's "Start here next session" is the ranked list, and the three
 Phase 2 items below it are ordered by cost. In short:
 
-1. **`rhomag`** (item 2b) — the density from the eigenvectors, which is now the ONLY
-   thing between here and a closed SCF loop: the Poisson solve landed (§2e) and the
-   XC half was already there (§§2a-2b). Not started.
+1. **`rhomag`'s muffin-tin half** (item 2b) — the interstitial half is done (§2h);
+   what is left needs `wfmtsv` on the coarse *radial* mesh, `rhomagsh`, `rfmtctof`
+   and `rhocore`, i.e. a core-state solver (`gencore`/`rdirac`). That is the last
+   thing between here and a closed SCF loop.
 2. **~~`symrfmt`~~ DONE** (§2g, patch 0018) — the operator is *exported* rather than
    transcribed, so Elk's Euler-angle/Wigner-$D$ construction and its atom bookkeeping
    are not re-derived at all. Applying it takes the pointwise `vxcmt` gap from 5.3e-3
@@ -580,7 +581,25 @@ named in item 12 need no Elk run and are the cheapest work available.
     Cartesian `symlatc` entries are $0$ and $\pm1$. It bounds how idempotent
     `symrfmt` can be, not the operator's accuracy in use.
 
-14. **The Phase 1 leftovers**, neither of which needs an Elk run. (`lax.scan` over the
+14. **~~The interstitial valence density.~~ DONE** (§2h, patch 0019,
+    `elkjax/density.py`). The step that closes the loop's circle — every other
+    Phase 2 section goes from a density to an energy, this goes back. Exact
+    (9e-16 relative) on an unreduced mesh, since in the interstitial an LAPW
+    state is a plain plane-wave sum and the only truncation is the basis's own.
+
+    **Two of the three results are scope statements, and both are asserted.** On
+    a symmetry-reduced mesh it is **16% off**, because `rhomagv` calls `symrf`
+    afterwards and this does not — the same shape as §2g's `symrfmt`, in the
+    interstitial, where the operator is `symrfir`; closing it would be the same
+    kind of patch as 0018. And the residual on the unreduced mesh is `rhonorm`'s
+    *uniform* shift, identified by measurement rather than by reading the source:
+    switching `trhonorm` off takes it from 2.82e-05 to 2.8e-18.
+
+    The comparison adds no error of its own — `rfirctof` zero-pads, so the fine
+    density carries no content beyond the coarse cutoff and `coarsen` is
+    lossless, a property asserted on Elk's own `rhoir` rather than assumed.
+
+15. **The Phase 1 leftovers**, neither of which needs an Elk run. (`lax.scan` over the
     Newton-Schulz tape is **done**, §1m.) Smeared occupations at **second**
     order, which needs a Chebyshev expansion of the Fermi function — `sign_projector`
     is hard-window only, and §1i removed the tolerance from the smeared *first*

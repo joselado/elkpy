@@ -1183,7 +1183,7 @@ vendored tree:
 `docs/jax_port.md` (1,623 lines) is the design study, `docs/continue_here.md` §3 the cold-start
 summary, `docs/jax_port_phase0.md` the running log of what Phase 0 measured,
 `docs/jax_port_phase1.md` the same for Phase 1 (through §1m), and
-`docs/jax_port_phase2.md` for Phase 2, which is under way (§§2a-2g). §2a is the LDA
+`docs/jax_port_phase2.md` for Phase 2, which is under way (§§2a-2h). §2a is the LDA
 exchange-correlation functional: `src/elkjax/xc.py` transcribes `xc_pwca.f90`, with
 `jax.grad` reproducing Elk's hand-coded $v_{xc}$ at machine precision against the study's
 stated $10^{-10}$, exchange exact against Dirac and its spin scaling, correlation
@@ -1269,7 +1269,19 @@ applying it takes the pointwise `vxcmt` gap from 5.3e-3 to **6.4e-14**. One meas
 worth keeping: the operator is idempotent to 1e-16 on a CUBIC lattice and only 1.2e-11 on
 a hexagonal one, growing with $l$ — Elk's own `roteuler`, whose inverse trigonometry is
 exact when the Cartesian `symlatc` entries are $0$ and $\pm1$ and is not otherwise. That
-bounds how idempotent `symrfmt` can be, not its accuracy in use. Verdict, in one line: **a research project justified by
+bounds how idempotent `symrfmt` can be, not its accuracy in use. §2h turns the chain
+into a circle with patch **0019**: every other Phase 2 section goes from a density to an
+energy, and `elkjax.density` goes back, reproducing Elk's **interstitial** valence density
+from `evecfv` to **9e-16** relative on an unreduced mesh — exact, since in the interstitial
+an LAPW state is a plain plane-wave sum and the only truncation is the basis's own. Two of
+its three results are scope statements and both are asserted rather than written down: on a
+symmetry-REDUCED mesh it is **16% off**, because `rhomagv` calls `symrf` afterwards and this
+does not (§2g's story again, in the interstitial, where the operator is `symrfir`); and the
+residual on the unreduced mesh is `rhonorm`'s UNIFORM shift, identified by measurement —
+switching `trhonorm` off takes it from 2.82e-05 to 2.8e-18. The muffin-tin half is NOT done:
+it needs `wfmtsv` on the coarse radial mesh, `rhomagsh`, `rfmtctof` and `rhocore`, hence a
+core-state solver. So Phase 2 now has both directions of the interstitial and one direction
+of the muffin tin. Verdict, in one line: **a research project justified by
 differentiability, not by the GPU** — SIRIUS already does FP-LAPW on CUDA/ROCm with Elk as its
 reference, and Elk's hot spots are already near-peak BLAS-3. Nothing about the port is a plan of
 record; **Phase 0 (§6 of the study) is designed to kill it, not to start it**, and that is what
