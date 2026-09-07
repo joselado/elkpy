@@ -1302,7 +1302,23 @@ finite and wrong. **With `symtype=0` those three stages are the whole of `rhomag
 the chain from first-variational eigenvectors to the valence density on the fine mesh is
 closed and exact. Still not done: `rhocore` and the core states (an input at fixed
 potential, so an export would do), `symrfir` for a symmetry-reduced mesh, `rhonorm`'s one
-constant, and the magnetic branches. Verdict, in one line: **a research project justified by
+constant, and the magnetic branches. §§2i-2j then put the pieces together: the Kohn-Sham
+potential COMPOSES pointwise ($v_{\rm cl}+\hat Sv_{xc}$ from three separate modules,
+<1e-14 in the muffin tin and <1e-13 against Elk's own `vsir`, which `potks` forms after
+trimming `vxcir` and not `vclir` — a mutation test pins that trimming the Coulomb term
+too is smooth, correctly-integrating and wrong by only $10^{-12}$); and
+`density_from_potential` closes the loop, going potential → $H,O$ at every $k$ →
+eigensolve → density with **nothing in the path reading an eigenvector**, at 5e-11. The
+missing link was building the interstitial blocks from `vsig`/`cfunig` in $G$-space
+instead of recovering $\tilde v_s$ as a matrix in one $k$-point's own basis; against
+Elk's own matrices at $\Gamma$, $H$ agrees to 2.7e-15 and $O$ to 5.6e-16. **The 5e-11 is
+measured, not excused**: it is Elk's own two exports of `evecfv` disagreeing by 8.5e-9 —
+`elkpy_lapwexport` diagonalises fresh after `genapwlofr` while `elkpy_denskexport` reads
+the stored ones — and on the gauge-invariant occupied projector this solve matches the
+fresh `evecfv` at 1.6e-14 while stored-vs-fresh is 3.7e-11. Patch 0015's finding for the
+third time. What is NOT yet done is iterating: that needs `rhocore`, `rhonorm`, a
+zone-summed Fermi level and `symrfir`, none a research problem, and the open question is
+whether the iteration is stable. Verdict, in one line: **a research project justified by
 differentiability, not by the GPU** — SIRIUS already does FP-LAPW on CUDA/ROCm with Elk as its
 reference, and Elk's hot spots are already near-peak BLAS-3. Nothing about the port is a plan of
 record; **Phase 0 (§6 of the study) is designed to kill it, not to start it**, and that is what

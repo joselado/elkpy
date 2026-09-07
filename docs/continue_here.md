@@ -14,15 +14,16 @@ gets from Perdew's hand-derived expression, and the two agree.
 **Where to start.** §3's "Start here next session" is the ranked list, and the three
 Phase 2 items below it are ordered by cost. In short:
 
-1. **A full SCF iteration.** Every piece now exists: the valence density from the
-   eigenvectors on the fine mesh (§2h, all of `rhomagv` at `symtype=0`), the
-   Poisson solve (§2e), the XC functional (§§2a-2b), the symmetrisation (§2g) and
-   the total energy (§2f); Phase 1 supplies the assembly and the eigensolve.
-   What is missing to *close* it: `rhocore` (an input at fixed potential, so an
-   export would do), `rhonorm` (one constant), a zone-summed Fermi level (§1i has
-   it at a single k), and `symrfir` for a reduced mesh. None is a research
-   problem; the question is whether the composition is stable, which nothing has
-   tested.
+1. **A fixed-point iteration.** Both half-steps now exist and compose: density →
+   potential (§2i, pointwise against Elk's own `vsir`) and potential →
+   eigenvectors → density (§2j, 5e-11, limited by Elk's own two `evecfv` exports
+   rather than by the chain). What is left to make it a *loop* rather than two
+   half-steps: `rhocore` (an input at fixed potential, so an export would do),
+   `rhonorm` (one constant), a zone-summed Fermi level (§1i has it at a single
+   k), and `symrfir` for a symmetry-reduced mesh. None is a research problem —
+   the open question is whether iterating is *stable*, which nothing has tested,
+   and Phase 0a's implicit-differentiation machinery is what it would be wrapped
+   in.
 2. **~~`symrfmt`~~ DONE** (§2g, patch 0018) — the operator is *exported* rather than
    transcribed, so Elk's Euler-angle/Wigner-$D$ construction and its atom bookkeeping
    are not re-derived at all. Applying it takes the pointwise `vxcmt` gap from 5.3e-3
@@ -630,7 +631,31 @@ named in item 12 need no Elk run and are the cheapest work available.
     density carries no content beyond the coarse cutoff and `coarsen` is
     lossless, a property asserted on Elk's own `rhoir` rather than assumed.
 
-15. **The Phase 1 leftovers**, neither of which needs an Elk run. (`lax.scan` over the
+15. **~~The Kohn-Sham potential, composed.~~ DONE** (§2i). $v_{\rm cl}+\hat S
+    v_{xc}$ from three separate modules against Elk's own, POINTWISE: <1e-14 in
+    the muffin tin, <1e-13 against `vsir`. Only the second is independent — in
+    the muffin tin `vsmt` is `vclmt+vxcmt` by construction, while `vsir` is
+    formed inside `potks` *after* `trimrfg` has been applied to `vxcir` and not
+    to `vclir`. The mutation test is what makes the tolerance mean something:
+    trimming the Coulomb term too is smooth, of the right magnitude, integrates
+    correctly against $\rho$, and is wrong by only $10^{-12}$.
+
+16. **~~The loop closed.~~ DONE** (§2j). `density_from_potential` goes potential
+    → $H,O$ at every $k$ → eigensolve → density with **nothing in the path
+    reading an eigenvector**, agreeing at 5e-11. The missing link was building
+    the interstitial blocks from `vsig`/`cfunig` in $G$-space rather than
+    recovering $\tilde v_s$ as a matrix in one $k$-point's basis; against Elk's
+    own matrices at $\Gamma$, $H$ to 2.7e-15 and $O$ to 5.6e-16.
+
+    **The 5e-11 is measured, not excused**: it is Elk's own two exports of
+    `evecfv` disagreeing by 8.5e-9, `elkpy_lapwexport` diagonalising fresh after
+    `genapwlofr` while `elkpy_denskexport` reads the stored ones. On the
+    gauge-invariant occupied projector at $\Gamma$: this solve vs the fresh
+    `evecfv` 1.6e-14; Elk's own $H,O$ re-diagonalised vs its stored `evecfv`
+    1.0e-14; this assembly vs Elk's 2.2e-14; **stored vs fresh 3.7e-11**. Patch
+    0015's finding for the third time.
+
+17. **The Phase 1 leftovers**, neither of which needs an Elk run. (`lax.scan` over the
     Newton-Schulz tape is **done**, §1m.) Smeared occupations at **second**
     order, which needs a Chebyshev expansion of the Fermi function — `sign_projector`
     is hard-window only, and §1i removed the tolerance from the smeared *first*
