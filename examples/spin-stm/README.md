@@ -51,5 +51,34 @@ Things worth changing:
   `.true.` to integrate over the whole window (constant-current mode)
   instead of sampling at one energy.
 
+Task 9003 reads eigenvectors rather than re-diagonalising (`rhomagv` calls
+`getevecfv`/`getevecsv`), which is what makes a bias sweep cheap. That works
+here because `tasks` runs 0 and 9003 in **one** elk process, so the RAM disk
+task 0 filled is the one 9003 reads. Split them across two invocations — a
+ground state converged separately, then 9003 resumed from it — and you must
+add `ramdisk` / `.false.` to the run that produces the eigenvectors: Elk 11
+defaults it to `.true.` and then writes no `EVEC*.OUT` at all.
+
+## Reading harmonics off the map: pick the transverse sample count
+
+If you average an `n1 x n2` map over **a**<sub>2</sub> to get a profile along
+**a**<sub>1</sub> — the natural thing to do on a supercell, and what a
+harmonic analysis of a spiral or a superstructure amounts to — that average
+kills every Fourier component **G** = m**b**<sub>1</sub> + p**b**<sub>2</sub>
+*except* those with p = 0 (mod n2). Components with p != 0 that survive are
+aliases, and they show up at harmonic m of the profile looking exactly like
+the real thing.
+
+This is measured, not hypothetical. On a 15x1 NiBr2 spin-spiral supercell both
+sublattices satisfy p = 2m (mod 15), so atomic weight leaks into x-harmonic m
+whenever 2m = 0 (mod gcd(15, n2)); with `n2 = 6` the (m, p) = (3, 6) component
+landed on the 3q harmonic and read 3.4e-3 where the true value is 2.9e-6.
+
+**Rule: pick n2 sharing the supercell's own periodicity.** And a single line
+cut is not a cheaper substitute for the transverse average — it shows every
+(m, p) at harmonic m with no suppression at all, which on that run read a 66%
+charge modulation at q where the correctly averaged value is 1.4e-4. See
+`docs/design.md` §31 and `docs/field_report_nibr2.md`.
+
 The same calculation from Python is `Calculation.get_spin_stm()`; see
 `notebooks/19_spin_polarized_stm.ipynb`.

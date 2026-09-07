@@ -8,6 +8,7 @@ local subprocess call.
 
 import fcntl
 import os
+import resource
 import subprocess
 import time
 
@@ -74,7 +75,43 @@ def _thread_pinned_env(omp_threads):
     # see SLOT_DIR comment: OpenBLAS/MKL have their own thread controls
     env["OPENBLAS_NUM_THREADS"] = str(omp_threads)
     env["MKL_NUM_THREADS"] = str(omp_threads)
+    # Elk's OpenMP regions put large automatic arrays on the worker stack --
+    # rhomagv (task 9003) is the measured case: on a 45-atom NiBr2 spin
+    # spiral at 32 threads it took SIGSEGV at ~42 GB RSS, which is an OpenMP
+    # thread-stack overflow and NOT the cgroup's SIGKILL, so it reads as a
+    # code crash rather than as a limit. setdefault, not assignment, unlike
+    # the three above: those deliberately override whatever the user set, and
+    # this one is a floor the user is entitled to raise.
+    #
+    # Inert at the default omp_threads=1, where Elk runs entirely on the
+    # master thread and the process stack (RLIMIT_STACK, raised below) is the
+    # one that matters. It is here for LocalLauncher(omp_threads=N).
+    env.setdefault("OMP_STACKSIZE", "1G")
     return env
+
+
+def _raise_stack_limit():
+    """Raise RLIMIT_STACK to its hard limit in the child, before exec.
+
+    The `ulimit -s unlimited` half of the same fix: OMP_STACKSIZE governs the
+    OpenMP WORKER stacks only, and Elk's master thread carries automatic
+    arrays of its own that scale with nstsv and ngkmax. Best effort -- a
+    child that cannot raise it still runs, and a hard limit is by definition
+    the most this process may ask for.
+
+    A `preexec_fn` forces subprocess onto the fork path, and Python 3.12+
+    warns about fork() in a threaded parent. Harmless here -- an elk run is
+    minutes long and this hook touches nothing but its own rlimit -- and it is
+    why the env half is a plain `setdefault` rather than both halves going
+    through a shell wrapper, which would put a shell between elkpy and the
+    binary's exit code.
+    """
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_STACK)
+        if hard != soft:
+            resource.setrlimit(resource.RLIMIT_STACK, (hard, hard))
+    except (ValueError, OSError, resource.error):
+        pass
 
 
 class LocalLauncher:
@@ -114,7 +151,8 @@ class LocalLauncher:
         try:
             with open(log_path, "w") as log:
                 result = subprocess.run(
-                    command, cwd=str(workdir), stdout=log, stderr=subprocess.STDOUT, env=env
+                    command, cwd=str(workdir), stdout=log, stderr=subprocess.STDOUT,
+                    env=env, preexec_fn=_raise_stack_limit
                 )
         finally:
             _release_slot(slot)
@@ -155,6 +193,7 @@ class LocalLauncher:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 env=env,
+                preexec_fn=_raise_stack_limit,
                 text=True,
                 bufsize=1,
             )

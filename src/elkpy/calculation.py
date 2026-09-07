@@ -965,7 +965,12 @@ class Calculation(*ALL_MIXINS):
           states at the Fermi level all sit there: the map is then
           identically zero, not merely small.
         - `energies`: the sample bias, in Hartree RELATIVE to the Fermi
-          energy (default: 0, i.e. at E_F), scalar or sequence. Sweeping it
+          energy (default: 0, i.e. at E_F), scalar or sequence. Note
+          parsers.transport.compute_transmission()'s identically named
+          argument is ABSOLUTE -- this method does the shift, and the parser
+          refuses an energy outside the exported window rather than returning
+          a plausible map built from the tails of the smeared delta.
+          Sweeping it
           is nearly free -- neither the wavefunctions nor S_k depend on the
           energy, only the per-state weight does, so a whole dI/dV curve at
           every pixel costs one contraction per energy on top of a sampling

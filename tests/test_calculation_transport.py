@@ -127,7 +127,9 @@ def test_the_contraction_is_the_literal_green_function_integral(coincident):
     ):
         if overlap.shape[0] == 0:
             continue
-        weights = T.amplitude_weights(eigenvalues, coincident["efermi"], 0.02)
+        weights = T.amplitude_weights(
+            eigenvalues, coincident["efermi"], 0.02,
+            occmax=2.0 if coincident["nspinor"] == 1 else 1.0)
         fast = T.transmission_at_k(amplitude, overlap, weights)
         literal = T.green_function_transmission(
             amplitude, amplitude, coincident["area"], weights)

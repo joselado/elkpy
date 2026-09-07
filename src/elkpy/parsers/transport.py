@@ -179,7 +179,7 @@ def smeared_delta(x, stype=3):
     raise ValueError(f"unknown Elk stype {stype!r}")
 
 
-def amplitude_weights(eigenvalues, energy, broadening, stype=3, occmax=2.0):
+def amplitude_weights(eigenvalues, energy, broadening, stype=3, occmax=None):
     """sqrt(occmax delta_eta(E - eps) / eta): the real, non-negative factor
     multiplying psi_kn(r) before anything is squared.
 
@@ -187,7 +187,25 @@ def amplitude_weights(eigenvalues, energy, broadening, stype=3, occmax=2.0):
     nspinor=2 -- carried here for exactly the reason src/occupy.f90 carries
     it, so that the whole-cell (S = identity) limit is the density of states
     and not half of it.
+
+    It is REQUIRED -- `occmax=None` is a sentinel that raises, not a default.
+    It used to default to 2.0, which is the wrong value for every spin-orbit
+    run and put a silent factor of two into any map built by calling this
+    directly; and calling it directly is the whole point of keeping the
+    arithmetic in Python. This function cannot see `nspinor`, so it cannot
+    pick correctly on the caller's behalf. `compute_transmission()` derives it
+    from `data["nspinor"]`, and a hand-driven caller should do the same:
+    `occmax = 2.0 if data["nspinor"] == 1 else 1.0`.
     """
+    if occmax is None:
+        raise TypeError(
+            "amplitude_weights() requires `occmax`, Elk's spin-degeneracy "
+            "factor: 2.0 for nspinor=1 and 1.0 for nspinor=2 (src/occupy.f90). "
+            "It has no safe default -- this function cannot see nspinor, and "
+            "the 2.0 it used to assume is silently a factor of two too large "
+            "for every spin-orbit run. From a parsed export, pass "
+            "`2.0 if data['nspinor'] == 1 else 1.0`"
+        )
     eigenvalues = np.asarray(eigenvalues, dtype=float)
     if broadening <= 0.0:
         raise ValueError(f"the broadening must be positive, got {broadening}")
@@ -272,12 +290,56 @@ def transmission_at_k(amplitude, overlap, weights, coherent=True,
     return np.einsum("n,snp->p", diagonal, np.real(a.conj() * a), optimize=True)
 
 
+def _check_energy_window(data, energies):
+    """Refuse energies outside the window src/elkpy_transport.f90 exported.
+
+    The trap this exists for: `energies` here are ABSOLUTE (Hartree), while
+    Calculation.get_vertical_transport()'s identically named argument is a
+    bias RELATIVE to the Fermi energy, which it shifts before calling this.
+    Dropping to the parser is the documented way to drive Elk by hand, and
+    passing a relative bias straight through failed SILENTLY: the smeared
+    delta of `amplitude_weights` has exponential tails, so every state in the
+    export still gets a small non-zero weight and what comes back is a
+    plausible small map at the wrong energy, not an error. Measured in the
+    field on a NiBr2 spin spiral, where E_F = -0.162 Ha put a +0.10 Ha bias at
+    an absolute -0.062 Ha; passing +0.10 unshifted landed 0.16 Ha from where
+    it belonged, which on a window 0.38 Ha wide ([-0.322, +0.058] absolute) is
+    0.04 Ha past the top. It cost a full re-run.
+
+    This raises rather than warns because outside the exported window there
+    are no states at all -- the Fortran selected only
+    [efermi+window(1), efermi+window(2)] (elkpy_transport.f90's e0/e1) -- so
+    there is no correct answer to degrade to. `window` itself is written back
+    RELATIVE to E_F, exactly as it was passed in.
+    """
+    efermi = float(data["efermi"])
+    lo, hi = (efermi + float(w) for w in data["window"])
+    outside = energies[(energies < lo) | (energies > hi)]
+    if outside.size == 0:
+        return
+    raise ValueError(
+        "compute_transmission() energies are ABSOLUTE Hartree, and "
+        f"{np.array2string(outside, precision=6)} lies outside the exported "
+        f"window [{lo:.6f}, {hi:.6f}] (E_F = {efermi:.6f}, window "
+        f"[{data['window'][0]:.6f}, {data['window'][1]:.6f}] relative to it), "
+        "which holds no states -- the result would be a plausible small map "
+        "built from the tails of the smeared delta rather than an error. If "
+        "these are a bias relative to the Fermi energy, pass "
+        "data['efermi'] + bias; Calculation.get_vertical_transport() takes "
+        "the relative form and does that shift for you."
+    )
+
+
 def compute_transmission(data, energies=None, broadening=0.005, stype=3,
                          exit_region="plane", incoherent=True,
                          degeneracy_tol=DEGENERACY_TOL):
     """The vertical transmission map, from `parse_transport`'s output.
 
-    `energies` are absolute (Hartree); the default is the Fermi energy.
+    `energies` are absolute (Hartree); the default is the Fermi energy. They
+    are checked against the exported window and an energy outside it is
+    refused -- see `_check_energy_window`, which exists because
+    Calculation.get_vertical_transport()'s identically named argument is
+    RELATIVE to E_F and the mismatch used to fail silently.
     `exit_region="cell"` replaces every S_k by the identity, which is the
     Tersoff-Hamann limit: T becomes sum_kn w_k |psi_kn(r)|^2 delta(E - eps),
     the tunnelling density of states at the tip, and so the SAME number
@@ -296,6 +358,7 @@ def compute_transmission(data, energies=None, broadening=0.005, stype=3,
     if energies is None:
         energies = [data["efermi"]]
     energies = np.atleast_1d(np.asarray(energies, dtype=float))
+    _check_energy_window(data, energies)
     occmax = 2.0 if data["nspinor"] == 1 else 1.0
     npoints = data["npoints"]
 

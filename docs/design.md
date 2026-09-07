@@ -3828,6 +3828,112 @@ the file small; the on-shell weight kills the rest.
   within a few $\eta$ of the tip energy. The transport k-grid must be a
   multiple of three.
 
+### Four traps that are NOT in the Fortran, found by driving this in the field
+
+`docs/field_report_nibr2.md` is a report from a real 45-atom NiBr2 monolayer
+spin spiral (15 Ni per magnetic period, in-plane helix, `spinorb`) put through
+tasks 9003 and 9005. The headline is a result, not a bug: the two tasks
+**agreed with each other to 0.2% on every well-sampled harmonic** — `rhomagv`
+in Fortran against the Python Gram-matrix contraction, two code paths sharing
+nothing, on a system an order of magnitude past anything in `tests/`. The four
+items below are the edges it found, and all four are about the *Python* API
+surface, which is why none of them could be a Fortran guard.
+
+- **`compute_transmission(energies=)` is ABSOLUTE; `get_vertical_transport(energies=)`
+  is relative to $E_F$.** Same parameter name, adjacent layers, opposite
+  conventions — the wrapper does `absolute = [efermi + e for e in energies]`
+  and the parser does not. Dropping to the parser is the *documented* way to
+  drive this by hand (a bias sweep costs one contraction per energy, so the
+  parser layer is where a $dI/dV$ map gets built), and the mismatch failed
+  **silently**: `amplitude_weights`' smeared delta has exponential tails, so
+  every exported state still picks up a small non-zero weight and what comes
+  back is a plausible small map at the wrong energy rather than an error. On
+  the NiBr2 run $E_F = -0.162$ Ha, so a $+0.10$ Ha bias is an absolute
+  $-0.062$ Ha, while the same number passed unshifted lands $0.16$ Ha from
+  where it belonged — on a window $0.38$ Ha wide ($[-0.322, +0.058]$
+  absolute), $0.04$ Ha past the top. It cost a full re-run, and was caught only
+  because the `exit_region="cell"` cross-check came out at $1.4$ instead of
+  $\sim10^{-16}$.
+
+  Fixed by `parsers.transport._check_energy_window()`, which refuses an energy
+  outside $[E_F + w_1, E_F + w_2]$ and names the shift in the message. A
+  **raise**, not a warning: `src/elkpy_transport.f90` selected only the states
+  in that band (its `e0`/`e1`), so outside it there is nothing to compute
+  from and no degraded answer to fall back on. The exported `window` is
+  written back *relative* to $E_F$, exactly as it was passed in, which is what
+  makes the bound checkable at all. The argument was deliberately **not**
+  renamed: `energies=` fans out to the tests, the notebook, the example and
+  this document, and the check alone closes the silent failure.
+
+  The report's own guard added a $3\eta$ margin inside those bounds, on the
+  grounds that the smeared delta is truncated at the export edge and the
+  weight there is wrong rather than absent. That is right for a caller and
+  wrong for a library — it would refuse energies that genuinely have states
+  — so the bound here is the hard one. It does not arise through
+  `get_vertical_transport()` anyway, whose default `nsigma=8` pads the export
+  by eight broadenings either side of every requested energy.
+
+- **`amplitude_weights(..., occmax=)` must not guess.** `occmax` is Elk's own
+  spin-degeneracy factor (`src/occupy.f90`): 2 for `nspinor=1`, 1 for
+  `nspinor=2`. `compute_transmission` derives it from `data["nspinor"]`
+  correctly, but the standalone function cannot see `nspinor` and used to
+  default to 2.0 — a silent factor of two in any map built by calling it
+  directly, for every spin-orbit run. Since the whole design point of §31 is
+  that the arithmetic is Python and reusable, calling it directly is the
+  expected thing to do. It is now required: `occmax=None` is a sentinel that
+  raises with the rule in the message. The signature keeps its shape so every
+  existing positional call still works.
+
+- **`ramdisk` and eigenvector reuse.** Elk 11 defaults `ramdisk .true.`
+  (`readinput.f90:412`), so eigenvectors live in memory and a run writes no
+  `EVEC*.OUT` at all. Task 9003 needs them: `rhomagv` calls
+  `getevecfv`/`getevecsv` from store and does **not** re-diagonalise, which is
+  exactly what makes a bias sweep cheap. elkpy's own path is unaffected —
+  `_run_resumed()` prepends task 1 in the *same* elk process as 9003, so the
+  RAM disk that task 1 fills is the one 9003 reads. It bites the hand-driven
+  workflow: a ground state converged in a separate `elk` invocation leaves
+  nothing on disk for a later 9003 to read, and the fix is `ramdisk .false.`
+  in the run that produces the eigenvectors. Task 9005 is immune either way,
+  since `elkpy_transport_wf` diagonalises fresh at its own k-mesh.
+
+- **A version boundary in the eigenvector files, not elkpy's to fix.** Elk
+  11.0.2 has `nstfv = nint(chgval/2) + nempty + 1` (`init1.f90:319`) where
+  10.2.4 had no `+1`, so **10.2.4 eigenvector files are rejected** by
+  `getevalsv`/`getevecfv` ("differing nstsv") while `readstate` accepts the
+  10.2.4 *density* with only a version warning — the density crosses the
+  boundary and the eigenvectors do not. Note also that the `nempty` block is
+  not the number it looks like: `init1.f90:316` sets
+  `nempty = nint(nempty0*natmtot)`, so on a 45-atom cell `nempty 180` asks for
+  8100 empty states and `nstfv` is then clamped to the matrix size (`nstsv`
+  came out at 10768, not 1110). The clean workaround for both is task 1 with
+  `maxscl 1` and `ramdisk .false.`, regenerating eigenvectors from the old
+  density.
+
+### Transverse sampling can alias the atomic lattice into a low harmonic
+
+A `plot2d` map over a supercell invites harmonic analysis — both
+`examples/spin-stm/` and `examples/vertical-transport/` do exactly that, and
+so did the NiBr2 run — and the transverse sample count is not free.
+
+Average an $n_1 \times n_2$ map over $\mathbf a_2$ to get a profile along
+$\mathbf a_1$, and the average kills every Fourier component
+$\mathbf G = m\mathbf b_1 + p\mathbf b_2$ except those with
+$p \equiv 0 \pmod{n_2}$. That is a *sampling* statement, not a physical one:
+components with $p \ne 0$ that survive it are aliases, and they land at
+harmonic $m$ of the profile as if they were the real thing. On the NiBr2
+$15\times1$ supercell both sublattices satisfy $p \equiv 2m \pmod{15}$, so
+atomic weight leaks into $x$-harmonic $m$ whenever
+$2m \equiv 0 \pmod{\gcd(15, n_2)}$; with $n_2 = 6$ the $(m,p) = (3,6)$
+component landed on the $3q$ spiral harmonic and read $3.4\times10^{-3}$ where
+the true value is $2.9\times10^{-6}$ — three orders of magnitude of pure
+artifact.
+
+**The rule: pick $n_2$ sharing the supercell's own periodicity.** And a single
+line cut is not a cheaper substitute for the average: it shows every $(m,p)$
+at harmonic $m$ with no suppression at all, which on that run read a 66%
+charge modulation at $q$ where the correctly averaged value is
+$1.4\times10^{-4}$.
+
 ### Verification
 
 Neither Elk nor any widely used plane-wave code computes this quantity —

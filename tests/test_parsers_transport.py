@@ -248,3 +248,72 @@ def test_parse_transport_round_trip(tmp_path):
     assert np.allclose(d["amplitudes"][0], amp)
     assert np.allclose(d["states"][0], [4, 5])
     assert np.allclose(d["eigenvalues"][0], [-0.02, 0.01])
+
+
+# --------------------------------------------------------------------------
+# the two API traps from docs/field_report_nibr2.md, both silent before this
+# --------------------------------------------------------------------------
+
+def _windowed_data(efermi=-0.162176, window=(-0.16, 0.22)):
+    """The NiBr2 field run's own numbers, which is what makes this a real
+    test: E_F is negative and the window is narrow enough that a bias
+    relative to it and the same number taken as absolute land on opposite
+    sides of the boundary. A symmetric +-1 Ha window would let the wrong
+    convention through and the guard would look right while testing nothing.
+    """
+    psi, overlap, area = _synthetic_plane(nst=2, ngrid=12)
+    return {
+        "nspinor": 1, "npoints": psi.shape[2], "grid": (12, 12), "axis": 3,
+        "efermi": efermi, "height": 0.62, "area": area, "omega": 100.0,
+        "window": window, "polarization": 0.0,
+        "direction": np.array([0.0, 0.0, 1.0]),
+        "points": np.zeros((psi.shape[2], 2)),
+        "points_lattice": np.zeros((psi.shape[2], 3)),
+        "kpoints": np.zeros((1, 3)), "weights": np.array([1.0]),
+        "states": [np.array([1, 2])],
+        "eigenvalues": [np.array([efermi - 0.01, efermi + 0.01])],
+        "overlaps": [overlap], "amplitudes": [psi],
+    }
+
+
+def test_an_energy_outside_the_exported_window_is_refused():
+    """compute_transmission() takes ABSOLUTE energies, get_vertical_transport()
+    a bias RELATIVE to E_F. Passing the relative one straight to the parser
+    used to fail silently -- the smeared delta's exponential tails give every
+    exported state a small non-zero weight, so a plausible map came back at
+    the wrong energy. Cost a full re-run in the field.
+    """
+    data = _windowed_data()
+    bias = 0.10                                  # a legal bias, wrong as absolute
+    # the correct call: shifted onto the absolute axis, comfortably inside
+    ok = T.compute_transmission(data, energies=[data["efermi"] + bias],
+                                broadening=0.005)
+    assert np.all(np.isfinite(ok["transmission"]))
+    # the mistake: the same number passed unshifted -- 0.16 Ha from where it
+    # belonged, which puts it 0.04 Ha past the top of [-0.322, +0.058]
+    with pytest.raises(ValueError, match="ABSOLUTE"):
+        T.compute_transmission(data, energies=[bias], broadening=0.005)
+    # and below the window, not just above it
+    with pytest.raises(ValueError, match="ABSOLUTE"):
+        T.compute_transmission(data, energies=[-1.0], broadening=0.005)
+
+
+def test_the_default_energy_is_the_fermi_level_and_is_always_in_window():
+    """get_vertical_transport() pads the window by nsigma broadenings either
+    side of every requested energy, so a window it wrote always brackets zero
+    and E_F is always legal. A hand-written elkpy_transport_window 0.1 0.2
+    would not bracket it, and the guard firing there is correct."""
+    result = T.compute_transmission(_windowed_data(), broadening=0.005)
+    assert result["energies"][0] == pytest.approx(-0.162176)
+
+
+def test_amplitude_weights_refuses_to_guess_the_spin_degeneracy():
+    """occmax used to default to 2.0, which is right for nspinor=1 and a
+    silent factor of two for every spin-orbit run. The function cannot see
+    nspinor, so it must not choose."""
+    eps = np.array([-0.01, 0.0, 0.01])
+    with pytest.raises(TypeError, match="occmax"):
+        T.amplitude_weights(eps, 0.0, 0.005)
+    spinor = T.amplitude_weights(eps, 0.0, 0.005, occmax=1.0)
+    scalar = T.amplitude_weights(eps, 0.0, 0.005, occmax=2.0)
+    assert np.allclose(scalar, np.sqrt(2.0) * spinor)
