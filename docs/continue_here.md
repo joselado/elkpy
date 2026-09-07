@@ -667,7 +667,31 @@ named in item 12 need no Elk run and are the cheapest work available.
     is a ragged per-species list (boron has 2 local orbitals, nitrogen 3) that
     `np.asarray` only tolerates when there is one species.
 
-18. **The Phase 1 leftovers**, neither of which needs an Elk run. (`lax.scan` over the
+18. **~~Phase 2, differentiated.~~ DONE for the XC half; the electrostatic half
+    is OPEN** (§2k, `tests/test_calculation_functional_derivative.py`). The
+    port's justification is differentiability and every Phase 2 section until
+    this one checked a *value*.
+
+    It found a defect first: `elkjax.integrate.cell_inner_product` called
+    `np.asarray` on its muffin-tin argument and **could not be differentiated at
+    all**, silently, since §2c — every consumer had passed concrete arrays.
+    Fixed, with a unit test that differentiates the cell integral and checks the
+    gradient *is* the quadrature weight.
+
+    $\delta E_{xc}/\delta\rho=v_{xc}[\rho]$ then holds to **5.7e-17**, with AD
+    running through `xc_pwca` *and* the quadrature — a different statement from
+    §2a's pointwise check. The 1.25e-5 gap to Elk's `vxcir` is entirely
+    `trimrfg`, asserted as an equality with `grid.trim`.
+
+    **The electrostatic half does not close** and is pinned two-sidedly so a
+    later fix fails the test rather than quietly passing it: 0.10 Ha absolute,
+    which is 33% of $v_{\rm cl}$'s own range but only 4% of the $v_H$ and
+    $v_{\rm nuc}$ that nearly cancel to make it. Four candidates are named in
+    §2k; the one to test first is whether the discretised Coulomb kernel's
+    reciprocity is only as accurate as the pseudocharge construction, which
+    would make this a property of the Weinert method rather than a bug.
+
+19. **The Phase 1 leftovers**, neither of which needs an Elk run. (`lax.scan` over the
     Newton-Schulz tape is **done**, §1m.) Smeared occupations at **second**
     order, which needs a Chebyshev expansion of the Fermi function — `sign_projector`
     is hard-window only, and §1i removed the tolerance from the smeared *first*

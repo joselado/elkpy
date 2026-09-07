@@ -1318,7 +1318,19 @@ the stored ones — and on the gauge-invariant occupied projector this solve mat
 fresh `evecfv` at 1.6e-14 while stored-vs-fresh is 3.7e-11. Patch 0015's finding for the
 third time. What is NOT yet done is iterating: that needs `rhocore`, `rhonorm`, a
 zone-summed Fermi level and `symrfir`, none a research problem, and the open question is
-whether the iteration is stable. Verdict, in one line: **a research project justified by
+whether the iteration is stable. **§2k finally differentiates Phase 2** — every section
+before it checks a *value* — and found a defect doing so:
+`elkjax.integrate.cell_inner_product` called `np.asarray` on its muffin-tin argument and
+could not be traced at all, silently, since §2c. Fixed. Then
+$\delta E_{xc}/\delta\rho=v_{xc}[\rho]$ holds to **5.7e-17** with AD running through both
+`xc_pwca` and the quadrature, and the 1.25e-5 gap to Elk's `vxcir` is entirely `trimrfg`
+— asserted as an EQUALITY with `grid.trim`, not an order-of-magnitude coincidence. **The
+electrostatic half does not close**: 0.10 Ha absolute, which is 33% of $v_{\rm cl}$'s own
+range and 4% of the $v_H$ (2.17) and $v_{\rm nuc}$ (2.48) that nearly cancel to make it
+(0.31) — quoting either number alone misleads. Pinned two-sidedly so a later fix fails
+the test instead of passing it quietly; the candidate to test first is whether the
+discretised Coulomb kernel's reciprocity is only as accurate as the pseudocharge
+construction, making it a property of the Weinert method rather than a bug. Verdict, in one line: **a research project justified by
 differentiability, not by the GPU** — SIRIUS already does FP-LAPW on CUDA/ROCm with Elk as its
 reference, and Elk's hot spots are already near-peak BLAS-3. Nothing about the port is a plan of
 record; **Phase 0 (§6 of the study) is designed to kill it, not to start it**, and that is what
