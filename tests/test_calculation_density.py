@@ -441,3 +441,80 @@ def test_the_residual_is_elks_two_exports_disagreeing(unreduced_with_lapw):
     assert np.abs(project(stored) - project(fresh)).max() > 1e-13, (
         "Elk's two exports now agree; tighten the tolerance in the test above")
     assert jnp.isfinite(jnp.asarray(mine)).all()
+
+
+@pytest.fixture(scope="module")
+def normalised_with_lapw(tmp_path_factory):
+    """`trhonorm` left ON, so the comparison is against Elk's own converged
+    `rhomt`/`rhoir` rather than against a pre-normalisation intermediate."""
+    return _run(tmp_path_factory.mktemp("density") / "si_full",
+                {"symtype": [0]}, lapw=True)
+
+
+def test_the_whole_of_rhomag_reproduces_the_converged_density(
+        normalised_with_lapw):
+    """rhomagk -> rhomagsh -> rfmtctof/rfirctof -> rhocore -> rhonorm.
+
+    Every step between the eigenvectors and the arrays the NEXT iteration's
+    potential is built from, against Elk's own converged `rhomt` and `rhoir` --
+    not an exported intermediate.  `symrf` is absent because the fixture runs
+    `symtype=0`, where it is the identity.
+
+    `rhocr` is exported rather than solved for: the core states are a
+    functional of the potential, so at fixed potential the core density is an
+    input exactly as `vsmt` is.  Everything else here is transcribed.
+    """
+    from elkjax import density
+    groundstate, densityk, lapw = normalised_with_lapw
+    muffin, interstitial = density.converged_density(densityk, groundstate,
+                                                     lapw)
+    for ias in range(int(groundstate["natmtot"])):
+        got = np.asarray(density.pack_fine(muffin[ias], groundstate, ias))
+        reference = np.asarray(groundstate["rhomt"][ias])[:got.size]
+        assert np.abs(got - reference).max() \
+            / np.abs(reference).max() < 1e-11
+    reference = np.asarray(groundstate["rhoir"])
+    assert np.abs(np.asarray(interstitial) - reference).max() \
+        / np.abs(reference).max() < 1e-10
+
+
+def test_refine_inverts_coarsen(normalised_with_lapw):
+    """`rfirctof` zero-pads and `coarsen` takes the same components back, so
+    the round trip is the identity on any coarse function -- asserted on one
+    that is not smooth in the coarse grid's own terms, the interstitial valence
+    density itself, rather than on a random vector."""
+    from elkjax import density
+    groundstate, densityk, lapw = normalised_with_lapw
+    coarse = density.interstitial_density(densityk,
+                                          float(groundstate["omega"]))
+    back = density.coarsen(density.refine(coarse, groundstate, densityk),
+                           groundstate, densityk)
+    assert np.abs(np.asarray(back) - np.asarray(coarse)).max() \
+        / np.abs(np.asarray(coarse)).max() < 1e-14
+
+
+def test_dropping_the_core_is_a_large_and_smooth_error(normalised_with_lapw):
+    """`rhocore` adds `rhocr` to the l=0 slot alone -- the core is spherical.
+
+    Omitting it leaves a perfectly valid-looking valence density: smooth,
+    non-negative, correct everywhere except within a fraction of a bohr of the
+    nucleus.  It is off by four orders of magnitude there, and by nothing at
+    all at R_MT, which is why an average or an outer-shell check would miss it.
+    """
+    from elkjax import density
+    groundstate, densityk, lapw = normalised_with_lapw
+    isp = int(groundstate["idxis"][0]) - 1
+    nrmt = int(densityk["nrmt"][isp])
+    core = np.asarray(densityk["rhocr"])[0, :, :nrmt].sum(axis=0)
+    assert core.min() >= 0.0
+    assert core[0] / np.abs(core).max() > 1e-6
+    assert abs(core[-1]) / np.abs(core).max() < 1e-6, (
+        "the core density must vanish at R_MT")
+    # the core DOMINATES near the nucleus: Elk's converged rhomt already
+    # contains it, so the right statement is that it is most of what is there
+    reference = np.asarray(groundstate["rhomt"][0])
+    lmmaxi = int(groundstate["lmmaxi"])
+    spherical = reference[::lmmaxi][:int(densityk["nrmti"][isp])]
+    assert core[0] / spherical[0] > 0.9, (
+        "the core is most of the density at the innermost radial point")
+    assert core[-1] / np.abs(spherical).max() < 1e-6

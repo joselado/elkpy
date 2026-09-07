@@ -1030,6 +1030,17 @@ def parse_densityk_response(tokens):
         outer.append(np.array(flat).reshape(nrc - nrci, nr - nri).T)
     out["ctof_full"] = full
     out["ctof_outer"] = outer
+
+    (nspncr,), pos = _take(tokens, pos, 1, int)
+    out["nspncr"] = nspncr
+    (out["chgtot"],), pos = _take(tokens, pos, 1, float)
+    rhocr = np.zeros((natmtot, nspncr, int(nrmt.max())))
+    for ias in range(natmtot):
+        n = int(nrmt[int(idxis[ias]) - 1])
+        for ispn in range(nspncr):
+            flat, pos = _take(tokens, pos, n, float)
+            rhocr[ias, ispn, :n] = flat
+    out["rhocr"] = rhocr
     return out
 
 

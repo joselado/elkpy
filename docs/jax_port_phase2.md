@@ -918,13 +918,40 @@ of `rhomagv`** for a non-magnetic cell. The chain from first-variational
 eigenvectors to the valence density on the fine mesh is therefore closed and
 exact.
 
+### All of `rhomag`, against the converged arrays
+
+Patch **0021** adds the last two ingredients — `rhocr` and `chgtot` — and with
+them the chain runs to Elk's **own converged `rhomt`/`rhoir`** rather than to an
+exported intermediate:
+
+$$\text{rhomagk}\to\text{rhomagsh}\to
+\text{rfmtctof}/\text{rfirctof}\to\text{rhocore}\to\text{rhonorm}$$
+
+| | |
+|---|---|
+| `rhomt`, atom 0 / atom 1 | **3.2e-13 / 1.6e-13** |
+| `rhoir` | **5.8e-12** |
+
+`symrf` is absent because the fixtures run `symtype=0`, where it is the identity.
+
+Two details. `rhocr` is stored the way `vcln` is — as the $(0,0)$ *coefficient*,
+with the $1/y_{00}$ already folded in — and goes into that slot and nowhere else,
+the core being spherical. And `rhonorm` shifts by a *constant*, so in the muffin
+tin it too touches only the $l=0$ coefficient, with the same $y_{00}$ factor;
+treating it as a rescaling would be wrong in a way that leaves the total charge
+correct.
+
+`rhocr` is **exported rather than solved for**, and that is the same call as
+`vsmt` in patch 0015: the core states are a functional of the potential, so at
+fixed potential the core density is an *input*. Everything else in the chain is
+transcribed.
+
 ### What is still not done
 
-`rhocore` and the core states — though at fixed potential the core density is an
-*input* exactly as `vsmt` is, so an export would do; `symrf` on a
-symmetry-reduced mesh (§2g's `symrfmt` has the muffin-tin operator, the
-interstitial's `symrfir` is not exported); `rhonorm`, which is one constant; and
-the magnetic branches `rmk1`/`rmk2`.
+The core-state solver itself (`gencore`/`rdirac`), which a self-consistent loop
+would need where a fixed-potential check does not; `symrfir`, for a
+symmetry-reduced mesh — §2g has the muffin-tin operator, the interstitial's is
+not exported; and the magnetic branches `rmk1`/`rmk2`.
 
 ---
 

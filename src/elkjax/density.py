@@ -47,7 +47,8 @@ __all__ = ["interstitial_wavefunction", "interstitial_density", "coarsen",
            "normalisation_offset", "coarse_radial_indices",
            "muffin_tin_wavefunctions", "muffin_tin_density",
            "pack_coarse", "pack_fine", "to_harmonics",
-           "coarse_to_fine", "solve_zone", "density_from_potential"]
+           "coarse_to_fine", "solve_zone", "density_from_potential",
+           "add_core", "normalise", "refine", "converged_density"]
 
 EPSOCC = 1.0e-8
 
@@ -399,3 +400,107 @@ def density_from_potential(lapw, groundstate, densityk, ispn=0):
     return (muffin_tin_density(local, groundstate, lapw, ispn=ispn),
             interstitial_density(local, float(groundstate["omega"]),
                                  ispn=ispn))
+
+
+# ------------------------------------------------------- core and normalisation
+
+
+def add_core(values, densityk, groundstate, ias):
+    r"""``rhocore``: the core density into the :math:`l=0` slot.
+
+    ``rhocr`` is stored the way ``vcln`` is -- as the :math:`(0,0)`
+    *coefficient*, with the :math:`1/y_{00}` already folded in -- so it is added
+    to column 0 of the dense array and nowhere else.  The core is spherical by
+    construction, which is why there is nothing to add anywhere else.
+
+    It is a functional of the potential (``gencore`` solves the core states in
+    it), so patch 0021 exports it for the same reason `vsmt` is exported: an
+    input at fixed potential.  Summed over ``nspncr``, which is 1 unless
+    ``spincore``.
+    """
+    isp = int(groundstate["idxis"][ias]) - 1
+    nr = int(densityk["nrmt"][isp])
+    core = jnp.asarray(densityk["rhocr"])[ias, :, :nr].sum(axis=0)
+    return jnp.asarray(values).at[:, 0].add(core)
+
+
+def normalise(muffin, interstitial, densityk, groundstate):
+    r"""``charge`` + ``rhonorm``: the uniform shift that fixes the electron count.
+
+    .. math::
+
+        \rho\to\rho+\frac{N-N_{\rm calc}}{\Omega},\qquad
+        N_{\rm calc}=\sum_\alpha\!\int_{\rm MT}\!\rho
+        +\frac{\Omega}{N_{\rm FFT}}\sum_{\bf r}\rho\,\Theta ,
+
+    an ADDITIVE shift and not a rescaling -- so it moves only the
+    :math:`(0,0)` coefficient in the muffin tin, where the same
+    :math:`1/y_{00}` applies as for the core and the nucleus.
+
+    ``muffin`` is a stack of dense fine-mesh arrays, ``interstitial`` is on the
+    fine FFT grid.  Returns the pair, shifted.
+    """
+    from . import integrate
+
+    natmtot = int(groundstate["natmtot"])
+    packed = jnp.stack([pack_fine(muffin[ias], groundstate, ias)
+                        for ias in range(natmtot)])
+    count = float(integrate.cell_integral(packed, interstitial, groundstate))
+    omega = float(groundstate["omega"])
+    shift = (float(densityk["chgtot"]) - count) / omega
+    y00i = 3.54490770181103205460
+    return (jnp.stack([muffin[ias].at[:, 0].add(shift * y00i)
+                       for ias in range(natmtot)]),
+            jnp.asarray(interstitial) + shift)
+
+
+def refine(coarse, groundstate, densityk):
+    """``rfirctof``: the coarse interstitial grid to the fine one.
+
+    The exact inverse of :func:`coarsen` -- zero-padding in :math:`G`-space --
+    written here rather than through Elk's own `rzfftifc` real-to-complex
+    packing, which carries its own `nfgrz`/`igrzf` indexing and would be one
+    more set of conventions for no gain.
+    """
+    coarse_grid = tuple(int(n) for n in densityk["ngdgc"])
+    fine_grid = tuple(int(n) for n in groundstate["ngridg"])
+    ngvc = int(densityk["ngvc"])
+    igfft = np.asarray(groundstate["igfft"])[:ngvc] - 1
+    igfc = np.asarray(densityk["igfc"])[:ngvc] - 1
+    spectrum = _forward_fft(coarse, coarse_grid)
+    array = jnp.zeros(int(groundstate["ngtot"]), dtype=complex)
+    array = array.at[jnp.asarray(igfft)].set(spectrum[jnp.asarray(igfc)])
+    return jnp.real(_inverse_fft(array, fine_grid))
+
+
+def converged_density(densityk, groundstate, lapw, vectors=None, ispn=0):
+    r"""The whole of ``rhomag``: eigenvectors to Elk's converged ``rhomt``/``rhoir``.
+
+    ``rhomagk`` → ``rhomagsh`` → ``rfmtctof`` / ``rfirctof`` → ``rhocore`` →
+    ``rhonorm``, i.e. every step between the first-variational eigenvectors and
+    the arrays the next iteration's potential is built from.  ``symrf`` is
+    absent because these fixtures run ``symtype=0``, where it is the identity.
+
+    ``vectors`` overrides the exported ``evecfv`` -- pass
+    :func:`solve_zone`'s output to drive the whole thing from the potential
+    instead.
+
+    Returns ``(muffin tin dense on the fine mesh, interstitial on the fine
+    grid)``.
+    """
+    natmtot = int(groundstate["natmtot"])
+    local = dict(densityk)
+    if vectors is not None:
+        local["evecfv"] = dict(densityk["evecfv"])
+        local["evecfv"].update(vectors)
+
+    values = muffin_tin_density(local, groundstate, lapw, ispn=ispn)
+    muffin = []
+    for ias in range(natmtot):
+        harmonics = to_harmonics(values[ias], densityk, groundstate, ias)
+        fine = coarse_to_fine(harmonics, densityk, groundstate, ias)
+        muffin.append(add_core(fine, densityk, groundstate, ias))
+    interstitial = refine(
+        interstitial_density(local, float(groundstate["omega"]), ispn=ispn),
+        groundstate, densityk)
+    return normalise(jnp.stack(muffin), interstitial, densityk, groundstate)

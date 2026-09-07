@@ -1,0 +1,23 @@
+--- a/src/elkpy_eigenstates.f90
++++ b/src/elkpy_eigenstates.f90
+@@ -1766,6 +1766,20 @@
+   end do
+ end do
+ deallocate(fi,fo)
++! --- the core density and the target charge (patch 0021) ---
++! rhocore adds rhocr to the l=0 slot of rhomt -- the same slot vcln goes into,
++! and with the same 1/y00 already folded in -- and charge/rhonorm then shift
++! the whole density by (chgtot - chgcalc)/omega. rhocr is a functional of the
++! potential (gencore solves the core states in it), so exporting it is the
++! same call as exporting vsmt: an input at fixed potential, not a step the
++! port declines to transcribe.
++write(*,*) nspncr
++write(*,'(4ES25.16E3)') chgtot
++do ias=1,natmtot
++  do i=1,nspncr
++    write(*,'(4ES25.16E3)') rhocr(1:nrmt(idxis(ias)),ias,i)
++  end do
++end do
+ deallocate(apwalm,evecfv,evecsv,rhomt_,rhoir_,magmt_,magir_)
+ end subroutine
+ !EOC
