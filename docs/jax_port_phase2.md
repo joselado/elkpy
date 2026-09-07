@@ -33,6 +33,7 @@ ask whether the pieces **compose**, which no study item does:
 | | |
 |---|---|
 | §2i | the Kohn-Sham potential end to end, $v_{\rm cl}+\hat Sv_{xc}$ from three modules against Elk's own `vsir` |
+| §2k | Phase 2 differentiated — $\delta E_{xc}/\delta\rho=v_{xc}$ to 5.7e-17; the electrostatic half is OPEN at 0.33 |
 | §2j | the loop closed — potential → $H,O$ at every $k$ → eigensolve → density, with nothing in the path reading an eigenvector |
 
 Sections in order, since the numbering follows the work rather than the study:
@@ -1116,3 +1117,73 @@ Missing: `rhocore` (an input at fixed potential, like `vsmt`), `rhonorm` (one
 constant), a zone-summed Fermi level (§1i has it at a single $k$), and
 `symrfir` for a symmetry-reduced mesh. What is now demonstrated is that both
 directions exist, are exact to their references, and compose.
+
+---
+
+## 2k. Phase 2, differentiated — and one half that does not close
+
+### What was at stake
+
+The port's justification is **differentiability**, and every section above
+checks a *value*: each starts from Elk's converged density and compares a
+number. Nothing in Phase 2 had been differentiated except the functional
+itself (§2a's `jax.grad` of $\varepsilon_{xc}$ at a point).
+
+The defining identity of the Kohn-Sham potential is available and costs no Elk
+run beyond an existing fixture:
+
+$$\frac{\delta E_{xc}[\rho]}{\delta\rho(\mathbf r)}=v_{xc}(\mathbf r),\qquad
+\frac{\delta}{\delta\rho}\Big[\tfrac12\!\int\!\!\rho\,v_{\rm cl}[\rho]
++E_{\rm Mad}\Big]=v_{\rm cl}(\mathbf r).$$
+
+### A defect found before anything could be measured
+
+`elkjax.integrate.cell_inner_product` called `np.asarray` on its muffin-tin
+argument, so it raised `TracerArrayConversionError` and **could not be
+differentiated at all**. In a port whose premise is differentiability that is a
+defect, not a limitation — and it had sat there since §2c because every
+consumer so far passed concrete arrays. Fixed with a traceable unpack, and there
+is now a unit test that differentiates the cell integral and checks the gradient
+*is* the quadrature weight, so the refusal cannot come back silently.
+
+### The exchange-correlation half closes exactly
+
+| against | median relative |
+|---|---|
+| $v_{xc}[\rho]$, untrimmed | **5.7e-17** |
+| Elk's stored `vxcir` | 1.25e-5 |
+| `trim(`$v_{xc}[\rho]$`)` | 1.25e-5 |
+
+AD runs through `xc_pwca` **and** through the cell inner product's own
+quadrature, so this is a different statement from §2a's pointwise check: that
+differentiated the functional, this differentiates an integral of it.
+
+The residual against Elk is **entirely `trimrfg`** — §2a's low-pass — and that
+is asserted as an *equality* with `grid.trim` applied to this module's own
+potential rather than left as an order-of-magnitude coincidence.
+
+### The electrostatic half does not close, and is recorded as open
+
+Measured against `vclir`: 1.3 relative from $\tfrac12\int\rho v_{\rm cl}$ alone,
+and **0.33** once the Madelung term is added. The right direction, not far
+enough.
+
+The bookkeeping that *should* work: $v_{\rm cl}=v_H[\rho]+v_{\rm nuc}$, so
+$\tfrac12\int\rho v_{\rm cl}$ differentiates to $v_H+\tfrac12v_{\rm nuc}$ (the
+Hartree part being quadratic), and $E_{\rm Mad}=\tfrac12\sum_\alpha Z_\alpha
+V_H(\mathbf R_\alpha)$ supplies the missing $\tfrac12v_{\rm nuc}$ by
+reciprocity. Adding `engynn` changes nothing, being constant in $\rho$. Yet the
+residual is 0.33.
+
+Candidates not yet separated: whether `vclmt(1,ias)` — the $l=0$ coefficient at
+the *first* radial mesh point, not at the nucleus — makes the reciprocity
+inexact at this order; whether the muffin-tin density being held fixed while
+only $\rho^{\rm I}$ varies breaks a cancellation that the full variation would
+keep; and whether Elk's `engyen`/`engyhar` split means something other than the
+decomposition above.
+
+`tests/test_calculation_functional_derivative.py` pins it two-sidedly — that the
+Madelung term improves it, and that the residual is between 0.05 and 1.0 — so a
+later change that closes it *fails the test* and gets rewritten as a real check,
+rather than quietly passing a loose bound. **This is an open question, not a
+tolerance.**

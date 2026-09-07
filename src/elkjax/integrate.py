@@ -80,13 +80,27 @@ def cell_inner_product(mt_a, ir_a, mt_b, ir_b, groundstate):
         * jnp.asarray(groundstate["cfunir"]))
     lmmaxi = int(groundstate["lmmaxi"])
     lmmaxo = int(groundstate["lmmaxo"])
+    mt_a, mt_b = jnp.asarray(mt_a), jnp.asarray(mt_b)
     for ias in range(int(groundstate["natmtot"])):
         is_, nr, nri = _shapes(groundstate, ias)
         weights = jnp.asarray(np.asarray(groundstate["wr2mt"])[is_, :nr])
-        dense_a = unpack_muffin_tin(np.asarray(mt_a)[ias], nr, nri,
-                                    lmmaxi, lmmaxo)
-        dense_b = unpack_muffin_tin(np.asarray(mt_b)[ias], nr, nri,
-                                    lmmaxi, lmmaxo)
-        total = total + jnp.sum(weights * jnp.sum(
-            jnp.asarray(dense_a) * jnp.asarray(dense_b), axis=1))
+        dense_a = _dense(mt_a[ias], nr, nri, lmmaxi, lmmaxo)
+        dense_b = _dense(mt_b[ias], nr, nri, lmmaxi, lmmaxo)
+        total = total + jnp.sum(weights * jnp.sum(dense_a * dense_b, axis=1))
     return total
+
+
+def _dense(packed, nr, nri, lmmaxi, lmmaxo):
+    """`unpack_muffin_tin`, but traceable.
+
+    The parser's version calls `np.asarray`, which is right for reading a
+    query's output and wrong inside anything `jax.grad` has to see through --
+    and the port's whole justification is differentiability, so a module that
+    silently refuses to be differentiated is a defect rather than a
+    limitation.  Found by differentiating the total energy with respect to the
+    density (§2k).
+    """
+    inner = packed[:lmmaxi * nri].reshape(nri, lmmaxi)
+    outer = packed[lmmaxi * nri:lmmaxi * nri + lmmaxo * (nr - nri)]
+    top = jnp.zeros((nri, lmmaxo), dtype=packed.dtype).at[:, :lmmaxi].set(inner)
+    return jnp.concatenate([top, outer.reshape(nr - nri, lmmaxo)], axis=0)
