@@ -117,21 +117,32 @@ def test_naive_rule_is_wrong_with_the_multiplet_enclosed():
     assert worst_mode_split > 1.0
 
 
-def test_the_benign_direction_that_misled_the_earlier_check():
-    """A single real diagonal entry: naive REVERSE mode is nearly right here.
+def test_the_direction_that_misled_the_earlier_check():
+    """A single real diagonal entry: the direction that produced the earlier confusion.
 
-    Pinned because it explains the earlier disagreement rather than merely overruling
-    it.  The reverse-mode agreement is a rounding accident, so it is asserted only
-    relative to forward mode on the same matrix -- an absolute bound there would pin
-    this BLAS build, not a fact.  Measured: reverse 1e-8 relative, forward 1.3e-2.
+    `docs/continue_here.md` §3 once reported the naive rule as safe, on the strength
+    of this direction in REVERSE mode only, where it once agreed to 1e-8 while forward
+    mode was already wrong at 1.3e-2.
+
+    **That agreement does not reproduce, and it was never supposed to.**  This module's
+    own `test_why_the_terms_do_not_cancel_bitwise` says why: the two divergent terms
+    would cancel bitwise if JAX symmetrised `v^dagger dH v`, and it does not, so which
+    mode looks right is the eigensolver's arbitrary split of a roundoff-degenerate pair
+    and moves with the BLAS build.  Measured on the build this was last run against, the
+    naive rule is wrong in BOTH modes here -- 1.6e-2 forward and 3.9e-2 reverse.
+
+    So what is asserted is the part that does not depend on the build: along this
+    direction the naive rule is wrong, and the safe rule is right.  The historical
+    lesson is unchanged and is the reason the fixture is kept -- a check that probes one
+    mode along one sparse direction can report a broken rule as safe.
     """
     occ = ref.hard_occupations(6, NOCC)
     h = ref.hermitian_from_spectrum(ENCLOSED, 0)
     d = np.diag([1.0, 0.0, 0.0, 0.0, 0.0, 0.0]).astype(complex)
     exact = ref.directional_derivative(h, d, OBSERVABLE, occ)
-    (nf, nr), (_, sr) = _directional(h, d)
+    (nf, nr), (sf, sr) = _directional(h, d)
     assert abs(nf - exact) / abs(exact) > 1e-3
-    assert abs(nr - exact) < 0.1 * abs(nf - exact)
+    assert abs(sf - exact) / abs(exact) < 1e-11
     assert abs(sr - exact) / abs(exact) < 1e-11
 
 

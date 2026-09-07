@@ -6,32 +6,47 @@ Working state as of 2026-09-07, written to be picked up cold. Last verified: fas
 *Workstream A* — the full-coverage Elk wrapper — is complete and untouched since the
 session that landed it; its open items are §2's. *Workstream B* — the JAX port — has
 Phase 0 closed (it did not kill the project; the only open item is 0d's timing, which
-needs a GPU), Phase 1 closed except for three named items, and Phase 2 under way through
-item 2d. The port's own premise is now demonstrated rather than argued: §2b transcribes
-only PBE's *energy* densities and lets `jax.grad` supply the functional derivative Elk
-gets from Perdew's hand-derived expression, and the two agree.
+needs a GPU), Phase 1 closed except for three named items, Phase 2 closed as a set of
+forward checks (§§2a-2k, with §2k's electrostatic functional derivative still open), and
+**Phase 3's forward criterion met**: the Kohn-Sham loop closes and converges to Elk's own
+total energy (3.0e-8 Ha) and Fermi level (1.4e-9 Ha) from a start 0.30 away in potential
+norm. Phase 3's three *gradient* criteria have not been started. The port's own premise
+is demonstrated rather than argued: §2b transcribes only PBE's *energy* densities and lets
+`jax.grad` supply the functional derivative Elk gets from Perdew's hand-derived
+expression, and the two agree.
 
 **Where to start.** §3's "Start here next session" is the ranked list, and the three
 Phase 2 items below it are ordered by cost. In short:
 
-1. **A fixed-point iteration.** Both half-steps now exist and compose: density →
-   potential (§2i, pointwise against Elk's own `vsir`) and potential →
-   eigenvectors → density (§2j, 5e-11, limited by Elk's own two `evecfv` exports
-   rather than by the chain). What is left to make it a *loop* rather than two
-   half-steps: `rhocore` (an input at fixed potential, so an export would do),
-   `rhonorm` (one constant), a zone-summed Fermi level (§1i has it at a single
-   k), and `symrfir` for a symmetry-reduced mesh. None is a research problem —
-   the open question is whether iterating is *stable*, which nothing has tested,
-   and Phase 0a's implicit-differentiation machinery is what it would be wrapped
-   in.
+1. **~~A fixed-point iteration.~~ DONE, forward** (§§3a-3b, `src/elkjax/scf.py`,
+   patch 0023). `occupy.f90` was the last piece of Fortran between the two
+   half-steps; it reproduces Elk's `efermi`/`occsv` **bitwise**. With it the
+   loop closes: Elk's converged potential is a fixed point of the map to
+   1.8e-15 relative, and a start 0.30 away converges geometrically to Elk's own
+   `engytot` (3.0e-8 Ha) and `efermi` (1.4e-9 Ha), with `|v - v*|` tracking the
+   residual all the way down. §2f's two imported scalars (`evalsum`, `engyts`)
+   are now computed; only the CORE half of `evalsum` and `engynn` are imported.
+
+   **The next step is the one blocker to every Phase 3 gradient criterion, and
+   it is one line, not a research problem**: `rhomagk`'s `epsocc` skip is a
+   Python `continue` on the occupation value, so `density.muffin_tin_density`
+   and `interstitial_density` need concrete arrays and `scf.step` cannot be
+   traced. Writing that skip as a zeroed weight is exactly equivalent (the
+   state contributes nothing either way) and makes the step differentiable,
+   which is what `fixedpoint.implicit_fixed_point` needs. After that: Gradient
+   A (linear vs Anderson, the inter-mixer difference falling linearly with
+   `epspot`), which needs no reference value and is the sharpest available.
 2. **~~`symrfmt`~~ DONE** (§2g, patch 0018) — the operator is *exported* rather than
    transcribed, so Elk's Euler-angle/Wigner-$D$ construction and its atom bookkeeping
    are not re-derived at all. Applying it takes the pointwise `vxcmt` gap from 5.3e-3
    to 6.4e-14.
-3. **The Phase 3 boundary.** Phase 2's density-functional half is closed — the total
-   energy's reproduced terms match Elk to $10^{-13}$ (§2f) with `evalsum`, `engyts`
-   and `engynn` imported. What those three need is the second-variational step, the
-   occupations and a zone sum, which is where Phase 3 starts.
+3. **~~The Phase 3 boundary.~~ MOVED.** `evalsum` and `engyts` are computed from
+   this port's own occupations (§3b); `engynn` is a lattice constant and stays
+   imported, as does the CORE half of `evalsum` — patch 0023 exports it, an
+   input at fixed potential exactly as `rhocr` is. What is still absent is
+   `eveqnsv`: a spin-polarised or spin-orbit ground state is **refused**
+   (`scf.check_scalar`) rather than treated as first-variational, so magnetism
+   is the next real boundary.
 4. **The two Phase 1 leftovers**: the position derivative $d\varepsilon/d\mathbf R$
    (needs moving radial integrals, so it waits on Phase 2); and smeared occupations at
    *second* order, which needs a Chebyshev expansion of the Fermi function —

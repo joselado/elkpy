@@ -296,10 +296,12 @@ it.** Code lives in `src/elkjax/` — a *sibling* package to `elkpy`, deliberate
 so elkpy's fast unit tests never acquire a `jax` dependency. Install `pip install -e .[jax]`;
 tests are `tests/test_jax_*.py` and self-skip without jax.
 
-Status: Phase 0 closed (it did not kill the project), Phase 1 done through §1m, Phase 2 under way
-(§§2a-2k). **Full narrative, phase tables, every measured tolerance, and the compute discipline:
+Status: Phase 0 closed (it did not kill the project), Phase 1 done through §1m, Phase 2 done as
+forward checks (§§2a-2k, one open question in §2k), Phase 3 has its **forward** criterion (§§3a-3b:
+the Kohn-Sham loop closes and converges to Elk's own total energy and Fermi level) and none of its
+gradient ones. **Full narrative, phase tables, every measured tolerance, and the compute discipline:
 `docs/jax_port_status.md`** — plus `docs/jax_port.md` (the study) and
-`docs/jax_port_phase{0,1,2}.md` (the logs). `docs/continue_here.md` §3 is the cold start.
+`docs/jax_port_phase{0,1,2,3}.md` (the logs). `docs/continue_here.md` §3 is the cold start.
 **New measurements go in `docs/jax_port_phaseN.md` and `docs/jax_port_status.md`; only a rule that
 must hold even if those files are never opened belongs here.**
 
@@ -337,6 +339,11 @@ Working rules distilled from what Phase 0/1 measured (each is a measurement, not
   gradient is wrong by $10^{17}$. Use the implicit route — which also means "implicit agrees between
   mixers" proves nothing.
 - `tol` is inert for smeared occupations and load-bearing for a hard window.
+- **Elk mixes the potential in the MIDDLE of its own iteration**, so any two exported arrays
+  written on opposite sides of `gndstate.f90`'s `mixerifc` call disagree by the last mixing step —
+  measured five times now (patch 0015's `genapwlofr`, §1k's `haa`, §2h's density, §2j's two
+  `evecfv`, §3b's `vsig`). When two Elk arrays disagree at roughly `epspot`, that is what it is;
+  check where each is written before hunting a transcription bug.
 
 ## Commands
 

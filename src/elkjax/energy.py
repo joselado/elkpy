@@ -42,7 +42,8 @@ import jax.numpy as jnp
 from . import grid, integrate, poisson, symmetry, xc
 
 __all__ = ["madelung", "coulomb_terms", "exchange_correlation_terms",
-           "kohn_sham_potentials", "terms", "report"]
+           "kohn_sham_potentials", "eigenvalue_sum", "entropy_term", "terms",
+           "report"]
 
 Y00 = 0.28209479177387814347
 
@@ -151,7 +152,59 @@ def exchange_correlation_terms(potentials, groundstate):
     return out
 
 
-def terms(groundstate, poisson_potential=True, symmetrise=False):
+def eigenvalue_sum(evalsv, occsv, wkpt, evalsumcr):
+    r"""``energy.f90``'s :math:`\Sigma_\varepsilon`, the occupied eigenvalue sum.
+
+    .. math::
+
+        \Sigma_\varepsilon = \sum_{\alpha,\,{\rm core}}
+        n_c\,\varepsilon_c
+        \;+\;
+        \sum_{\bf k}w_{\bf k}\sum_i n_{i\bf k}\,\varepsilon_{i\bf k}.
+
+    The **core** half is imported (patch 0023's ``evalsumcr``) for the same
+    reason patch 0021's ``rhocr`` is: the core states are a functional of the
+    potential, so at fixed potential they are an input and not a step declined.
+    The valence half is the zone sum, and it is what
+    :mod:`elkjax.occupations` makes computable -- so this closes one of the two
+    scalars §2f had to import.
+    """
+    return (jnp.sum(jnp.asarray(wkpt)[:, None] * jnp.asarray(occsv)
+                    * jnp.asarray(evalsv)) + evalsumcr)
+
+
+def entropy_term(occsv, wkpt, swidth, occmax, stype=3):
+    r"""``energy.f90``'s :math:`E_{TS}`, the smearing's free-energy term.
+
+    .. math::
+
+        E_{TS} = \sigma\,n_{\max}\sum_{\bf k}w_{\bf k}\sum_i
+        \big[f\ln f + (1-f)\ln(1-f)\big],
+        \qquad f = n_{i\bf k}/n_{\max},
+
+    which is Elk's :math:`-\sigma S/k_B` written without the two factors of
+    :math:`k_B` that cancel.  It is **non-zero only for Fermi-Dirac smearing**:
+    ``energy.f90:242`` sets it to zero for every other ``stype``, which the
+    study flags as the source of a force error one would otherwise chase for a
+    week, so the branch is transcribed rather than assumed away.
+
+    Fully occupied and empty states contribute nothing and their logarithms do
+    not exist, so the argument is made safe *before* the log -- the discarded
+    branch of a ``jnp.where`` still propagates a ``NaN`` through the gradient.
+    """
+    if stype != 3:
+        return jnp.asarray(0.0)
+    f = jnp.asarray(occsv) / occmax
+    inside = (f > 0.0) & (f < 1.0)
+    safe = jnp.where(inside, f, 0.5)
+    terms = jnp.where(inside,
+                      safe * jnp.log(safe) + (1.0 - safe) * jnp.log(1.0 - safe),
+                      0.0)
+    return swidth * occmax * jnp.sum(jnp.asarray(wkpt)[:, None] * terms)
+
+
+def terms(groundstate, poisson_potential=True, symmetrise=False,
+          evalsum=None, engyts=None):
     """Every term of ``energy.f90`` this phase can build, plus the total.
 
     ``poisson_potential=False`` substitutes Elk's own ``vclmt``/``vclir`` for
@@ -173,9 +226,16 @@ def terms(groundstate, poisson_potential=True, symmetrise=False):
     out.update(exchange_correlation_terms(
         kohn_sham_potentials(groundstate, symmetrise=symmetrise), groundstate))
 
-    # imported: these need the second-variational step and the zone sum
-    evalsum = float(groundstate["evalsum"])
-    engyts = float(groundstate["engyts"])
+    # `evalsum` and `engyts` default to the export's own converged scalars --
+    # §2f had no zone sum and no occupations to build them from.  Phase 3 does:
+    # `elkjax.scf` passes both, computed by `eigenvalue_sum` and
+    # `entropy_term`, and then the only scalar still imported is `engynn`,
+    # which is a property of the lattice rather than of the density.
+    if evalsum is None:
+        evalsum = float(groundstate["evalsum"])
+    if engyts is None:
+        engyts = float(groundstate["engyts"])
+    out["evalsum"], out["engyts"] = evalsum, engyts
     out["engykn"] = evalsum - out["engyvcl"] - out["engyvxc"]
     out["engytot"] = (out["engykn"] + out["engyvcl"] / 2.0 + out["engymad"]
                       + out["engyx"] + out["engyc"] + engyts)

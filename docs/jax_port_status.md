@@ -9,8 +9,16 @@ repository.** It is not background: the study's own Phase 0e asks for production
 that this machine cannot hold, and an unguarded run drives a 39 GB workstation into swap.
 
 Companion documents: `docs/jax_port.md` is the design study, `docs/continue_here.md` §3
-the cold-start summary, and `docs/jax_port_phase{0,1,2}.md` the running logs with every
+the cold-start summary, and `docs/jax_port_phase{0,1,2,3}.md` the running logs with every
 measured tolerance.
+
+**Where the port is.** Phase 0 closed, Phase 1 closed except for three named items,
+Phase 2 closed as a set of forward checks (§§2a-2k, one open question in §2k), and
+**Phase 3 has its forward criterion**: the Kohn-Sham loop closes, Elk's converged
+potential is a fixed point of it to 1.8e-15 relative, and a run started 0.30 away in
+potential norm converges to Elk's total energy within 3.0e-8 Ha and its Fermi level
+within 1.4e-9 Ha (`docs/jax_port_phase3.md`). The loop is **forward only** — it runs on
+concrete arrays, and Phase 3's three gradient signatures have not been started.
 
 ---
 
@@ -18,7 +26,8 @@ measured tolerance.
 `docs/jax_port.md` (1,623 lines) is the design study, `docs/continue_here.md` §3 the cold-start
 summary, `docs/jax_port_phase0.md` the running log of what Phase 0 measured,
 `docs/jax_port_phase1.md` the same for Phase 1 (through §1m), and
-`docs/jax_port_phase2.md` for Phase 2, which is under way (§§2a-2h). §2a is the LDA
+`docs/jax_port_phase2.md` for Phase 2 (§§2a-2k) and `docs/jax_port_phase3.md` for
+Phase 3 (§§3a-3b). §2a is the LDA
 exchange-correlation functional: `src/elkjax/xc.py` transcribes `xc_pwca.f90`, with
 `jax.grad` reproducing Elk's hand-coded $v_{xc}$ at machine precision against the study's
 stated $10^{-10}$, exchange exact against Dirac and its spin scaling, correlation
@@ -604,8 +613,12 @@ on the disputed spectrum the naive route is wrong by $1.1\times10^{1}$ (forward)
 $3.4\times10^{0}$ (reverse) relative, against $2.9\times10^{-14}$ with the rule, while central
 FD agrees with the closed form to $3.7\times10^{-8}$ — so FD was *reliable* here and the earlier
 check's one-in-three disagreement was AD error, not FD noise. It saw agreement because it probed
-a single real diagonal direction in reverse mode only; that same direction in forward mode is
-already wrong at $1.3\times10^{-2}$. **Always check forward against reverse** — for a
+a single real diagonal direction in reverse mode only; that same direction in forward mode was
+already wrong at $1.3\times10^{-2}$. **That reverse-mode agreement does not reproduce across
+builds and was never supposed to** — on a rebuilt binary the naive rule is wrong in both modes
+there (1.6e-2 forward, 3.9e-2 reverse), for the reason the next paragraph gives: which mode looks
+right is the eigensolver's arbitrary split of a roundoff-degenerate pair. The test now asserts
+only what does not depend on the build. **Always check forward against reverse** — for a
 scalar-in, scalar-out function they are the same number, so disagreement is proof on its own and
 costs nothing. Also measured: which failure mode appears is the *eigensolver's* choice, since
 LAPACK and XLA split the same engineered pair differently and XLA returns it bitwise equal at
@@ -615,7 +628,33 @@ $A=v^\dagger\,\delta H\,v$ were bitwise Hermitian, and JAX's `_eigh_jvp_rule` fo
 symmetrisation — so $\|A-A^\dagger\|/\delta\lambda\approx0.2$–$0.5$ survives, which is the
 size of the observed failure.
 
-`docs/continue_here.md` is current as of §1k: both workstreams are on `master`, and its
+### Phase 3 — the SCF loop with implicit differentiation (study §6)
+
+| item | what it settles | status |
+|---|---|---|
+| the occupations and the zone-summed Fermi level (`occupy.f90`) | whether study §8(b)'s rule works with the k-point weights that a single k-point makes cancel | **done, patch 0023** — Elk's `efermi` and `occsv` reproduced **bitwise** on bulk Si and fcc Al, on Elk's own `evalsv`, i.e. with the assembly out of the path. $d\mu$ is a `custom_jvp` over a bisection that is never differentiated; forward against reverse against central FD in all three differentiable arguments on a real metal. Replacing Elk's reduced-mesh weights with uniform ones moves $\mu$, asserted, so the weights cannot silently stop mattering |
+| **Forward:** a converged ground state reproducing Elk's total energy and Fermi level | whether the composition of §2i and §2j is *stable*, which no Phase 2 check asked | **done** — Elk's converged $v^*$ is a fixed point of the map to $1.8\times10^{-15}$ relative; from a start $0.30$ away in potential norm, linear mixing at $\beta=0.4$ converges geometrically (~0.62/iteration) with $\lVert v-v^*\rVert$ tracking $\lVert F(v)-v\rVert$ all the way down, reaching `engytot` within **3.0e-8 Ha** and $\mu$ within **1.4e-9 Ha** — inside the study's own 1e-6 and 1e-8. The iteration count is deliberately NOT compared, as the study itself withdraws that criterion |
+| **Gradient A** (inter-mixer difference scaling with `epspot`), **B** ($d\mu/d\varepsilon$ on bcc Fe), **C** (the tolerance plateau) | whether implicit differentiation is actually wired up | **not started.** The blocker is one line, not a research problem: `rhomagk`'s `epsocc` skip is a Python `continue` on the occupation value, so the density accumulation needs concrete arrays. Writing it as a zeroed weight is exactly equivalent |
+
+**Two facts from Phase 3 worth carrying even if the log is never opened.**
+
+- **`genvsig` transforms $v_s\Theta$, not $v_s$** (`rfirftoc.f90`'s first line), while
+  `rfirctof` — the map the *density* uses in the other direction — has no such factor.
+  So `density.coarsen` is `rfirctof`'s inverse and is **not** `rfirftoc`; using it is
+  wrong by a factor of 12, and the symptom is not a slightly wrong potential but an
+  empty density, because the spectrum drops below `e0min` and §3a's gate zeroes every
+  occupancy.
+- **Elk mixes in the middle of its own iteration, and this is now the fifth array pair
+  caught on opposite sides of that line.** `init0.f90` makes the mixer's target
+  `vsbs` = [`vsmt`, `vsirc`] — the *coarse* interstitial potential — while `vsir` is a
+  separate array nothing mixes, so the export carries a `vsir` one un-mixed step ahead
+  of the `vsig` built from it: 2.6e-8 at Elk's default `epspot`, 2.0e-9 at 1e-8. The
+  previous four are patch 0015's `genapwlofr`, §1k's `haa`, §2h's muffin-tin density and
+  §2j's two `evecfv` exports. **When two Elk arrays disagree at the size of the last
+  mixing step, that is what it is** — check where each is written in `gndstate.f90`
+  before looking for a transcription bug.
+
+`docs/continue_here.md` is current as of §3b: both workstreams are on `master`, and its
 §3 marks patches 0013/0014/0015, the κ(S) measurement, the projector rule at a real
 multiplet, the `match` pole removal, the negative test, the smeared occupations, second
 derivatives, the radial integrals/potential derivative and the frozen-potential position

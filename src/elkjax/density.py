@@ -351,7 +351,7 @@ def pack_fine(values, groundstate, ias):
 # --------------------------------------------- the loop closed, one iteration
 
 
-def solve_zone(lapw, groundstate, densityk, ispn=0):
+def solve_zone(lapw, groundstate, densityk, ispn=0, eigenvalues=False):
     r"""Diagonalise at every k-point of Elk's own set, from the potential.
 
     Returns a dict keyed ``(ik, ispn)`` of ``evecfv`` in Elk's normalisation
@@ -363,13 +363,19 @@ def solve_zone(lapw, groundstate, densityk, ispn=0):
     `elkjax.radial` builds from the potential (§1k) -- and the interstitial
     ones from ``vsig``/``cfunig``, so **nothing here reads an eigenvector**.
     That is the whole point: it is the other half of the SCF step.
+
+    ``eigenvalues=True`` also returns the ``(nkpt, nstfv)`` spectrum, which is
+    what `elkjax.occupations` needs and what makes the step a closed loop
+    rather than a half-step at Elk's own occupations.  For a scalar
+    (non-spin-polarised, no spin-orbit) calculation ``eveqnsv`` is the
+    identity, so these first-variational eigenvalues **are** Elk's ``evalsv``.
     """
     from .hamiltonian import cholesky_reduce, eigenproblem_on_gset
 
     bvec = np.asarray(groundstate["bvec"])
     vgc = np.asarray(groundstate["vgc"])
     nstfv = int(densityk["nstfv"])
-    out = {}
+    out, spectrum = {}, []
     for ik in range(int(densityk["nkpt"])):
         igkig = np.asarray(densityk["igkig"][(ik, ispn)])
         ngp = int(densityk["ngk"][ik, ispn])
@@ -377,11 +383,12 @@ def solve_zone(lapw, groundstate, densityk, ispn=0):
                 + (bvec @ np.asarray(densityk["vkl"])[:, ik])[None, :])
         h, o = eigenproblem_on_gset(lapw, groundstate, igkig, vgkc, ngp)
         reduced, chol = cholesky_reduce(h, o)
-        _, y = jnp.linalg.eigh(reduced)
+        values, y = jnp.linalg.eigh(reduced)
         # c = L^{-dagger} y, which restores Elk's own normalisation
         vectors = jnp.linalg.solve(chol.conj().T, y[:, :nstfv])
         out[(ik, ispn)] = vectors.T
-    return out
+        spectrum.append(values[:nstfv])
+    return (out, jnp.stack(spectrum)) if eigenvalues else out
 
 
 def density_from_potential(lapw, groundstate, densityk, ispn=0):
