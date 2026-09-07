@@ -341,8 +341,8 @@ Working rules distilled from what Phase 0/1 measured (each is a measurement, not
 - `tol` is inert for smeared occupations and load-bearing for a hard window.
 - **Elk mixes the potential in the MIDDLE of its own iteration**, so any two exported arrays
   written on opposite sides of `gndstate.f90`'s `mixerifc` call disagree by the last mixing step —
-  measured five times now (patch 0015's `genapwlofr`, §1k's `haa`, §2h's density, §2j's two
-  `evecfv`, §3b's `vsig`). When two Elk arrays disagree at roughly `epspot`, that is what it is;
+  measured four times now (§1k's `haa`, which patch 0015's `genapwlofr` call fixed; §2h's
+  density; §2j's two `evecfv`; §3b's `vsig`). When two Elk arrays disagree at roughly `epspot`, that is what it is;
   check where each is written before hunting a transcription bug.
 
 ## Commands

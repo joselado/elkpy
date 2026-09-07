@@ -148,14 +148,31 @@ def test_elks_converged_potential_is_a_fixed_point_of_the_map(silicon):
     is not Elk's own map; but every one of them is evaluated at Elk's
     converged potential, which is what makes Elk's `v*` a fixed point of THIS
     map and the check meaningful.
+
+    **The two halves are asserted separately, and they are not the same
+    number.**  The packed norm is dominated by the muffin tin, which carries
+    the nuclear -Z/r at the first radial point and is of order 4.8e8 against
+    the interstitial's 1.1e2 -- so a single relative bound on the packed
+    vector would admit an interstitial error of 1e-6 absolute without
+    noticing.  Measured: 1.8e-15 relative in the muffin tin and 1.0e-9 in the
+    interstitial.  The second is not roundoff and is not claimed to be: the
+    start mixes Elk's own MIXED `vsmt` with its UNMIXED `vsir` (see the test
+    above), so a residual at the scale of Elk's last mixing step is what this
+    start point can give.
     """
     import jax.numpy as jnp
     from elkjax import scf
     groundstate, densityk, lapw = silicon
+    shape = tuple(int(n) for n in np.asarray(lapw["vsmt"]).shape)
     start = scf.pack(np.asarray(lapw["vsmt"]), groundstate["vsir"])
     residual = scf.step(start, (lapw, groundstate, densityk)) - start
-    assert float(jnp.linalg.norm(residual)) \
-        / float(jnp.linalg.norm(start)) < 1e-14
+
+    for got, reference, bound in zip(
+            scf.unpack(residual, shape, int(groundstate["ngtot"])),
+            scf.unpack(start, shape, int(groundstate["ngtot"])),
+            (1e-14, 1e-8)):
+        assert float(jnp.linalg.norm(got)) \
+            / float(jnp.linalg.norm(reference)) < bound
 
 
 def test_the_energy_no_longer_imports_the_eigenvalue_sum_or_the_entropy(
@@ -167,19 +184,28 @@ def test_the_energy_no_longer_imports_the_eigenvalue_sum_or_the_entropy(
     potential, exactly as `rhocr` is) and `engynn`, a property of the lattice
     rather than of the density.
 
-    `engyts` is checked in RELATIVE terms even though it is tiny (-9.5e-6 Ha
-    on this fixture): an absolute tolerance on it would pass for a term that
-    was simply zero, which is what `energy.f90` returns for every `stype` but
-    Fermi-Dirac.
+    The big terms are checked in ABSOLUTE Hartrees, because that is the unit
+    the study's own criterion is in and because a relative bound on `engytot`
+    (-578 Ha) would admit 6e-4 Ha.  Measured 1.3e-8 Ha on `engytot`; 1e-7 is
+    a regression guard with room for a different BLAS, not the measurement.
+
+    `engyts` is the one checked relatively, because it is tiny (-9.5e-6 Ha
+    here) and an absolute bound on it would pass for a term that was simply
+    zero -- which is what `energy.f90` returns for every `stype` but
+    Fermi-Dirac.  Its 1e-5 is loose on purpose: it inherits mu, which inherits
+    the `vsig` mixing step, and this session measured twice that anything set
+    by Elk's stopping point moves between builds.  The floor below keeps it
+    from being vacuous.
     """
     from elkjax import scf
     groundstate, densityk, lapw = silicon
     terms, got = scf.total_energy(lapw, groundstate, densityk,
                                   np.asarray(lapw["vsmt"]),
                                   groundstate["vsir"])
-    for name in ("evalsum", "engyts", "engykn", "engytot"):
-        mine, reference = float(terms[name]), float(groundstate[name])
-        assert abs(mine - reference) / abs(reference) < 1e-6, name
+    for name in ("evalsum", "engykn", "engytot"):
+        assert abs(float(terms[name]) - float(groundstate[name])) < 1e-7, name
+    assert abs(float(terms["engyts"]) - float(groundstate["engyts"])) \
+        / abs(float(groundstate["engyts"])) < 1e-5
     assert abs(float(terms["engyts"])) > 1e-9, (
         "engyts is zero on this fixture, so the relative check above is "
         "vacuous; Elk's default stype is 3 and this should not happen")

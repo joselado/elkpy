@@ -212,11 +212,11 @@ Two consequences. Elk's own SCF variable is
 $(v^{\rm MT},\tilde v^{\rm I}_{\rm coarse})$ while this module iterates
 $(v^{\rm MT},v^{\rm I}_{\rm fine})$ — the extra high-$|G|$ tail of the fine
 array is inert, nothing in the step reads it, so the two have the same fixed
-point. And this is the **fifth** instance of the same pattern: patch 0015's
-`genapwlofr`, §1k's `haa` at 3e-10, §2h's muffin-tin density at 1.2e-10, §2j's
-two `evecfv` exports at 3.7e-11, and now `vsig`. Elk mixes in the middle of its
-own iteration, and any two arrays written on opposite sides of that line
-disagree by the last mixing step.
+point. And this is the **fourth** instance of the same pattern: §1k's `haa` at
+3e-10 (which is what patch 0015's `genapwlofr` call fixed), §2h's muffin-tin
+density at 1.2e-10, §2j's two `evecfv` exports at 3.7e-11, and now `vsig`. Elk
+mixes in the middle of its own iteration, and any two arrays written on
+opposite sides of that line disagree by the last mixing step.
 
 ### Elk's converged potential is a fixed point of the map
 
@@ -225,12 +225,22 @@ One whole iteration of $F$ starting at Elk's own answer: radial functions,
 `rhomag` including both symmetrisations, the Weinert solve and the functional
 — composed once and landing back where they started.
 
-$$\frac{\lVert F(v^*)-v^*\rVert}{\lVert v^*\rVert}
-= \frac{8.7\times10^{-7}}{4.8\times10^{8}} = 1.8\times10^{-15}.$$
+**Split by region, because the packed norm is not one number.** The muffin-tin
+half carries the nuclear $-Z/r$ at the first radial point and is of order
+$4.8\times10^8$; the interstitial half is of order $10^2$. A single relative
+bound on the packed vector is therefore a statement about the muffin tin alone,
+and would admit an interstitial error of $10^{-6}$ absolute:
 
-The denominator is that large because the muffin-tin potential carries the
-nuclear $-Z/r$ at the first radial point; the ratio is the honest statement and
-the numerator alone would not be.
+| | $\lVert r\rVert$ | $\lVert v\rVert$ | relative |
+|---|---|---|---|
+| muffin tin | 8.6e-7 | 4.8e8 | **1.8e-15** |
+| interstitial | 1.1e-7 | 1.1e2 | **1.0e-9** |
+
+The second is not roundoff and is not claimed to be. The start mixes Elk's own
+**mixed** `vsmt` with its **unmixed** `vsir` — the two sides of the line the
+previous subsection describes — so a residual at the scale of Elk's last mixing
+step is what this start point can give. The muffin-tin figure is the one that
+says the cycle closes.
 
 ### The energy no longer imports the eigenvalue sum or the entropy
 

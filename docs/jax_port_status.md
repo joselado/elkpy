@@ -15,9 +15,10 @@ measured tolerance.
 **Where the port is.** Phase 0 closed, Phase 1 closed except for three named items,
 Phase 2 closed as a set of forward checks (§§2a-2k, one open question in §2k), and
 **Phase 3 has its forward criterion**: the Kohn-Sham loop closes, Elk's converged
-potential is a fixed point of it to 1.8e-15 relative, and a run started 0.30 away in
-potential norm converges to Elk's total energy within 3.0e-8 Ha and its Fermi level
-within 1.4e-9 Ha (`docs/jax_port_phase3.md`). The loop is **forward only** — it runs on
+potential is a fixed point of it — 1.8e-15 relative in the muffin tin, 1.0e-9 in the
+interstitial, where the start mixes Elk's mixed `vsmt` with its unmixed `vsir` — and a
+run started 0.30 away in potential norm converges to Elk's total energy within 3.0e-8 Ha
+and its Fermi level within 1.4e-9 Ha (`docs/jax_port_phase3.md`). The loop is **forward only** — it runs on
 concrete arrays, and Phase 3's three gradient signatures have not been started.
 
 ---
@@ -633,7 +634,7 @@ size of the observed failure.
 | item | what it settles | status |
 |---|---|---|
 | the occupations and the zone-summed Fermi level (`occupy.f90`) | whether study §8(b)'s rule works with the k-point weights that a single k-point makes cancel | **done, patch 0023** — Elk's `efermi` and `occsv` reproduced **bitwise** on bulk Si and fcc Al, on Elk's own `evalsv`, i.e. with the assembly out of the path. $d\mu$ is a `custom_jvp` over a bisection that is never differentiated; forward against reverse against central FD in all three differentiable arguments on a real metal. Replacing Elk's reduced-mesh weights with uniform ones moves $\mu$, asserted, so the weights cannot silently stop mattering |
-| **Forward:** a converged ground state reproducing Elk's total energy and Fermi level | whether the composition of §2i and §2j is *stable*, which no Phase 2 check asked | **done** — Elk's converged $v^*$ is a fixed point of the map to $1.8\times10^{-15}$ relative; from a start $0.30$ away in potential norm, linear mixing at $\beta=0.4$ converges geometrically (~0.62/iteration) with $\lVert v-v^*\rVert$ tracking $\lVert F(v)-v\rVert$ all the way down, reaching `engytot` within **3.0e-8 Ha** and $\mu$ within **1.4e-9 Ha** — inside the study's own 1e-6 and 1e-8. The iteration count is deliberately NOT compared, as the study itself withdraws that criterion |
+| **Forward:** a converged ground state reproducing Elk's total energy and Fermi level | whether the composition of §2i and §2j is *stable*, which no Phase 2 check asked | **done** — Elk's converged $v^*$ is a fixed point of the map to $1.8\times10^{-15}$ relative in the muffin tin and $1.0\times10^{-9}$ in the interstitial (the two halves differ by four orders of magnitude in norm, so one bound on the packed vector says nothing about the second); from a start $0.30$ away in potential norm, linear mixing at $\beta=0.4$ converges geometrically (~0.62/iteration) with $\lVert v-v^*\rVert$ tracking $\lVert F(v)-v\rVert$ all the way down, reaching `engytot` within **3.0e-8 Ha** and $\mu$ within **1.4e-9 Ha** — inside the study's own 1e-6 and 1e-8. The iteration count is deliberately NOT compared, as the study itself withdraws that criterion |
 | **Gradient A** (inter-mixer difference scaling with `epspot`), **B** ($d\mu/d\varepsilon$ on bcc Fe), **C** (the tolerance plateau) | whether implicit differentiation is actually wired up | **not started.** The blocker is one line, not a research problem: `rhomagk`'s `epsocc` skip is a Python `continue` on the occupation value, so the density accumulation needs concrete arrays. Writing it as a zeroed weight is exactly equivalent |
 
 **Two facts from Phase 3 worth carrying even if the log is never opened.**
@@ -644,13 +645,13 @@ size of the observed failure.
   wrong by a factor of 12, and the symptom is not a slightly wrong potential but an
   empty density, because the spectrum drops below `e0min` and §3a's gate zeroes every
   occupancy.
-- **Elk mixes in the middle of its own iteration, and this is now the fifth array pair
+- **Elk mixes in the middle of its own iteration, and this is now the fourth array pair
   caught on opposite sides of that line.** `init0.f90` makes the mixer's target
   `vsbs` = [`vsmt`, `vsirc`] — the *coarse* interstitial potential — while `vsir` is a
   separate array nothing mixes, so the export carries a `vsir` one un-mixed step ahead
   of the `vsig` built from it: 2.6e-8 at Elk's default `epspot`, 2.0e-9 at 1e-8. The
-  previous four are patch 0015's `genapwlofr`, §1k's `haa`, §2h's muffin-tin density and
-  §2j's two `evecfv` exports. **When two Elk arrays disagree at the size of the last
+  previous three are §1k's `haa` (which patch 0015's `genapwlofr` call fixed), §2h's
+  muffin-tin density and §2j's two `evecfv` exports. **When two Elk arrays disagree at the size of the last
   mixing step, that is what it is** — check where each is written in `gndstate.f90`
   before looking for a transcription bug.
 

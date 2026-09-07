@@ -22,7 +22,9 @@ Phase 2 items below it are ordered by cost. In short:
    patch 0023). `occupy.f90` was the last piece of Fortran between the two
    half-steps; it reproduces Elk's `efermi`/`occsv` **bitwise**. With it the
    loop closes: Elk's converged potential is a fixed point of the map to
-   1.8e-15 relative, and a start 0.30 away converges geometrically to Elk's own
+   1.8e-15 relative in the muffin tin (1.0e-9 in the interstitial, where the
+   start mixes Elk's mixed `vsmt` with its unmixed `vsir`), and a start 0.30
+   away converges geometrically to Elk's own
    `engytot` (3.0e-8 Ha) and `efermi` (1.4e-9 Ha), with `|v - v*|` tracking the
    residual all the way down. §2f's two imported scalars (`evalsum`, `engyts`)
    are now computed; only the CORE half of `evalsum` and `engynn` are imported.
