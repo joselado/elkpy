@@ -14,12 +14,15 @@ gets from Perdew's hand-derived expression, and the two agree.
 **Where to start.** §3's "Start here next session" is the ranked list, and the three
 Phase 2 items below it are ordered by cost. In short:
 
-1. **The density's post-processing** — item 2b is done for the VALENCE density in
-   both regions (§2h, 9e-16). What is left between `rhomagk`'s output and the
-   density the potential is built from: `rhomagsh` (spherical coordinates back to
-   harmonics), `rfmtctof` (coarse to fine radial mesh), and `rhocore`, which needs
-   a core-state solver — or an export, the core density being an input at fixed
-   potential exactly as `vsmt` is.
+1. **A full SCF iteration.** Every piece now exists: the valence density from the
+   eigenvectors on the fine mesh (§2h, all of `rhomagv` at `symtype=0`), the
+   Poisson solve (§2e), the XC functional (§§2a-2b), the symmetrisation (§2g) and
+   the total energy (§2f); Phase 1 supplies the assembly and the eigensolve.
+   What is missing to *close* it: `rhocore` (an input at fixed potential, so an
+   export would do), `rhonorm` (one constant), a zone-summed Fermi level (§1i has
+   it at a single k), and `symrfir` for a reduced mesh. None is a research
+   problem; the question is whether the composition is stable, which nothing has
+   tested.
 2. **~~`symrfmt`~~ DONE** (§2g, patch 0018) — the operator is *exported* rather than
    transcribed, so Elk's Euler-angle/Wigner-$D$ construction and its atom bookkeeping
    are not re-derived at all. Applying it takes the pointwise `vxcmt` gap from 5.3e-3
@@ -605,6 +608,15 @@ named in item 12 need no Elk run and are the cheapest work available.
     query's answer depended on whether `LAPW` had been asked for first — 1.2e-10
     against 9e-16. Fixed with `genapwlofr` in the Fortran, not documented around,
     and the test asks for `DENSITYK` first so it cannot return.
+
+    **The post-processing is done too** (patch 0020): `rhomagsh` at 8.7e-16 and
+    `rfmtctof` at 1.0e-15, each against its own exported intermediate rather than
+    through their composition. `rfmtctof` is exported as a MATRIX — its spline
+    weights come from `wspline` and depend only on the mesh — with **two** per
+    species, since it interpolates the whole radial range below $l_{\max}^{\rm i}$
+    and the outer region alone above it; using the wrong one reads the inner
+    zeros as data, which is smooth, finite and wrong. **With `symtype=0` those
+    three stages are the whole of `rhomagv`.**
 
     **Two of the three results are scope statements, and both are asserted.** On
     a symmetry-reduced mesh it is **16% off**, because `rhomagv` calls `symrf`

@@ -1291,8 +1291,18 @@ it. Patch 0015's finding also recurred with a sharper consequence — the refere
 built from the previous iteration's radial functions, so the query's answer depended on
 whether `LAPW` had been asked for first (1.2e-10 against 9e-16); fixed with `genapwlofr`
 in the Fortran rather than documented around, since **a query whose answer depends on
-which query ran before it is a trap**. Still not done: `rhocore` and the core states, the
-`rhomagsh`/`symrf`/`rfmtctof` post-processing, and the magnetic branches. Verdict, in one line: **a research project justified by
+which query ran before it is a trap**. Patch **0020** then closes the chain: `rhomagsh` (back to
+harmonics) at 8.7e-16 and `rfmtctof` (coarse radial mesh to fine) at 1.0e-15, each
+against its own exported intermediate rather than through their composition. `rfmtctof`
+is exported as a MATRIX for the same reason `symrfmt` is — `rfinterp`'s spline weights
+come from `wspline` and depend only on the mesh — with TWO per species, since it
+interpolates the whole radial range below $l_{\max}^{\rm i}$ and the outer region alone
+above it; using the wrong one reads the inner region's zeros as data, which is smooth,
+finite and wrong. **With `symtype=0` those three stages are the whole of `rhomagv`**, so
+the chain from first-variational eigenvectors to the valence density on the fine mesh is
+closed and exact. Still not done: `rhocore` and the core states (an input at fixed
+potential, so an export would do), `symrfir` for a symmetry-reduced mesh, `rhonorm`'s one
+constant, and the magnetic branches. Verdict, in one line: **a research project justified by
 differentiability, not by the GPU** — SIRIUS already does FP-LAPW on CUDA/ROCm with Elk as its
 reference, and Elk's hot spots are already near-peak BLAS-3. Nothing about the port is a plan of
 record; **Phase 0 (§6 of the study) is designed to kill it, not to start it**, and that is what
