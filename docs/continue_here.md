@@ -1,6 +1,6 @@
 # Continue here
 
-Working state as of 2026-09-07, written to be picked up cold. Last verified: fast suite 440 passed, the Phase 1+2 integration suites 158 passed / 9 skipped, and the patch series reproduces `build/elk/src/elkpy_eigenstates.f90` byte for byte with no fuzz.
+Working state as of 2026-09-07, written to be picked up cold. Last verified: fast suite **440 passed**, the Phase 1+2 integration suites **200 passed / 9 skipped**, and all 21 patches apply to a fresh `vendor/elk/` with no fuzz, reproducing `build/elk/src/elkpy_eigenstates.f90` byte for byte.
 
 **Status in one paragraph.** Both workstreams are on `master` and `master` is pushed.
 *Workstream A* — the full-coverage Elk wrapper — is complete and untouched since the
@@ -75,21 +75,24 @@ over the k-axis is the memory default; `vmap(eigh)` materialises every k-point a
 Recent commits, newest first:
 
 ```
-8a8044e  Export symrfmt's operator, closing 2d's remaining consequence  patches/0018, elkjax/symmetry.py
+3a63abc  Untangle the Phase 2 index table
+1102ccf  Record the second-structure check and what it found
+86d5392  Check the density chain on a second structure, and fix what it found
+2c75bde  Run the density chain to Elk's converged arrays                  patches/0021
+14a495f  Carry the closed loop into the index documents
+cb335b6  Close the loop: potential to eigenvectors to density             elkjax/density.py, hamiltonian.py
+f67750e  Check that the Kohn-Sham potential composes, pointwise           tests/test_calculation_kohn_sham.py
+e90b2f4  Carry the completed density chain into the index documents
+54b31f7  Close the density chain: rhomagsh and rfmtctof                   patches/0020
+32a557a  Carry the completed valence density into the index documents
+6684a5e  Complete the valence density: the muffin-tin half too            patches/0019
+89c77c0  Write up the interstitial density across the index documents
+ff2b19e  Build the interstitial valence density from the eigenvectors     patches/0019, elkjax/density.py
+308f673  Record the session's commits and the verification state
+8a8044e  Export symrfmt's operator, closing 2d's remaining consequence    patches/0018, elkjax/symmetry.py
 be38b85  Carry the total energy into the two index documents
-6b837bd  Assemble the total energy, and correct a prediction 2d got wrong
-         (elkjax/energy.py)
+6b837bd  Assemble the total energy, and correct a prediction 2d got wrong elkjax/energy.py
 9f31ccb  Write up the Poisson solve across the four documents
-1389745  Transcribe Elk's Weinert Poisson solve                         patches/0017, elkjax/poisson.py
-19de80c  Retire the scan item from the three places that still list it as open
-264c1ec  Scan the Newton-Schulz tape instead of unrolling it            elkjax/phase1_scan.py
-6a6f06b  Give the continuation document a cold-start entry point again
-46da9c6  Explain the muffin-tin vxc gap: Elk symmetrises the potential  docs/jax_port_phase2.md 2d
-61520eb  Transcribe the muffin-tin angular transform, and pin what it does not explain
-f38c71e  Bring the index documents up to date with Phase 2
-1b4fe39  Integrate over the unit cell, and check it three ways
-84c26e1  Transcribe PBE, and get its functional derivative from autodiff
-53489cc  Check Poisson's equation on the exported grid
 ```
 
 ---
