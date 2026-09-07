@@ -20,6 +20,13 @@ which task.
 Check `src/elkpy/` directly rather than assuming the docs describe current code; update both
 as they diverge.
 
+## Communication style
+
+The user is a physicist with some Python background, not a software engineer. Write to that
+audience: simple English, short sentences, concrete statements, no verbosity. Physics vocabulary
+is the right register; keep programming jargon at an everyday-Python level and explain anything
+deeper. Lead with the result, not with the narration of how it was obtained.
+
 ## Project purpose
 
 A Python interface to Elk, an all-electron full-potential linearized augmented-plane-wave (LAPW)
