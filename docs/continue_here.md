@@ -655,7 +655,16 @@ named in item 12 need no Elk run and are the cheapest work available.
     1.0e-14; this assembly vs Elk's 2.2e-14; **stored vs fresh 3.7e-11**. Patch
     0015's finding for the third time.
 
-17. **The Phase 1 leftovers**, neither of which needs an Elk run. (`lax.scan` over the
+17. **~~The density to Elk's converged arrays.~~ DONE** (§2h tail, patch 0021).
+    `rhomagk` → `rhomagsh` → `rfmtctof`/`rfirctof` → `rhocore` → `rhonorm`
+    against Elk's own `rhomt`/`rhoir`: 3.2e-13 / 1.6e-13 and 5.8e-12. `rhocr` is
+    exported, not solved for — the core states are a functional of the
+    potential, so at fixed potential the core density is an input like `vsmt`.
+    Checked on **two structures**, and the second one found a real bug: `lorbl`
+    is a ragged per-species list (boron has 2 local orbitals, nitrogen 3) that
+    `np.asarray` only tolerates when there is one species.
+
+18. **The Phase 1 leftovers**, neither of which needs an Elk run. (`lax.scan` over the
     Newton-Schulz tape is **done**, §1m.) Smeared occupations at **second**
     order, which needs a Chebyshev expansion of the Fermi function — `sign_projector`
     is hard-window only, and §1i removed the tolerance from the smeared *first*

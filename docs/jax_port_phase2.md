@@ -946,6 +946,24 @@ correct.
 fixed potential the core density is an *input*. Everything else in the chain is
 transcribed.
 
+### A second structure, and the bug it found immediately
+
+Every other Phase 2 result is checked on two structures; this section was
+silicon-only, and multi-species indexing is precisely what one species cannot
+test. The h-BN fixture **failed on its first run**.
+
+`lorbl` is a *list over species* of per-species arrays — as the parser
+documents — and **boron has two local orbitals to nitrogen's three**, so it is
+genuinely ragged and `np.asarray` on the whole thing raises. On a one-species
+cell it does not. One line.
+
+The fixture's own premise needed correcting too, and that is the more useful
+half: it asserted that the two species have different radial meshes, which is
+**false** here — B and N share $n_{rc}=75$. What distinguishes them is the
+local-orbital count, which is exactly what makes `lorbl` ragged. A premise that
+names the wrong property is a test that starts passing for the wrong reason the
+moment someone changes the structure.
+
 ### What is still not done
 
 The core-state solver itself (`gencore`/`rdirac`), which a self-consistent loop
