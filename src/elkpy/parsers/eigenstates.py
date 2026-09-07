@@ -969,16 +969,22 @@ def parse_densityk_response(tokens):
     out.update(wkpt=wkpt, vkl=vkl, occsv=occsv, ngk=ngk, nmat=nmat,
                igkig=igkig, evecfv=evecfv)
 
-    pair, pos = _take(tokens, pos, 2, int)
-    out["lradstp"], out["npcmtmax"] = pair
+    triple, pos = _take(tokens, pos, 3, int)
+    out["lradstp"], out["npcmtmax"], out["npmtmax"] = triple
     nrcmt = np.zeros(int(out["nspecies"]), dtype=int)
     nrcmti = np.zeros_like(nrcmt)
     npcmt = np.zeros_like(nrcmt)
     npcmti = np.zeros_like(nrcmt)
+    nrmt = np.zeros_like(nrcmt)
+    nrmti = np.zeros_like(nrcmt)
+    npmt = np.zeros_like(nrcmt)
     for is_ in range(nrcmt.size):
         quad, pos = _take(tokens, pos, 4, int)
         nrcmt[is_], nrcmti[is_], npcmt[is_], npcmti[is_] = quad
-    out.update(nrcmt=nrcmt, nrcmti=nrcmti, npcmt=npcmt, npcmti=npcmti)
+        trio, pos = _take(tokens, pos, 3, int)
+        nrmt[is_], nrmti[is_], npmt[is_] = trio
+    out.update(nrcmt=nrcmt, nrcmti=nrcmti, npcmt=npcmt, npcmti=npcmti,
+               nrmt=nrmt, nrmti=nrmti, npmt=npmt)
 
     for key, n in (("zbshti", int(out["lmmaxi"])),
                    ("zbshto", int(out["lmmaxo"]))):
@@ -999,5 +1005,31 @@ def parse_densityk_response(tokens):
     out["rhomt_coarse"] = rhomt
     flat, pos = _take(tokens, pos, int(out["ngtc"]), float)
     out["rhoir_coarse"] = np.array(flat)
+
+    # the two post-processing intermediates, so each step is checkable alone
+    for key, sizes, width in (("rhomt_sh", npcmt, int(out["npcmtmax"])),
+                              ("rhomt_fine", npmt, int(out["npmtmax"]))):
+        arr = np.zeros((natmtot, width))
+        for ias in range(natmtot):
+            n = int(sizes[int(idxis[ias]) - 1])
+            flat, pos = _take(tokens, pos, n, float)
+            arr[ias, :n] = flat
+        out[key] = arr
+
+    # rfmtctof as a matrix, per species: the full-range map and the
+    # outer-region-only one.  Written one COARSE basis vector at a time, so
+    # row i of the exported block is the image of coarse point i -- i.e. the
+    # transpose of the operator as it multiplies a column vector.
+    full, outer = [], []
+    for is_ in range(int(out["nspecies"])):
+        nrc, nrci = int(nrcmt[is_]), int(nrcmti[is_])
+        nr, nri = int(out["nrmt"][is_]), int(out["nrmti"][is_])
+        flat, pos = _take(tokens, pos, nrc * nr, float)
+        full.append(np.array(flat).reshape(nrc, nr).T)
+        flat, pos = _take(tokens, pos, (nrc - nrci) * (nr - nri), float)
+        outer.append(np.array(flat).reshape(nrc - nrci, nr - nri).T)
+    out["ctof_full"] = full
+    out["ctof_outer"] = outer
     return out
+
 

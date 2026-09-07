@@ -880,9 +880,46 @@ because **a query whose answer depends on which query ran before it is a trap**,
 not a documentation problem. The test now asks for `DENSITYK` first, so the
 ordering dependence cannot come back silently.
 
+### The two post-processing steps, and `rhomagv` complete
+
+`rhomagk` leaves the muffin-tin density in spherical *coordinates* on the
+*coarse* radial mesh — a modulus is pointwise, so it has to be accumulated
+there — and two steps take it to the representation the potential is built on.
+Patch **0020** exports both intermediates, so each is checked on its own rather
+than through their composition:
+
+| stage | agreement |
+|---|---|
+| `rhomagk`, coordinates on the coarse mesh | 9.0e-16 / 7.7e-16 |
+| after `rhomagsh` (`rfshtip`: back to harmonics) | 8.7e-16 / 7.3e-16 |
+| after `rfmtctof` (coarse radial mesh → fine) | 1.0e-15 / 8.7e-16 |
+
+`rhomagsh` is the **real** transform where the wavefunctions used the complex
+one — a wavefunction is complex and a density is not, and Elk keeps both
+matrices for that reason.
+
+`rfmtctof` is a **fixed linear map**: `rfinterp`'s cubic-spline weights come
+from `wspline` and depend only on the mesh. So patch 0020 exports it as a
+matrix, built by calling `rfinterp` on basis vectors — patch 0018's call again,
+and for the same reason: `splinew`'s weighted construction has no consumer that
+would check a re-derivation, and the matrix is what a transcription needs anyway.
+
+**Two matrices per species, and they are not interchangeable.** `rfmtctof`
+interpolates the whole radial range for $l\le l_{\max}^{\rm i}$ and the outer
+region *alone* above it, because only the outer region stores those harmonics.
+Using the full-range map on an outer-only harmonic reads the inner region's
+zeros as data — not a crash, not a discontinuity, just a smooth pull toward zero
+near $R_{\rm MT}$. Pinned.
+
+**With `symtype=0`, `symrf` is the identity, so those three stages are the whole
+of `rhomagv`** for a non-magnetic cell. The chain from first-variational
+eigenvectors to the valence density on the fine mesh is therefore closed and
+exact.
+
 ### What is still not done
 
-`rhocore` and the core states; `rhomagsh`, `symrf` and `rfmtctof`, which are the
-post-processing between `rhomagk` and the converged `rhomt`; and the magnetic
-branches `rmk1`/`rmk2`. What *is* done is the valence density itself, both
-regions, which is the part that is a functional of the eigenvectors.
+`rhocore` and the core states — though at fixed potential the core density is an
+*input* exactly as `vsmt` is, so an export would do; `symrf` on a
+symmetry-reduced mesh (§2g's `symrfmt` has the muffin-tin operator, the
+interstitial's `symrfir` is not exported); `rhonorm`, which is one constant; and
+the magnetic branches `rmk1`/`rmk2`.

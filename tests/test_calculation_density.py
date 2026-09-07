@@ -292,3 +292,76 @@ def test_the_two_radial_regions_restart_the_stride(unreduced_with_lapw):
     assert outer[0] == inner[-1] + step
     assert outer[-1] == int(groundstate["nrmt"][isp]) - 1
     assert inner.size + outer.size == int(densityk["nrcmt"][isp])
+
+
+def test_rhomagsh_returns_the_density_to_harmonics(unreduced_with_lapw):
+    """`rfshtip` on the coarse mesh, against patch 0020's intermediate.
+
+    `rhomagk` accumulates on the angular grid because a modulus is pointwise
+    and a harmonic expansion is not; `rhomagsh` maps it back.  Note the REAL
+    transform here where the wavefunctions used the complex one -- a
+    wavefunction is complex and a density is not, and Elk keeps both matrices
+    for exactly that reason.
+    """
+    from elkjax import density
+    groundstate, densityk, lapw = unreduced_with_lapw
+    values = density.muffin_tin_density(densityk, groundstate, lapw)
+    for ias in range(int(groundstate["natmtot"])):
+        harmonics = density.to_harmonics(values[ias], densityk, groundstate,
+                                         ias)
+        got = np.asarray(density.pack_coarse(harmonics, densityk, groundstate,
+                                             ias))
+        reference = np.asarray(densityk["rhomt_sh"][ias])[:got.size]
+        assert np.abs(got - reference).max() \
+            / np.abs(reference).max() < 1e-13
+
+
+def test_rfmtctof_reaches_the_fine_radial_mesh(unreduced_with_lapw):
+    """The last step of `rhomagv`, against patch 0020's second intermediate.
+
+    With `symtype=0` -- which is what these fixtures use -- `symrf` is the
+    identity, so `rhomagk` + `rhomagsh` + `rfmtctof` is the WHOLE of `rhomagv`
+    for a non-magnetic cell.  This is therefore the end of the chain from
+    eigenvectors to the density the potential is built on, core aside.
+    """
+    from elkjax import density
+    groundstate, densityk, lapw = unreduced_with_lapw
+    values = density.muffin_tin_density(densityk, groundstate, lapw)
+    for ias in range(int(groundstate["natmtot"])):
+        harmonics = density.to_harmonics(values[ias], densityk, groundstate,
+                                         ias)
+        fine = density.coarse_to_fine(harmonics, densityk, groundstate, ias)
+        got = np.asarray(density.pack_fine(fine, groundstate, ias))
+        reference = np.asarray(densityk["rhomt_fine"][ias])[:got.size]
+        assert np.abs(got - reference).max() \
+            / np.abs(reference).max() < 1e-13
+
+
+def test_the_two_interpolation_operators_are_not_interchangeable(
+        unreduced_with_lapw):
+    """`rfmtctof` uses a different map for l > lmaxi, and it matters.
+
+    For those harmonics only the outer region carries the function, so Elk
+    interpolates the outer sub-mesh alone.  Using the full-range map instead
+    reads the inner region's zeros as data -- which is not a crash and not a
+    discontinuity, just a smooth pull toward zero near the boundary.
+    """
+    from elkjax import density
+    groundstate, densityk, lapw = unreduced_with_lapw
+    isp = int(groundstate["idxis"][0]) - 1
+    lmmaxi = int(groundstate["lmmaxi"])
+    nrcmti = int(densityk["nrcmti"][isp])
+    nrmti = int(densityk["nrmti"][isp])
+
+    values = density.muffin_tin_density(densityk, groundstate, lapw)
+    harmonics = np.asarray(
+        density.to_harmonics(values[0], densityk, groundstate, 0))
+    good = np.asarray(density.coarse_to_fine(harmonics, densityk, groundstate,
+                                             0))
+    wrong = np.asarray(densityk["ctof_full"][isp]) @ harmonics[:, lmmaxi:]
+
+    scale = np.abs(good[nrmti:, lmmaxi:]).max()
+    assert scale > 1e-6, "no l > lmaxi weight to compare"
+    assert np.abs(wrong[nrmti:] - good[nrmti:, lmmaxi:]).max() / scale > 1e-3
+    assert np.isfinite(wrong).all(), "the mutant is smooth and finite"
+    assert nrcmti > 0

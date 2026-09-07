@@ -1,0 +1,74 @@
+--- a/src/elkpy_eigenstates.f90
++++ b/src/elkpy_eigenstates.f90
+@@ -1632,6 +1632,7 @@
+ integer ik,ispn,ist,igp,i,is,ias
+ ! allocatable arrays
+ real(8), allocatable :: rhomt_(:,:),rhoir_(:),magmt_(:,:,:),magir_(:,:)
++real(8), allocatable :: rfmt(:,:),fi(:),fo(:)
+ complex(8), allocatable :: apwalm(:,:,:,:,:),evecfv(:,:,:),evecsv(:,:)
+ ! Regenerate the radial functions from the CURRENT potential, exactly as
+ ! elkpy_lapwexport does and for the same reason (patch 0015): gndstate calls
+@@ -1683,9 +1684,10 @@
+ ! the COARSE muffin-tin mesh and the COMPLEX spherical-harmonic transform,
+ ! which is what wfmtsv applies with tsh=.false. -- not the real rbsht that
+ ! patch 0016 exports, the wavefunction being complex
+-write(*,*) lradstp,npcmtmax
++write(*,*) lradstp,npcmtmax,npmtmax
+ do is=1,nspecies
+   write(*,*) nrcmt(is),nrcmti(is),npcmt(is),npcmti(is)
++  write(*,*) nrmt(is),nrmti(is),npmt(is)
+ end do
+ write(*,'(4ES25.16E3)') dble(zbshti(1:lmmaxi,1:lmmaxi)), &
+  aimag(zbshti(1:lmmaxi,1:lmmaxi))
+@@ -1719,6 +1721,51 @@
+   write(*,'(4ES25.16E3)') rhomt_(1:npcmt(idxis(ias)),ias)
+ end do
+ write(*,'(4ES25.16E3)') rhoir_(1:ngtc)
++! --- the two post-processing steps, as references and as an operator (0020) ---
++! rhomagsh converts the muffin tin from spherical COORDINATES (what rhomagk
++! accumulates) back to harmonics, and rfmtctof interpolates it from the coarse
++! radial mesh to the fine one the potential is built on. Both intermediates are
++! written so each step can be checked on its own rather than through their
++! composition.
++allocate(rfmt(npmtmax,natmtot))
++do ias=1,natmtot
++  is=idxis(ias)
++  rfmt(1:npcmt(is),ias)=rhomt_(1:npcmt(is),ias)
++  call rfshtip(nrcmt(is),nrcmti(is),rfmt(:,ias))
++end do
++do ias=1,natmtot
++  write(*,'(4ES25.16E3)') rfmt(1:npcmt(idxis(ias)),ias)
++end do
++call rfmtctof(rfmt)
++do ias=1,natmtot
++  write(*,'(4ES25.16E3)') rfmt(1:npmt(idxis(ias)),ias)
++end do
++deallocate(rfmt)
++! rfmtctof is a fixed linear map -- rfinterp's spline weights come from
++! wspline and depend only on the mesh -- so it is exported as a MATRIX, built
++! by calling rfinterp on basis vectors, for the same reason patch 0018 exports
++! symrfmt's operator: splinew's weighted-spline construction has no consumer
++! that would check a re-derivation, and the operator is what a transcription
++! needs anyway. Two per species, because rfmtctof treats l <= lmaxi (the whole
++! radial range) and l > lmaxi (the outer region only) differently.
++allocate(fi(nrcmtmax),fo(nrmtmax))
++do is=1,nspecies
++  do i=1,nrcmt(is)
++    fi(1:nrcmt(is))=0.d0
++    fi(i)=1.d0
++    call rfinterp(nrcmt(is),rcmt(:,is),wcrcmt(:,:,is),fi,nrmt(is), &
++     rlmt(:,1,is),fo)
++    write(*,'(4ES25.16E3)') fo(1:nrmt(is))
++  end do
++  do i=1,nrcmt(is)-nrcmti(is)
++    fi(1:nrcmt(is)-nrcmti(is))=0.d0
++    fi(i)=1.d0
++    call rfinterp(nrcmt(is)-nrcmti(is),rcmt(nrcmti(is)+1,is), &
++     wcrcmt(:,nrcmti(is)+1,is),fi,nrmt(is)-nrmti(is),rsp(nrmti(is)+1,is),fo)
++    write(*,'(4ES25.16E3)') fo(1:nrmt(is)-nrmti(is))
++  end do
++end do
++deallocate(fi,fo)
+ deallocate(apwalm,evecfv,evecsv,rhomt_,rhoir_,magmt_,magir_)
+ end subroutine
+ !EOC

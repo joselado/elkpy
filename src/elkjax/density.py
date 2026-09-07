@@ -45,7 +45,8 @@ import jax.numpy as jnp
 
 __all__ = ["interstitial_wavefunction", "interstitial_density", "coarsen",
            "normalisation_offset", "coarse_radial_indices",
-           "muffin_tin_wavefunctions", "muffin_tin_density"]
+           "muffin_tin_wavefunctions", "muffin_tin_density",
+           "pack_coarse", "to_harmonics", "coarse_to_fine"]
 
 EPSOCC = 1.0e-8
 
@@ -267,3 +268,74 @@ def pack_coarse(values, densityk, groundstate, ias):
     lmmaxi = int(groundstate["lmmaxi"])
     return jnp.concatenate([values[:nrcmti, :lmmaxi].reshape(-1),
                             values[nrcmti:].reshape(-1)])
+
+
+# ------------------------------------------------ from rhomagk to the density
+
+
+def to_harmonics(values, densityk, groundstate, ias):
+    r"""``rhomagsh``: spherical coordinates back to harmonics, coarse mesh.
+
+    ``rhomagk`` accumulates :math:`|\psi|^2` on the angular grid, because a
+    modulus is pointwise and a harmonic expansion is not.  ``rfshtip`` maps it
+    back.  The transform matrices are the REAL ones (patch 0016's ``rfshti``,
+    ``rfshto``) even though `muffin_tin_wavefunctions` used the complex pair --
+    a wavefunction is complex and a density is not.
+
+    Takes and returns dense ``(nrcmt, lmmaxo)``.
+    """
+    isp = int(groundstate["idxis"][ias]) - 1
+    nrcmti = int(densityk["nrcmti"][isp])
+    lmmaxi = int(groundstate["lmmaxi"])
+    lmmaxo = int(groundstate["lmmaxo"])
+    rfshti = jnp.asarray(groundstate["rfshti"])
+    rfshto = jnp.asarray(groundstate["rfshto"])
+    values = jnp.asarray(values)
+    top = values[:nrcmti, :lmmaxi] @ rfshti.T
+    bottom = values[nrcmti:] @ rfshto.T
+    return jnp.concatenate(
+        [jnp.zeros((nrcmti, lmmaxo)).at[:, :lmmaxi].set(top), bottom], axis=0)
+
+
+def coarse_to_fine(values, densityk, groundstate, ias):
+    r"""``rfmtctof``: the coarse radial mesh to the fine one, per harmonic.
+
+    Elk interpolates with a cubic spline whose weights come from ``wspline``
+    and depend only on the mesh, so this is a **fixed linear map** and patch
+    0020 exports it as a matrix rather than leaving ``splinew``'s weighted
+    construction to be re-derived -- the same call as patch 0018's `symrfmt`.
+
+    There are two of them because ``rfmtctof`` treats the two harmonic ranges
+    differently: for :math:`l\le l_{\max}^{\rm i}` the function exists over
+    the whole radial range and is interpolated over all of it, while for
+    :math:`l>l_{\max}^{\rm i}` only the outer region carries it and only the
+    outer region is interpolated.  Using the full map on an outer-only harmonic
+    would read the inner region's zeros as data and pull the result toward zero
+    near :math:`R_{\rm MT}`... smoothly.
+
+    Takes dense ``(nrcmt, lmmaxo)`` and returns dense ``(nrmt, lmmaxo)``.
+    """
+    isp = int(groundstate["idxis"][ias]) - 1
+    nrcmti = int(densityk["nrcmti"][isp])
+    nrmt = int(densityk["nrmt"][isp])
+    nrmti = int(densityk["nrmti"][isp])
+    lmmaxi = int(groundstate["lmmaxi"])
+    lmmaxo = int(groundstate["lmmaxo"])
+    full = jnp.asarray(densityk["ctof_full"][isp])
+    outer = jnp.asarray(densityk["ctof_outer"][isp])
+    values = jnp.asarray(values)
+
+    inner_block = full @ values[:, :lmmaxi]
+    outer_block = outer @ values[nrcmti:, lmmaxi:]
+    out = jnp.zeros((nrmt, lmmaxo))
+    out = out.at[:, :lmmaxi].set(inner_block)
+    return out.at[nrmti:, lmmaxi:].set(outer_block)
+
+
+def pack_fine(values, groundstate, ias):
+    """A dense fine ``(nrmt, lmmaxo)`` array into Elk's packed layout."""
+    isp = int(groundstate["idxis"][ias]) - 1
+    nrmti = int(groundstate["nrmti"][isp])
+    lmmaxi = int(groundstate["lmmaxi"])
+    return jnp.concatenate([values[:nrmti, :lmmaxi].reshape(-1),
+                            values[nrmti:].reshape(-1)])
