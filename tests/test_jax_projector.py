@@ -256,7 +256,7 @@ def test_kernel_agrees_with_the_numpy_reference():
 
 
 def test_documented_memory_figures():
-    """Pins the numbers CLAUDE.md's "JAX port" section quotes."""
+    """Pins the numbers `docs/jax_port_status.md` quotes."""
     assert memory.matrix_bytes(3000) == 144 * 1000 ** 2  # 144 MB per complex128 matrix
     total = memory.kpoint_set_bytes(**memory.PRODUCTION_SHAPE) / memory.GB
     assert 26.0 < total < 27.0        # H + S over 100 k-points, in GiB

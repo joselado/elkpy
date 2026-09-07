@@ -152,7 +152,7 @@ that are not obvious and were measured, not assumed: the `OMP_NUM_THREADS=1` abo
 **not** govern XLA's CPU backend — one 1200x1200 `jnp` matmul spawns 40 threads under it
 — so wrap every JAX command in `taskset -c 0-3`; and the port's production shape is
 26.8 GiB of H and S against ~28 GiB available, so it is compiled ahead-of-time and never
-executed. CLAUDE.md's "JAX port" section has the full set.
+executed. `docs/jax_port_status.md` has the full set.
 
 ---
 
@@ -896,7 +896,7 @@ PYTHONPATH=src taskset -c 0-3 python3 -m pytest \
 **`taskset` is not decoration.** `.claude/settings.json`'s `OMP_NUM_THREADS=1` does not
 govern XLA's CPU backend — measured, one 1200x1200 `jnp` matmul spawns 40 threads under
 it, and `XLA_FLAGS=--xla_cpu_multi_thread_eigen=false` changes nothing. The full memory
-and CPU rules are in CLAUDE.md's "JAX port" section; the short version is that the
+and CPU rules are in `docs/jax_port_status.md`; the short version is that the
 production shape (26.8 GiB of H and S) is never allocated, only compiled.
 
 ---
@@ -938,3 +938,38 @@ $O$ and the reduced norm (§1f).
 - Fix `inputfile.py:15` at the source and collapse the two shims, or leave the shims.
 - Run the three never-executed integration suites (`spectra`, `optics`,
   `magnetism_manybody`), which will likely surface assertion adjustments.
+- ~~`docs/field_report_nibr2.md` — 7 items from a real 45-atom NiBr2 spin-spiral run
+  through tasks 9003/9005, none triaged against the code yet.~~ **Triaged; five of the
+  seven are closed.** Per-item verdicts are inline in the report, the substance is in
+  `docs/design.md` §31, and the summary is in `docs/status.md` §31. Fixed with tests:
+  item 1 (`compute_transmission` now refuses an energy outside the exported window,
+  which is what the absolute-vs-relative mismatch used to sail through silently) and
+  item 2 (`amplitude_weights`' `occmax` is required, no 2.0 default). Fixed without a
+  test, since it needs a real threaded run to exercise: item 4 — `OMP_STACKSIZE` via
+  `setdefault`, *plus* `RLIMIT_STACK` raised soft-to-hard in a `preexec_fn`, which is
+  the `ulimit -s` half the report did not name and the only half that matters at the
+  launcher's default `omp_threads=1`. Documented: items 5 (`ramdisk`; elkpy's own path
+  is immune) and 7 (`plot2d` transverse aliasing, now a section in both example
+  READMEs). **Three things are left, all decisions rather than fixes:**
+
+  - **Item 3 — promote `spin_ldos()`/`tip_image()` into `parsers/transport.py`?** The
+    reporter's validated code is staged at `docs/field_report_nibr2_spin_ldos.py` and
+    its self-test passes here with no Elk run. The case for it: `get_spin_stm()` costs
+    one Elk run per bias *and* per tip direction, each re-reading 7.3 GB of eigenvectors
+    on a cell that size, while one 9005 export gives the whole $dI/dV(x,E)$ map at every
+    tip direction, because nothing in the export depends on energy. The cost: a new
+    public API plus a `physics.tex` part. Not taken unilaterally.
+  - **Item 6 — `adopt_ground_state(workdir)`?** Pointing a `Calculation` at someone
+    else's converged `STATE.OUT` currently means hand-forging `.elkpy_manifest.json`,
+    which is strictly worse than a method that could re-read the adopted `elk.in` and
+    *check* the basis signature. Recommendation if taken: adopt by **copying**
+    `STATE.OUT` into `self.workdir` and marking the manifest `adopted`, never by
+    pointing at a foreign directory — that leaves the wiped-subdirectory invariant
+    untouched.
+  - **The NiBr2 fixture.** 9003 and 9005 agreed to 0.2% on that system, a stronger
+    end-to-end check of §31 than anything in `tests/`. Vendoring it needs a hard cut of
+    a 1.85 GB export onto a transverse count sharing the supercell's period, keeping
+    *both* sides (the 9003 maps are 1.4 MB each), and re-establishing the 0.2% on the
+    cut — a naive decimation would enshrine the aliasing artifact instead of the check.
+    Data at `/scratch/work/ladovj1/calculations/NiBr2_elk_stm/`; ask before it is
+    cleaned up.
