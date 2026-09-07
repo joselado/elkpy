@@ -14,10 +14,12 @@ gets from Perdew's hand-derived expression, and the two agree.
 **Where to start.** §3's "Start here next session" is the ranked list, and the three
 Phase 2 items below it are ordered by cost. In short:
 
-1. **`rhomag`'s muffin-tin half** (item 2b) — the interstitial half is done (§2h);
-   what is left needs `wfmtsv` on the coarse *radial* mesh, `rhomagsh`, `rfmtctof`
-   and `rhocore`, i.e. a core-state solver (`gencore`/`rdirac`). That is the last
-   thing between here and a closed SCF loop.
+1. **The density's post-processing** — item 2b is done for the VALENCE density in
+   both regions (§2h, 9e-16). What is left between `rhomagk`'s output and the
+   density the potential is built from: `rhomagsh` (spherical coordinates back to
+   harmonics), `rfmtctof` (coarse to fine radial mesh), and `rhocore`, which needs
+   a core-state solver — or an export, the core density being an input at fixed
+   potential exactly as `vsmt` is.
 2. **~~`symrfmt`~~ DONE** (§2g, patch 0018) — the operator is *exported* rather than
    transcribed, so Elk's Euler-angle/Wigner-$D$ construction and its atom bookkeeping
    are not re-derived at all. Applying it takes the pointwise `vxcmt` gap from 5.3e-3
@@ -581,11 +583,28 @@ named in item 12 need no Elk run and are the cheapest work available.
     Cartesian `symlatc` entries are $0$ and $\pm1$. It bounds how idempotent
     `symrfmt` can be, not the operator's accuracy in use.
 
-14. **~~The interstitial valence density.~~ DONE** (§2h, patch 0019,
-    `elkjax/density.py`). The step that closes the loop's circle — every other
-    Phase 2 section goes from a density to an energy, this goes back. Exact
-    (9e-16 relative) on an unreduced mesh, since in the interstitial an LAPW
-    state is a plain plane-wave sum and the only truncation is the basis's own.
+14. **~~The valence density from the eigenvectors.~~ DONE, both regions** (§2h,
+    patch 0019, `elkjax/density.py`). The step that closes the loop's circle —
+    every other Phase 2 section goes from a density to an energy, this goes back.
+    9.0e-16 and 7.7e-16 in the muffin tins, 7.5e-16 in the interstitial.
+
+    **The reference is what made the muffin tin one routine instead of five.**
+    Patch 0019 loops Elk's own `rhomagk` over the k-set into a *local* array, so
+    the comparison is against the density before `rhomagsh`, `symrf`, `rfmtctof`
+    and `rhocore` — none of which is transcribed. Patch 0018's design again.
+
+    **Two traps, one of them hit.** `evecfv` has $n_{\rm mat}=n_{gk}+n_{\rm
+    lotot}$ coefficients and the first version exported only $n_{gk}$: the
+    interstitial stayed EXACT (local orbitals vanish there) while the muffin tin
+    was smooth, positive, correctly scaled and 100% wrong. And `wfmtsv`'s outer
+    region restarts its radial stride one step *past* the inner boundary rather
+    than continuing it.
+
+    **Patch 0015's finding recurred**, and the consequence was sharper: the
+    reference was built from the previous iteration's radial functions, so the
+    query's answer depended on whether `LAPW` had been asked for first — 1.2e-10
+    against 9e-16. Fixed with `genapwlofr` in the Fortran, not documented around,
+    and the test asks for `DENSITYK` first so it cannot return.
 
     **Two of the three results are scope statements, and both are asserted.** On
     a symmetry-reduced mesh it is **16% off**, because `rhomagv` calls `symrf`

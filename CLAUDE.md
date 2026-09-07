@@ -1271,17 +1271,28 @@ a hexagonal one, growing with $l$ — Elk's own `roteuler`, whose inverse trigon
 exact when the Cartesian `symlatc` entries are $0$ and $\pm1$ and is not otherwise. That
 bounds how idempotent `symrfmt` can be, not its accuracy in use. §2h turns the chain
 into a circle with patch **0019**: every other Phase 2 section goes from a density to an
-energy, and `elkjax.density` goes back, reproducing Elk's **interstitial** valence density
-from `evecfv` to **9e-16** relative on an unreduced mesh — exact, since in the interstitial
+energy, and `elkjax.density` goes back, reproducing Elk's valence density
+from `evecfv` in BOTH regions to **9e-16** (9.0e-16 and 7.7e-16 in the muffin tins,
+7.5e-16 in the interstitial) on an unreduced mesh — exact, since in the interstitial
 an LAPW state is a plain plane-wave sum and the only truncation is the basis's own. Two of
 its three results are scope statements and both are asserted rather than written down: on a
 symmetry-REDUCED mesh it is **16% off**, because `rhomagv` calls `symrf` afterwards and this
 does not (§2g's story again, in the interstitial, where the operator is `symrfir`); and the
 residual on the unreduced mesh is `rhonorm`'s UNIFORM shift, identified by measurement —
-switching `trhonorm` off takes it from 2.82e-05 to 2.8e-18. The muffin-tin half is NOT done:
-it needs `wfmtsv` on the coarse radial mesh, `rhomagsh`, `rfmtctof` and `rhocore`, hence a
-core-state solver. So Phase 2 now has both directions of the interstitial and one direction
-of the muffin tin. Verdict, in one line: **a research project justified by
+switching `trhonorm` off takes it from 2.82e-05 to 2.8e-18. The muffin-tin half needed only ONE routine
+(`wfmtsv`) rather than five, because patch 0019 loops Elk's own `rhomagk` into a LOCAL
+array and exports THAT — the density before `rhomagsh`, `symrf`, `rfmtctof` and
+`rhocore`, none of which is therefore transcribed (patch 0018's design again). Two traps,
+one hit: `evecfv` carries $n_{\rm mat}=n_{gk}+n_{\rm lotot}$ coefficients and exporting
+only $n_{gk}$ left the interstitial EXACT (local orbitals vanish there) while the muffin
+tin came out smooth, positive, correctly scaled and 100% wrong; and `wfmtsv`'s outer
+region restarts its radial stride one step PAST the inner boundary rather than continuing
+it. Patch 0015's finding also recurred with a sharper consequence — the reference was
+built from the previous iteration's radial functions, so the query's answer depended on
+whether `LAPW` had been asked for first (1.2e-10 against 9e-16); fixed with `genapwlofr`
+in the Fortran rather than documented around, since **a query whose answer depends on
+which query ran before it is a trap**. Still not done: `rhocore` and the core states, the
+`rhomagsh`/`symrf`/`rfmtctof` post-processing, and the magnetic branches. Verdict, in one line: **a research project justified by
 differentiability, not by the GPU** — SIRIUS already does FP-LAPW on CUDA/ROCm with Elk as its
 reference, and Elk's hot spots are already near-peak BLAS-3. Nothing about the port is a plan of
 record; **Phase 0 (§6 of the study) is designed to kill it, not to start it**, and that is what
