@@ -565,13 +565,21 @@ def test_the_density_chain_holds_on_two_species(hbn_with_lapw):
         "the two species now have the same local-orbital count; this fixture "
         "no longer exercises the ragged per-species arrays")
 
+    # 1e-10, not 1e-13, for the reason `test_the_residual_is_elks_two_exports
+    # _disagreeing` measures below: Elk's stored eigenvectors are one
+    # potential-mixing step older than the radial functions the export
+    # regenerates, so the residual is set by where Elk's own SCF happened to
+    # STOP, not by anything here.  Measured on this fixture: 1.6e-11 at Elk's
+    # default `epspot` and 3.7e-13 at `epspot=1e-9`, while silicon moves the
+    # other way (1.4e-14 to 2.9e-13) -- not monotone in the tolerance, so a
+    # bound tight enough to fail on one build is not a transcription tolerance.
     muffin, interstitial = density.converged_density(densityk, groundstate,
                                                      lapw)
     for ias in range(int(groundstate["natmtot"])):
         got = np.asarray(density.pack_fine(muffin[ias], groundstate, ias))
         reference = np.asarray(groundstate["rhomt"][ias])[:got.size]
         assert np.abs(got - reference).max() \
-            / np.abs(reference).max() < 1e-11
+            / np.abs(reference).max() < 1e-10
     reference = np.asarray(groundstate["rhoir"])
     assert np.abs(np.asarray(interstitial) - reference).max() \
         / np.abs(reference).max() < 1e-10
