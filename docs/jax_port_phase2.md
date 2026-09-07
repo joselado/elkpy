@@ -18,22 +18,33 @@ Kohn-Sham potential — the plan had put those here — and §1l built the
 interstitial characteristic function. What is left of the interstitial pair is
 $V_s$ itself, which is what this phase is for.
 
-| item | result |
-|---|---|
-| **2a** the XC functional, and its gradient | **done for LDA (`xctype=3`)**: exchange exact against Dirac, correlation anchored on Gell-Mann–Brueckner, `jax.grad` reproduces Elk's hand-coded $v_{xc}$ to machine precision, Elk's own `vxcir` reproduced to **4.4e-16** once `trimrfg` is reproduced with it, and the $\rho\to0$ guard's `NaN` hazard is asserted rather than described |
-| **2a′** the `GROUNDSTATE` export (patch 0016) | **done** — density and potentials on Elk's own grids, $k$-independent; the reference for everything below |
-| **2b** the density `rhomag` | not started |
-| **2c** the Weinert Poisson solver | not started |
-| **2d** a GGA functional | **done for PBE (`xctype=20`)** (§2b): energy densities exact against Elk's own `exir`/`ecir` (4e-16), and `jax.grad` of the discretised energy reproduces Elk's hand-coded potential to 2.4e-5 median — with the gap identified as discretise-then-differentiate versus differentiate-then-discretise, not as an error in either |
-| **2e** symmetrisation | not started |
-| **2d′** the muffin-tin angular transform | **done** (§2d): `rbsht`/`rfsht` are mutual inverses to 2.7e-12 and give `exmt`/`ecmt` exactly. `vxcmt` misses by 1.2e-4 relative **because `potxc.f90:55-58` symmetrises the potential and not the energy density** — on a `symtype=0` ground state the same code gives 1.4e-14 |
-| **2c′** the Weinert Poisson solve | **done** (§2e, patch 0017): `vclir` to 1.6e-15 relative and `vclmt` to 4e-20 (l=0) / 7e-14 (l>0) on two structures. The monopole identity recovers Z = 14, 5, 7 exactly from a separate code path, and two mutation tests pin the step order and the region split — both mutants are smooth, of the right order and wrong |
-| **2d″** `symrfmt` | **done** (§2g, patch 0018): the operator is EXPORTED rather than transcribed, so Elk's Euler-angle/Wigner-D construction and atom bookkeeping are not re-derived at all. Applying it takes the pointwise `vxcmt` gap from 5.3e-3 to 6.4e-14. Idempotent to 1e-16 on a cubic lattice and 1.2e-11 on a hexagonal one — Elk's own `roteuler`, not the export |
-| **2b** the density from the eigenvectors | **done for the valence density, both regions** (§2h, patch 0019, `elkjax/density.py`): 9e-16 in the muffin tin and 7.5e-16 in the interstitial, against a reference patch 0019 builds by looping Elk's own `rhomagk` — so `rhomagsh`, `symrf`, `rfmtctof` and `rhocore` need no transcription. On a reduced mesh the interstitial is 16% off because `symrf` is not applied, and the residual against the STORED density is `rhonorm`'s uniform shift (2.82e-05 to 2.8e-18 with `trhonorm` off) |
-| **2i** the Kohn-Sham potential, composed | **done** (§2i): `v_cl + S v_xc` from three separate modules reproduces Elk's own to <1e-14 in the muffin tin and <1e-13 against `vsir`, which Elk forms itself and is therefore the independent reference. A mutation test pins the one thing it catches: trimming the Coulomb term too is smooth, of the right magnitude, and wrong |
-| **2j** the loop closed | **done** (§2j): `density_from_potential` goes potential → H, O at every k → eigensolve → density with nothing reading an eigenvector, agreeing at 5e-11. The residual is MEASURED to be Elk's own two `evecfv` exports disagreeing (8.5e-9, stored vs fresh) — this solve matches the fresh one at 1.6e-14 |
-| **2f** total energy at fixed input potential | **done** (§2f, `elkjax/energy.py`): every density-functional term of `energy.f90` matches Elk's own exported scalars to <1e-13 relative on two structures, asserted term by term. `evalsum`, `engyts` and `engynn` are imported — they need the second-variational step, a zone sum, and the lattice. **§2d's prediction of a 1e-4 error here was wrong**: symmetrisation is an orthogonal projection and rho is in its range, so the leak is orthogonal to the density (1e-16 relative, measured) |
+| study item | status | where |
+|---|---|---|
+| **2a** the XC functional and its gradient | **done** — LDA (`xctype=3`) and PBE (`xctype=20`); `jax.grad` supplies PBE's functional derivative from the energy density alone | §2a, §2b |
+| **2b** the density `rhomag` | **done for the valence density**, both regions, and on to Elk's converged `rhomt`/`rhoir`. The core-state SOLVER is not transcribed — `rhocr` is exported, an input at fixed potential like `vsmt` | §2h |
+| **2c** the Weinert Poisson solver | **done** — `vclir` to 1.6e-15 relative, `vclmt` to 4e-20 ($l{=}0$) and 7e-14 ($l{>}0$) | §2e |
+| **2d** a GGA functional | **done** — see 2a | §2b |
+| **2e** symmetrisation | **done for the muffin tin** (`symrfmt`, exported as an operator). `symrfir`, the interstitial's, is not — so a symmetry-reduced mesh is out of scope | §2g |
+| **2f** total energy at fixed input potential | **done for the density-functional terms**, to <1e-13 each. `evalsum`, `engyts` and `engynn` are imported: they need the second-variational step, a zone sum, and the lattice | §2f |
 
+Everything above starts from Elk's own converged density. Two further sections
+ask whether the pieces **compose**, which no study item does:
+
+| | |
+|---|---|
+| §2i | the Kohn-Sham potential end to end, $v_{\rm cl}+\hat Sv_{xc}$ from three modules against Elk's own `vsir` |
+| §2j | the loop closed — potential → $H,O$ at every $k$ → eigensolve → density, with nothing in the path reading an eigenvector |
+
+Sections in order, since the numbering follows the work rather than the study:
+§2a LDA · §2b PBE · §2c cell integrals · §2d the angular transform and
+`symrfmt`'s effect · §2e Poisson · §2f the total energy · §2g `symrfmt` itself ·
+§2h the density from the eigenvectors · §2i the potential composed · §2j the
+loop closed.
+
+Patches added by this phase: **0016** (`GROUNDSTATE`), **0017** (Poisson inputs
+and `energy.f90`'s scalars), **0018** (`symrfmt`'s operator), **0019**
+(`DENSITYK`), **0020** (the density's post-processing), **0021** (the core
+density and `chgtot`).
 ---
 
 ## 2a. The exchange-correlation functional
