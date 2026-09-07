@@ -806,13 +806,37 @@ which is the default.
 **The first is the transcription.** Exact, as the plane-wave argument says it
 should be.
 
-**The second is the scope, and it is asserted rather than written down as a
-caveat.** `rhomagv` calls `symrf` on the accumulated density, and on a reduced
-mesh that is not the identity. 16% is a missing step, not a tolerance. This is
-the same shape as §2g's muffin-tin `symrfmt` — in the interstitial, where the
-operator is `symrfir` — and closing it would be the same kind of patch. The test
-asserts the disagreement, so if `symrfir` is ever applied here the test fails and
-gets rewritten rather than widened.
+**The second was the scope, and patch 0022 has since closed it.** `rhomagv`
+calls `symrf` on the accumulated density, and on a reduced mesh that is not the
+identity — 16% against Elk's *converged* `rhoir`, a missing step rather than a
+tolerance. `symrfir` acts in $G$-space as a permutation plus a phase,
+
+$$\hat S\rho(\mathbf G)=\frac1{n_{\rm sym}}\sum_{\rm isym}
+\rho(S_{\rm isym}\mathbf G)\,e^{-i(S_{\rm isym}\mathbf G)\cdot\mathbf t_{\rm isym}},$$
+
+so the whole operator is two small arrays where a real-space form would be
+`ngtc`-square, and patch 0022 exports them for §2g's reason: reproducing the map
+means transcribing `symlat`/`lsplsymc`/`vtcsymc`/`ivgig` and the rotation's
+transpose convention, none of which has an independent check.
+
+On Elk's **default** mesh (3 k-points, 48 operations) against the converged
+arrays:
+
+| | without `symrf` | with |
+|---|---|---|
+| interstitial | 0.165 | **1.1e-15** |
+| muffin tin | 8.0e-6 | **1.9e-13** |
+
+**And the muffin-tin half needed one detail that nothing structural catches.**
+`rhomag` calls `symrf` *before* `rfmtctof`, so the array is on the **coarse**
+mesh and the operator's inner/outer boundary is `nrcmti`, not `nrmti`. Passing
+the fine value treats every coarse point as interior; the operator is still a
+rotation, the result is still a smooth positive density, and it is wrong at
+8e-6 where the correct one is 1.9e-13. Four orders of magnitude, pinned.
+
+Note also that §2h's own reference is written *before* `symrf`, so the
+un-symmetrised sum matches it exactly even on a reduced mesh — the 16% was never
+the zone sum, only the missing post-processing.
 
 **The third identifies `rhonorm` by measurement.** `rhonorm` adds a *uniform
 constant* $(N-N_{\rm calc})/\Omega$ rather than rescaling, so a correct

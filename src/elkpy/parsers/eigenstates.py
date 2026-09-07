@@ -1031,6 +1031,19 @@ def parse_densityk_response(tokens):
     out["ctof_full"] = full
     out["ctof_outer"] = outer
 
+    (nsymcrys,), pos = _take(tokens, pos, 1, int)
+    out["nsymcrys"] = nsymcrys
+    ngvc = int(out["ngvc"])
+    symmap = np.zeros((nsymcrys, ngvc), dtype=int)
+    symphase = np.zeros((nsymcrys, ngvc), dtype=complex)
+    for isym in range(nsymcrys):
+        for ig in range(ngvc):
+            (jg,), pos = _take(tokens, pos, 1, int)
+            pair, pos = _take(tokens, pos, 2, float)
+            symmap[isym, ig] = jg
+            symphase[isym, ig] = pair[0] + 1j * pair[1]
+    out["symmap"], out["symphase"] = symmap, symphase
+
     (nspncr,), pos = _take(tokens, pos, 1, int)
     out["nspncr"] = nspncr
     (out["chgtot"],), pos = _take(tokens, pos, 1, float)

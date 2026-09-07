@@ -36,7 +36,7 @@ __all__ = ["symmetrise", "symmetrise_packed", "is_projection",
            "idempotence_residual"]
 
 
-def symmetrise(values, groundstate):
+def symmetrise(values, groundstate, inner_points=None):
     r"""$\hat Sf$, for a stack of dense ``(nr, lmmaxo)`` muffin-tin functions.
 
     ``values[ias]`` is atom ``ias``'s function; the result mixes atoms, since
@@ -46,6 +46,13 @@ def symmetrise(values, groundstate):
     representation and stay zero: the operator's top-left block is closed on
     them, a rotation not mixing $l$.  That is asserted rather than assumed by
     :func:`elkjax.poisson.pack`'s round trip in the tests.
+
+    ``inner_points`` overrides where the two regions meet.  It defaults to the
+    FINE mesh's ``nrmti``, which is right for a potential and **wrong for the
+    density**: `rhomag` calls `symrf` before `rfmtctof`, so the array is on the
+    coarse mesh and the boundary is ``nrcmti``.  Passing the fine value there
+    treats every coarse point as interior -- the operator is still a rotation,
+    the result is still smooth and still a density, and it is wrong.
     """
     operator = jnp.asarray(groundstate["symop"])
     values = jnp.asarray(values)
@@ -55,7 +62,8 @@ def symmetrise(values, groundstate):
     out = []
     for ias in range(natmtot):
         isp = int(groundstate["idxis"][ias]) - 1
-        nri = int(groundstate["nrmti"][isp])
+        nri = (int(groundstate["nrmti"][isp]) if inner_points is None
+               else int(np.asarray(inner_points)[isp]))
         outer = sum(values[jas] @ operator[ias, jas].T
                     for jas in range(natmtot))
         inner = sum(values[jas][:nri, :lmmaxi]

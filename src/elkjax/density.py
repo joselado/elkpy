@@ -48,7 +48,8 @@ __all__ = ["interstitial_wavefunction", "interstitial_density", "coarsen",
            "muffin_tin_wavefunctions", "muffin_tin_density",
            "pack_coarse", "pack_fine", "to_harmonics",
            "coarse_to_fine", "solve_zone", "density_from_potential",
-           "add_core", "normalise", "refine", "converged_density"]
+           "add_core", "normalise", "refine", "converged_density",
+           "symmetrise_interstitial"]
 
 EPSOCC = 1.0e-8
 
@@ -477,13 +478,20 @@ def refine(coarse, groundstate, densityk):
     return jnp.real(_inverse_fft(array, fine_grid))
 
 
-def converged_density(densityk, groundstate, lapw, vectors=None, ispn=0):
+def converged_density(densityk, groundstate, lapw, vectors=None, ispn=0,
+                      symmetrise=None):
     r"""The whole of ``rhomag``: eigenvectors to Elk's converged ``rhomt``/``rhoir``.
 
-    ``rhomagk`` → ``rhomagsh`` → ``rfmtctof`` / ``rfirctof`` → ``rhocore`` →
-    ``rhonorm``, i.e. every step between the first-variational eigenvectors and
-    the arrays the next iteration's potential is built from.  ``symrf`` is
-    absent because these fixtures run ``symtype=0``, where it is the identity.
+    ``rhomagk`` → ``rhomagsh`` → ``symrf`` → ``rfmtctof`` / ``rfirctof`` →
+    ``rhocore`` → ``rhonorm``, i.e. every step between the first-variational
+    eigenvectors and the arrays the next iteration's potential is built from.
+
+    ``symrf`` runs when the cell has more than one crystal symmetry, which is
+    detected rather than asked for; ``symmetrise=False`` forces it off.  It is
+    applied on the COARSE mesh and before the radial interpolation, where Elk
+    applies it -- and with the coarse region boundary, which is the detail that
+    matters: passing the fine ``nrmti`` treats every coarse point as interior
+    and leaves a smooth, positive, wrong density (measured 8e-6 against 2e-13).
 
     ``vectors`` overrides the exported ``evecfv`` -- pass
     :func:`solve_zone`'s output to drive the whole thing from the potential
@@ -498,13 +506,57 @@ def converged_density(densityk, groundstate, lapw, vectors=None, ispn=0):
         local["evecfv"] = dict(densityk["evecfv"])
         local["evecfv"].update(vectors)
 
+    from . import symmetry
+
+    if symmetrise is None:
+        symmetrise = int(densityk.get("nsymcrys", 1)) > 1
+
     values = muffin_tin_density(local, groundstate, lapw, ispn=ispn)
-    muffin = []
-    for ias in range(natmtot):
-        harmonics = to_harmonics(values[ias], densityk, groundstate, ias)
-        fine = coarse_to_fine(harmonics, densityk, groundstate, ias)
-        muffin.append(add_core(fine, densityk, groundstate, ias))
-    interstitial = refine(
-        interstitial_density(local, float(groundstate["omega"]), ispn=ispn),
-        groundstate, densityk)
-    return normalise(jnp.stack(muffin), interstitial, densityk, groundstate)
+    harmonics = jnp.stack([to_harmonics(values[ias], densityk, groundstate, ias)
+                           for ias in range(natmtot)])
+    coarse = interstitial_density(local, float(groundstate["omega"]),
+                                  ispn=ispn)
+    if symmetrise:
+        harmonics = symmetry.symmetrise(harmonics, groundstate,
+                                        inner_points=densityk["nrcmti"])
+        coarse = symmetrise_interstitial(coarse, groundstate, densityk)
+
+    muffin = [add_core(coarse_to_fine(harmonics[ias], densityk, groundstate,
+                                      ias), densityk, groundstate, ias)
+              for ias in range(natmtot)]
+    return normalise(jnp.stack(muffin), refine(coarse, groundstate, densityk),
+                     densityk, groundstate)
+
+
+def symmetrise_interstitial(coarse, groundstate, densityk):
+    r"""``symrfir``: the interstitial symmetrisation, on the coarse grid.
+
+    .. math::
+
+        \hat S\rho(\mathbf G)=\frac1{n_{\rm sym}}\sum_{\rm isym}
+        \rho(S_{\rm isym}\mathbf G)\,
+        e^{-i(S_{\rm isym}\mathbf G)\cdot\mathbf t_{\rm isym}} ,
+
+    a permutation of the :math:`\mathbf G` vectors and a phase, which is why
+    patch 0022 exports the operator as two small arrays rather than the
+    ``ngtc``-square matrix a real-space form would need.  The counterpart of
+    §2g's `symrfmt` for the interstitial, and what lifts §2h's and §2j's
+    restriction to ``symtype=0``.
+
+    Components beyond ``ngvc`` are zeroed, as ``symrfir`` leaves them: it skips
+    ``ig > ngvec`` and its accumulator starts at zero.
+    """
+    grid = tuple(int(n) for n in densityk["ngdgc"])
+    igfc = np.asarray(densityk["igfc"])
+    ngvc = int(densityk["ngvc"])
+    symmap = np.asarray(densityk["symmap"])
+    symphase = jnp.asarray(densityk["symphase"])
+
+    spectrum = _forward_fft(coarse, grid)
+    slots = igfc[:ngvc] - 1
+    source = igfc[symmap - 1] - 1                      # (nsymcrys, ngvc)
+    averaged = jnp.mean(spectrum[jnp.asarray(source)] * symphase, axis=0)
+
+    out = jnp.zeros(int(densityk["ngtc"]), dtype=complex)
+    out = out.at[jnp.asarray(slots)].set(averaged)
+    return jnp.real(_inverse_fft(out, grid))

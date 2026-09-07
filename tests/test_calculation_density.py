@@ -597,3 +597,98 @@ def test_the_loop_closes_on_two_species(hbn_with_lapw):
     reference = np.asarray(groundstate["rhoir"])
     assert np.abs(np.asarray(interstitial) - reference).max() \
         / np.abs(reference).max() < 1e-7
+
+
+@pytest.fixture(scope="module")
+def reduced_with_lapw(tmp_path_factory):
+    """Elk's DEFAULT everything: symmetry on, so 3 k-points instead of 8 and
+    `symrf` not the identity, and `rhonorm` on, since `converged_density`
+    normalises and the comparison is against Elk's converged arrays.
+
+    Every other fixture in this file runs `symtype=0`, so this is the only one
+    that exercises `symrf` at all.
+    """
+    return _run(tmp_path_factory.mktemp("density") / "si_sym", None, lapw=True)
+
+
+def test_symrf_lifts_the_symtype_zero_restriction(reduced_with_lapw):
+    """The whole of `rhomag` on a symmetry-REDUCED mesh, both regions.
+
+    `symrfir` is a permutation of the G-vectors plus a phase, so patch 0022
+    exports it as two small arrays; `symrfmt` is section 2g's operator, applied
+    on the coarse mesh with the COARSE region boundary.  Both halves are
+    asserted before and after, since without the "before" this would pass on a
+    cell where symmetrisation does nothing.
+    """
+    from elkjax import density
+    groundstate, densityk, lapw = reduced_with_lapw
+    assert int(densityk["nsymcrys"]) > 1
+    assert int(densityk["nkpt"]) < 8, "this fixture is not actually reduced"
+
+    off = density.converged_density(densityk, groundstate, lapw,
+                                    symmetrise=False)
+    on = density.converged_density(densityk, groundstate, lapw,
+                                   symmetrise=True)
+    reference = np.asarray(groundstate["rhoir"])
+    scale = np.abs(reference).max()
+    assert np.abs(np.asarray(off[1]) - reference).max() / scale > 1e-2
+    assert np.abs(np.asarray(on[1]) - reference).max() / scale < 1e-10
+
+    for ias in range(int(groundstate["natmtot"])):
+        got = np.asarray(density.pack_fine(on[0][ias], groundstate, ias))
+        reference = np.asarray(groundstate["rhomt"][ias])[:got.size]
+        assert np.abs(got - reference).max() \
+            / np.abs(reference).max() < 1e-11
+
+
+def test_the_coarse_region_boundary_is_load_bearing(reduced_with_lapw):
+    """`symrfmt` on the density uses `nrcmti`, not `nrmti`.
+
+    `rhomag` calls `symrf` BEFORE `rfmtctof`, so the array is on the coarse
+    mesh.  Passing the fine boundary treats every coarse point as interior --
+    the operator is still a rotation, the result is still a smooth positive
+    density, and it is wrong by 8e-6 where the correct one is 2e-13.  Four
+    orders of magnitude, and nothing structural notices.
+    """
+    import jax.numpy as jnp
+    from elkjax import density, symmetry
+    groundstate, densityk, lapw = reduced_with_lapw
+    natmtot = int(groundstate["natmtot"])
+    values = density.muffin_tin_density(densityk, groundstate, lapw)
+    harmonics = jnp.stack([density.to_harmonics(values[i], densityk,
+                                                groundstate, i)
+                           for i in range(natmtot)])
+
+    coarse = density.symmetrise_interstitial(
+        density.interstitial_density(densityk, float(groundstate["omega"])),
+        groundstate, densityk)
+
+    errors = []
+    for boundary in (None, densityk["nrcmti"]):
+        moved = symmetry.symmetrise(harmonics, groundstate,
+                                    inner_points=boundary)
+        stack = jnp.stack([density.add_core(
+            density.coarse_to_fine(moved[ias], densityk, groundstate, ias),
+            densityk, groundstate, ias) for ias in range(natmtot)])
+        # normalise, or `rhonorm`'s uniform shift shows up as a 1e-8 floor and
+        # swamps the comparison this test is making
+        stack, _ = density.normalise(
+            stack, density.refine(coarse, groundstate, densityk), densityk,
+            groundstate)
+        worst = 0.0
+        for ias in range(natmtot):
+            fine = stack[ias]
+            got = np.asarray(density.pack_fine(fine, groundstate, ias))
+            reference = np.asarray(groundstate["rhomt"][ias])[:got.size]
+            # the l=0 COEFFICIENT is the spherical average and must stay
+            # positive; the l>0 ones are coefficients and may be either sign,
+            # so a blanket `got.min() >= 0` would be a claim about the wrong
+            # object
+            assert np.asarray(fine)[:, 0].min() > 0.0, (
+                "the mutant is still a density")
+            worst = max(worst, np.abs(got - reference).max()
+                        / np.abs(reference).max())
+        errors.append(worst)
+    fine_boundary, coarse_boundary = errors
+    assert coarse_boundary < 1e-11
+    assert fine_boundary > 1e3 * coarse_boundary
