@@ -1,6 +1,6 @@
 # Continue here
 
-Working state as of 2026-09-07, written to be picked up cold. Last verified: fast suite **440 passed**, the Phase 1+2 integration suites **204 passed / 9 skipped**, and all 21 patches apply to a fresh `vendor/elk/` with no fuzz, reproducing `build/elk/src/elkpy_eigenstates.f90` byte for byte.
+Working state as of 2026-09-07, written to be picked up cold. Last verified: fast suite **440 passed**, the Phase 1+2 integration suites **206 passed / 9 skipped**, and all 22 patches apply to a fresh `vendor/elk/` with no fuzz, reproducing `build/elk/src/elkpy_eigenstates.f90` byte for byte.
 
 **Status in one paragraph.** Both workstreams are on `master` and `master` is pushed.
 *Workstream A* — the full-coverage Elk wrapper — is complete and untouched since the
@@ -75,6 +75,9 @@ over the k-axis is the memory default; `vmap(eigh)` materialises every k-point a
 Recent commits, newest first:
 
 ```
+4b13175  Carry the lifted symtype=0 restriction into the index documents
+ce50d36  Lift the symtype=0 restriction: symrfir, and a boundary that was wrong
+f7ca80f  Record the final verification state
 6f5ea27  Carry the differentiability result and its open half into the index
 94a3f08  Sharpen the open electrostatic-derivative question
 c81ee1d  Differentiate Phase 2, and record the half that does not close
@@ -99,6 +102,7 @@ be38b85  Carry the total energy into the two index documents
 9f31ccb  Write up the Poisson solve across the four documents
 1389745  Transcribe Elk's Weinert Poisson solve
 19de80c  Retire the scan item from the three places that still list it as open
+264c1ec  Scan the Newton-Schulz tape instead of unrolling it
 ```
 
 ---
