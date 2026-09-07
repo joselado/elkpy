@@ -39,12 +39,18 @@ pytestmark = [
 SI_AVEC = [(5.13, 5.13, 0.00), (5.13, 0.00, 5.13), (0.00, 5.13, 5.13)]
 
 
-def _run(workdir, extra_blocks, lapw=False):
-    calculation = Structure(
+HBN_A = 4.7455
+HBN_AVEC = [(HBN_A, 0.0, 0.0),
+            (-HBN_A / 2, HBN_A * np.sqrt(3) / 2, 0.0),
+            (0.0, 0.0, 20.0)]
+
+
+def _run(workdir, extra_blocks, lapw=False, structure=None, ngridk=(2, 2, 2)):
+    calculation = (structure or Structure(
         avec=SI_AVEC,
         species={"Si": [(0.0, 0.0, 0.0), (0.25, 0.25, 0.25)]},
-    ).get_calculation(workdir, xc="PW", ngridk=(2, 2, 2), rgkmax=7.0,
-                      extra_blocks=extra_blocks)
+    )).get_calculation(workdir, xc="PW", ngridk=ngridk, rgkmax=7.0,
+                       extra_blocks=extra_blocks)
     calculation.ensure_ground_state()
     with calculation.eigenstate_session() as session:
         # DENSITYK deliberately FIRST, so the test would fail if the query
@@ -518,3 +524,76 @@ def test_dropping_the_core_is_a_large_and_smooth_error(normalised_with_lapw):
     assert core[0] / spherical[0] > 0.9, (
         "the core is most of the density at the innermost radial point")
     assert core[-1] / np.abs(spherical).max() < 1e-6
+
+
+@pytest.fixture(scope="module")
+def hbn_with_lapw(tmp_path_factory):
+    """Two species with different meshes, different nuclear charges, different
+    local-orbital counts and different `nrcmt` -- none of which silicon's
+    single species can exercise.
+
+    Every per-species array in the muffin-tin path is indexed by `idxis`:
+    `apwfr_full`, `lofr`, `idxlo`, `apword`, `nlorb`, `lorbl`, the coarse mesh
+    sizes, and both interpolation operators.  A transcription that indexed any
+    of them by ATOM instead would be invisible on silicon and wrong here.
+    """
+    return _run(tmp_path_factory.mktemp("density") / "hbn",
+                {"symtype": [0]}, lapw=True,
+                structure=Structure(avec=HBN_AVEC,
+                                    species={"B": [(0.0, 0.0, 0.0)],
+                                             "N": [(1 / 3, 2 / 3, 0.0)]}),
+                ngridk=(2, 2, 1))
+
+
+def test_the_density_chain_holds_on_two_species(hbn_with_lapw):
+    """The whole of `rhomag` on h-BN, against Elk's converged arrays.
+
+    Same assertion as the silicon case, on a cell where the two atoms have
+    different radial meshes -- which is what makes it a check of the `idxis`
+    indexing rather than a repetition.
+    """
+    from elkjax import density
+    groundstate, densityk, lapw = hbn_with_lapw
+    assert int(groundstate["nspecies"]) == 2
+    # what actually distinguishes B from N here is the LOCAL-ORBITAL count --
+    # 2 against 3 -- not the radial mesh, which they happen to share at 75
+    # coarse points.  That difference is what makes `lorbl` a ragged list over
+    # species rather than a rectangular array, and it is what caught a real
+    # bug: `np.asarray(lapw["lorbl"])[isp]` works on a one-species cell and
+    # raises here.
+    assert len(set(int(n) for n in lapw["nlorb"])) == 2, (
+        "the two species now have the same local-orbital count; this fixture "
+        "no longer exercises the ragged per-species arrays")
+
+    muffin, interstitial = density.converged_density(densityk, groundstate,
+                                                     lapw)
+    for ias in range(int(groundstate["natmtot"])):
+        got = np.asarray(density.pack_fine(muffin[ias], groundstate, ias))
+        reference = np.asarray(groundstate["rhomt"][ias])[:got.size]
+        assert np.abs(got - reference).max() \
+            / np.abs(reference).max() < 1e-11
+    reference = np.asarray(groundstate["rhoir"])
+    assert np.abs(np.asarray(interstitial) - reference).max() \
+        / np.abs(reference).max() < 1e-10
+
+
+def test_the_loop_closes_on_two_species(hbn_with_lapw):
+    """Potential -> H, O -> eigenvectors -> density, on h-BN.
+
+    The interstitial blocks come from `vsig`/`cfunig` and the muffin-tin ones
+    from per-species radial integrals, so this exercises the assembly's own
+    species indexing at every k of a mesh that is not silicon's.
+    """
+    from elkjax import density
+    groundstate, densityk, lapw = hbn_with_lapw
+    vectors = density.solve_zone(lapw, groundstate, densityk)
+    muffin, interstitial = density.converged_density(
+        densityk, groundstate, lapw, vectors=vectors)
+    for ias in range(int(groundstate["natmtot"])):
+        got = np.asarray(density.pack_fine(muffin[ias], groundstate, ias))
+        reference = np.asarray(groundstate["rhomt"][ias])[:got.size]
+        assert np.abs(got - reference).max() \
+            / np.abs(reference).max() < 1e-8
+    reference = np.asarray(groundstate["rhoir"])
+    assert np.abs(np.asarray(interstitial) - reference).max() \
+        / np.abs(reference).max() < 1e-7

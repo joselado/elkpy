@@ -193,7 +193,11 @@ def muffin_tin_wavefunctions(coefficients, apwalm, ngk, ias, densityk,
     lofr = np.asarray(lapw["lofr"])[:, 0]
     idxlo = np.asarray(lapw["idxlo"])
     nlorb = int(np.asarray(lapw["nlorb"])[isp])
-    lorbl = np.asarray(lapw["lorbl"])[isp]
+    # `lorbl` is a LIST over species of per-species arrays, not a rectangular
+    # array: two species with different local-orbital counts make it ragged,
+    # and `np.asarray` on the whole thing then raises.  On a one-species cell
+    # it does not, which is why silicon never saw this.
+    lorbl = np.asarray(lapw["lorbl"][isp])
 
     coefficients = jnp.asarray(coefficients)
     out = jnp.zeros((nrcmt, lmmaxo), dtype=complex)
