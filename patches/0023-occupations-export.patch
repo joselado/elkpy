@@ -1,0 +1,41 @@
+--- a/src/elkpy_eigenstates.f90
++++ b/src/elkpy_eigenstates.f90
+@@ -1819,6 +1819,38 @@
+     write(*,'(4ES25.16E3)') rhocr(1:nrmt(idxis(ias)),ias,i)
+   end do
+ end do
++! --- occupy.f90's inputs, and its own answer (patch 0023) ---
++! occupy finds the Fermi energy from the zone-summed electron count
++!   sum_k w_k sum_i occmax * stheta((efermi - e_ik)/swidth) = chgval
++! and sets occsv from it.  Everything it reads is a scalar except evalsv,
++! which no query writes: LAPW returns evalfv at ONE k-point and DENSITYK has
++! so far written only the occupations.  With evalsv here a transcription can
++! be checked against Elk's own efermi and occsv on Elk's own eigenvalues --
++! i.e. without the assembly in the path -- which is the only way to tell a
++! wrong bisection from a wrong Hamiltonian.
++!
++! e0min is min(0, every apwe0 and lorbe0) - 2 and is not derivable from the
++! linearisation energies patch 0015 exports, which are per-l and post-search;
++! it gates occsv to zero below itself, so omitting it changes the answer for
++! any state below the deepest local orbital.
++!
++! The last scalar is the CORE half of evalsum, sum_ias sum_ist occcr*evalcr.
++! energy.f90 adds it to the valence zone sum; the core solver is not
++! transcribed (patch 0021's rhocr is the same decision), so it is an input at
++! fixed potential and the valence half becomes computable.
++write(*,*) stype
++write(*,'(4ES25.16E3)') swidth,occmax,chgval,e0min,epsocc,efermi
++do ik=1,nkpt
++  write(*,'(4ES25.16E3)') evalsv(1:nstsv,ik)
++end do
++t1=0.d0
++do ias=1,natmtot
++  is=idxis(ias)
++  do ist=1,nstsp(is)
++    if (spcore(ist,is)) t1=t1+occcr(ist,ias)*evalcr(ist,ias)
++  end do
++end do
++write(*,'(4ES25.16E3)') t1
+ deallocate(apwalm,evecfv,evecsv,rhomt_,rhoir_,magmt_,magir_)
+ end subroutine
+ !EOC

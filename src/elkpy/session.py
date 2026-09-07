@@ -598,6 +598,12 @@ class EigenstateSession:
         zone, and from `lapw_problem()` because that is one k-point of the
         caller's choosing rather than Elk's own set.  See
         `docs/jax_port_phase2.md`.
+
+        Also carries `occupy.f90`'s inputs -- `stype`, `swidth`, `occmax`,
+        `chgval`, `e0min`, `epsocc` -- with `evalsv` over the whole k-set and
+        Elk's own `efermi`, so a transcription of the zone-summed Fermi level
+        can be checked on Elk's own eigenvalues, with no assembly in the path
+        (`docs/jax_port_phase3.md`).
         """
         self._send("DENSITYK")
         return parse_densityk_response(self._read_until_sentinel())

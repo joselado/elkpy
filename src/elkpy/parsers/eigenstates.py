@@ -1054,6 +1054,21 @@ def parse_densityk_response(tokens):
             flat, pos = _take(tokens, pos, n, float)
             rhocr[ias, ispn, :n] = flat
     out["rhocr"] = rhocr
+
+    # occupy.f90's own inputs and its own answer (patch 0023).  `evalsv` is
+    # here and not on the `LAPW` query because it is per-k over the WHOLE set:
+    # the Fermi level is a zone sum, so one k-point cannot supply it.
+    (stype,), pos = _take(tokens, pos, 1, int)
+    out["stype"] = stype
+    scalars, pos = _take(tokens, pos, 6, float)
+    out.update(zip(("swidth", "occmax", "chgval", "e0min", "epsocc",
+                    "efermi"), scalars))
+    evalsv = np.zeros((nkpt, nstsv))
+    for ik in range(nkpt):
+        flat, pos = _take(tokens, pos, nstsv, float)
+        evalsv[ik] = flat
+    out["evalsv"] = evalsv
+    (out["evalsumcr"],), pos = _take(tokens, pos, 1, float)
     return out
 
 
