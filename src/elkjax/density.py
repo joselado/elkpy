@@ -46,7 +46,8 @@ import jax.numpy as jnp
 __all__ = ["interstitial_wavefunction", "interstitial_density", "coarsen",
            "normalisation_offset", "coarse_radial_indices",
            "muffin_tin_wavefunctions", "muffin_tin_density",
-           "pack_coarse", "to_harmonics", "coarse_to_fine"]
+           "pack_coarse", "pack_fine", "to_harmonics",
+           "coarse_to_fine", "solve_zone", "density_from_potential"]
 
 EPSOCC = 1.0e-8
 
@@ -339,3 +340,62 @@ def pack_fine(values, groundstate, ias):
     lmmaxi = int(groundstate["lmmaxi"])
     return jnp.concatenate([values[:nrmti, :lmmaxi].reshape(-1),
                             values[nrmti:].reshape(-1)])
+
+
+# --------------------------------------------- the loop closed, one iteration
+
+
+def solve_zone(lapw, groundstate, densityk, ispn=0):
+    r"""Diagonalise at every k-point of Elk's own set, from the potential.
+
+    Returns a dict keyed ``(ik, ispn)`` of ``evecfv`` in Elk's normalisation
+    (:math:`c^\dagger Oc=\mathbb 1`), shaped ``(nstfv, nmat)`` so it can be
+    dropped straight into :func:`muffin_tin_density` and
+    :func:`interstitial_density` in place of the exported one.
+
+    The muffin-tin blocks come from the radial integrals -- which
+    `elkjax.radial` builds from the potential (§1k) -- and the interstitial
+    ones from ``vsig``/``cfunig``, so **nothing here reads an eigenvector**.
+    That is the whole point: it is the other half of the SCF step.
+    """
+    from .hamiltonian import cholesky_reduce, eigenproblem_on_gset
+
+    bvec = np.asarray(groundstate["bvec"])
+    vgc = np.asarray(groundstate["vgc"])
+    nstfv = int(densityk["nstfv"])
+    out = {}
+    for ik in range(int(densityk["nkpt"])):
+        igkig = np.asarray(densityk["igkig"][(ik, ispn)])
+        ngp = int(densityk["ngk"][ik, ispn])
+        vgkc = (vgc[:, igkig - 1].T
+                + (bvec @ np.asarray(densityk["vkl"])[:, ik])[None, :])
+        h, o = eigenproblem_on_gset(lapw, groundstate, igkig, vgkc, ngp)
+        reduced, chol = cholesky_reduce(h, o)
+        _, y = jnp.linalg.eigh(reduced)
+        # c = L^{-dagger} y, which restores Elk's own normalisation
+        vectors = jnp.linalg.solve(chol.conj().T, y[:, :nstfv])
+        out[(ik, ispn)] = vectors.T
+    return out
+
+
+def density_from_potential(lapw, groundstate, densityk, ispn=0):
+    """One SCF half-step: potential -> eigenvectors -> valence density.
+
+    Returns ``(muffin tin values on the coarse angular grid, interstitial on
+    the coarse FFT grid)``, in the same representation ``rhomagk`` produces,
+    so it is directly comparable with patch 0019's exported reference.
+
+    Elk's own occupations are used.  They are a functional of the eigenvalues
+    through the Fermi level, and a zone-summed Fermi level is not built here
+    (§1i has it at a single k) -- so this is the density given the occupations,
+    which is what makes it a test of the assembly and the density rather than
+    of the smearing.
+    """
+    vectors = solve_zone(lapw, groundstate, densityk, ispn=ispn)
+    local = dict(densityk)
+    local["evecfv"] = dict(densityk["evecfv"])
+    for key, value in vectors.items():
+        local["evecfv"][key] = value
+    return (muffin_tin_density(local, groundstate, lapw, ispn=ispn),
+            interstitial_density(local, float(groundstate["omega"]),
+                                 ispn=ispn))

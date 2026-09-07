@@ -365,3 +365,79 @@ def test_the_two_interpolation_operators_are_not_interchangeable(
     assert np.abs(wrong[nrmti:] - good[nrmti:, lmmaxi:]).max() / scale > 1e-3
     assert np.isfinite(wrong).all(), "the mutant is smooth and finite"
     assert nrcmti > 0
+
+
+def test_the_loop_closes_from_the_potential(unreduced_with_lapw):
+    """One SCF half-step: potential -> H, O -> eigenvectors -> density.
+
+    Nothing in this path reads an eigenvector.  The muffin-tin blocks come from
+    the radial integrals, which section 1k builds from the potential; the
+    interstitial ones from `vsig`/`cfunig` in G-space, which is what makes the
+    assembly usable at every k of the zone rather than only at the exported
+    one.  So this is the other half of the SCF step, and together with sections
+    2e/2i it closes the circle.
+
+    The tolerance is 1e-9 and NOT 1e-13, for a reason the next test measures
+    rather than asserts: Elk's STORED eigenvectors -- which the reference is
+    built from, as `rhomagv` builds it -- are one potential-mixing step older
+    than the radial functions.  Against a fresh diagonalisation the agreement
+    is 1e-14.
+    """
+    from elkjax import density
+    groundstate, densityk, lapw = unreduced_with_lapw
+    muffin, interstitial = density.density_from_potential(lapw, groundstate,
+                                                          densityk)
+    for ias in range(int(groundstate["natmtot"])):
+        got = np.asarray(density.pack_coarse(muffin[ias], densityk,
+                                             groundstate, ias))
+        reference = np.asarray(densityk["rhomt_coarse"][ias])[:got.size]
+        assert np.abs(got - reference).max() \
+            / np.abs(reference).max() < 1e-9
+    reference = np.asarray(densityk["rhoir_coarse"])
+    assert np.abs(np.asarray(interstitial) - reference).max() \
+        / np.abs(reference).max() < 1e-9
+
+
+def test_the_residual_is_elks_two_exports_disagreeing(unreduced_with_lapw):
+    """Why the test above is 1e-9 and not 1e-13, measured.
+
+    `elkpy_lapwexport` calls `genapwlofr` and then `eveqnfv` -- a FRESH
+    diagonalisation with the regenerated radial functions.  `elkpy_denskexport`
+    calls `genapwlofr` and then `getevecfv` -- the STORED eigenvectors, which
+    were computed with the previous iteration's radial functions, because
+    `gndstate` mixes the potential after building them.  So Elk's own two
+    exports of the same object differ, and the density built from each differs
+    with them.
+
+    Asserted in both directions: the two exports disagree at the level that
+    explains the residual, AND this solve agrees with the fresh one to 1e-13.
+    Without the second half this would just be a tolerance excuse.
+    """
+    import jax.numpy as jnp
+    from elkjax import density
+    from elkjax.hamiltonian import eigenproblem_on_gset
+    groundstate, densityk, lapw = unreduced_with_lapw
+
+    ik = int(np.argmin(np.abs(np.asarray(densityk["vkl"])).sum(axis=0)))
+    assert np.abs(np.asarray(densityk["vkl"])[:, ik]).max() < 1e-12, (
+        "the LAPW query was taken at Gamma; this fixture has no Gamma point")
+
+    igkig = np.asarray(densityk["igkig"][(ik, 0)])
+    ngp = int(densityk["ngk"][ik, 0])
+    vgkc = np.asarray(groundstate["vgc"])[:, igkig - 1].T
+    _, overlap = eigenproblem_on_gset(lapw, groundstate, igkig, vgkc, ngp)
+    overlap = np.asarray(overlap)
+
+    nocc = 4
+    def project(vectors):
+        block = np.asarray(vectors)[:, :nocc]
+        return block @ block.conj().T @ overlap
+
+    mine = np.asarray(density.solve_zone(lapw, groundstate, densityk)[(ik, 0)]).T
+    stored = np.asarray(densityk["evecfv"][(ik, 0)]).T
+    fresh = np.asarray(lapw["evecfv"])
+
+    assert np.abs(project(mine) - project(fresh)).max() < 1e-13
+    assert np.abs(project(stored) - project(fresh)).max() > 1e-13, (
+        "Elk's two exports now agree; tighten the tolerance in the test above")
+    assert jnp.isfinite(jnp.asarray(mine)).all()

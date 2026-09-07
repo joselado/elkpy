@@ -31,6 +31,7 @@ $V_s$ itself, which is what this phase is for.
 | **2d″** `symrfmt` | **done** (§2g, patch 0018): the operator is EXPORTED rather than transcribed, so Elk's Euler-angle/Wigner-D construction and atom bookkeeping are not re-derived at all. Applying it takes the pointwise `vxcmt` gap from 5.3e-3 to 6.4e-14. Idempotent to 1e-16 on a cubic lattice and 1.2e-11 on a hexagonal one — Elk's own `roteuler`, not the export |
 | **2b** the density from the eigenvectors | **done for the valence density, both regions** (§2h, patch 0019, `elkjax/density.py`): 9e-16 in the muffin tin and 7.5e-16 in the interstitial, against a reference patch 0019 builds by looping Elk's own `rhomagk` — so `rhomagsh`, `symrf`, `rfmtctof` and `rhocore` need no transcription. On a reduced mesh the interstitial is 16% off because `symrf` is not applied, and the residual against the STORED density is `rhonorm`'s uniform shift (2.82e-05 to 2.8e-18 with `trhonorm` off) |
 | **2i** the Kohn-Sham potential, composed | **done** (§2i): `v_cl + S v_xc` from three separate modules reproduces Elk's own to <1e-14 in the muffin tin and <1e-13 against `vsir`, which Elk forms itself and is therefore the independent reference. A mutation test pins the one thing it catches: trimming the Coulomb term too is smooth, of the right magnitude, and wrong |
+| **2j** the loop closed | **done** (§2j): `density_from_potential` goes potential → H, O at every k → eigensolve → density with nothing reading an eigenvector, agreeing at 5e-11. The residual is MEASURED to be Elk's own two `evecfv` exports disagreeing (8.5e-9, stored vs fresh) — this solve matches the fresh one at 1.6e-14 |
 | **2f** total energy at fixed input potential | **done** (§2f, `elkjax/energy.py`): every density-functional term of `energy.f90` matches Elk's own exported scalars to <1e-13 relative on two structures, asserted term by term. `evalsum`, `engyts` and `engynn` are imported — they need the second-variational step, a zone sum, and the lattice. **§2d's prediction of a 1e-4 error here was wrong**: symmetrisation is an orthogonal projection and rho is in its range, so the leak is orthogonal to the density (1e-16 relative, measured) |
 
 ---
@@ -976,3 +977,86 @@ zone-summed Fermi level (§1i has it at a single $k$), and `symrfir` for a
 symmetry-reduced mesh. The open question is whether the **composition** is
 stable, which nothing here has tested — every check in Phase 2 starts from Elk's
 own converged density.
+
+---
+
+## 2j. The loop closed: potential → eigenvectors → density
+
+### What was at stake
+
+§2i takes a density to a potential. §2h takes eigenvectors to a density. The
+link between them — potential to eigenvectors — is Phase 1's assembly, but only
+at **one** $k$-point: `eigenproblem_at` recovers $\tilde v_s$ as a *matrix* in
+the exported $k$-point's own $\mathbf G$ basis, which cannot be carried to
+another $k$. A zone sum needs the whole mesh.
+
+### The one thing that was missing
+
+`hmlistl`/`olpistl` build the interstitial blocks from $\tilde v_s$ and
+$\tilde\Theta$ in $G$-space:
+
+$$O^{\rm I}_{ij}=\tilde\Theta(\mathbf G_i-\mathbf G_j),\qquad
+H^{\rm I}_{ij}=\tilde v_s(\mathbf G_i-\mathbf G_j)
++\tfrac12(\mathbf G_i{+}\mathbf k)\!\cdot\!(\mathbf G_j{+}\mathbf k)\,
+\tilde\Theta(\mathbf G_i-\mathbf G_j),$$
+
+which works at any $k$ whose $\mathbf G$ set is known — and patch 0019 already
+exports Elk's own `igkig` for every $k$ of the mesh. `vsig` and `cfunig` come
+from patch 0016; `ivgig` is rebuilt from `ivg` as a dense lookup, so the
+difference-vector map is one fancy-index rather than $n_{gp}^2$ dictionary
+probes. Elk fills only the upper triangle and the full matrix is formed here
+instead, which is equivalent because both are transforms of real functions.
+
+Against Elk's own exported matrices at $\Gamma$: $H$ to **2.7e-15** and $O$ to
+**5.6e-16**.
+
+`vsig`'s `ngvc` allocation is exactly the $|G|\le2g_{k\max}$ range a difference
+of two $|\mathbf G+\mathbf k|<g_{k\max}$ vectors can reach, so the lookup must
+land inside it. That is asserted rather than assumed — the Fortran would read
+past the end.
+
+### The result
+
+`density_from_potential` does the whole half-step: radial integrals from the
+potential (§1k) → $H$, $O$ at every $k$ → Cholesky-reduced eigensolve →
+`wfmtsv` and the interstitial FFT → density. **Nothing in that path reads an
+eigenvector.** Against patch 0019's reference: **5e-11** relative in both
+regions.
+
+### Why 5e-11 and not 1e-15, measured rather than excused
+
+The residual is **Elk's own two exports of `evecfv` disagreeing with each
+other**, by 8.5e-09.
+
+`elkpy_lapwexport` calls `genapwlofr` and then `eveqnfv` — a *fresh*
+diagonalisation with the regenerated radial functions. `elkpy_denskexport`
+calls `genapwlofr` and then `getevecfv` — the *stored* eigenvectors, which were
+computed with the previous iteration's radial functions, because `gndstate`
+mixes the potential after building them. The reference is built from the
+stored ones, as `rhomagv` builds it; this chain produces fresh ones.
+
+The isolation, all at $\Gamma$ on the occupied-subspace projector (gauge
+invariant, so a degenerate multiplet cannot confuse it):
+
+| | |
+|---|---|
+| this solve vs the `LAPW` query's fresh `evecfv` | **1.6e-14** |
+| re-diagonalising Elk's own $H,O$ vs its stored `evecfv` | 1.0e-14 |
+| this assembly's $H,O$ vs Elk's, same solver | 2.2e-14 |
+| **`DENSITYK`'s stored `evecfv` vs `LAPW`'s fresh one** | **3.7e-11** |
+
+So the assembly, the solver and the density construction are each at $10^{-14}$,
+and the only disagreement is between two of Elk's own arrays. **This is patch
+0015's finding for the third time** — §1k measured it at 3e-10 in `haa`, §2h at
+1.2e-10 in the muffin-tin density, and here it is visible directly as two
+exports of the same object differing. The test asserts *both* halves: the two
+exports disagree, and this solve matches the fresh one — without the second, the
+loose tolerance would be an excuse rather than a measurement.
+
+### What the loop still does not have
+
+This is one *half-step* with Elk's occupations, not a fixed-point iteration.
+Missing: `rhocore` (an input at fixed potential, like `vsmt`), `rhonorm` (one
+constant), a zone-summed Fermi level (§1i has it at a single $k$), and
+`symrfir` for a symmetry-reduced mesh. What is now demonstrated is that both
+directions exist, are exact to their references, and compose.

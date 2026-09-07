@@ -764,3 +764,94 @@ def occupied_band_count(evalfv, efermi):
     at any k-point and needs no chemistry.
     """
     return int(np.sum(np.asarray(evalfv) < float(efermi)))
+
+
+# -------------------------------------- the assembly at Elk's own k-points
+
+
+def reciprocal_lookup(groundstate):
+    """Elk's ``ivgig``: a G-vector triple to its index in the global list.
+
+    Rebuilt from the exported ``ivg`` rather than transported, since it is a
+    property of the grid.  Stored as a dense array indexed by the components
+    modulo the FFT dimensions, which is what makes the difference-vector lookup
+    in :func:`interstitial_blocks` one fancy-index instead of a Python loop
+    over :math:`n_{gp}^2` pairs.
+    """
+    ivg = np.asarray(groundstate["ivg"])
+    grid = tuple(int(n) for n in groundstate["ngridg"])
+    table = np.full(grid, -1, dtype=int)
+    table[tuple(ivg[axis] % grid[axis] for axis in range(3))] = np.arange(
+        ivg.shape[1])
+    return table
+
+
+def interstitial_blocks(igpig, vgkc, groundstate, table=None):
+    r"""``hmlistl`` and ``olpistl``: the interstitial :math:`H` and :math:`O`.
+
+    .. math::
+
+        O^{\rm I}_{ij}=\tilde\Theta({\bf G}_i-{\bf G}_j),\qquad
+        H^{\rm I}_{ij}=\tilde v_s({\bf G}_i-{\bf G}_j)
+        +\tfrac12({\bf G}_i+{\bf k})\!\cdot\!({\bf G}_j+{\bf k})\,
+        \tilde\Theta({\bf G}_i-{\bf G}_j).
+
+    Built from ``vsig`` and ``cfunig`` in :math:`G`-space, so it works at any
+    :math:`k` whose :math:`{\bf G}` set is known -- unlike
+    :func:`interstitial_potential_matrix`, which recovers :math:`\tilde v_s` as
+    a matrix in one exported :math:`k`-point's own basis and cannot leave it.
+
+    Elk fills only the upper triangle; the full matrix is formed here instead,
+    which is equivalent because :math:`\tilde v_s` and :math:`\tilde\Theta` are
+    transforms of real functions and so obey :math:`f(-{\bf G})=f({\bf G})^*`.
+
+    ``vsig`` is allocated to ``ngvc``, not ``ngvec`` -- it only carries
+    :math:`|{\bf G}|\le 2g_{k\max}`.  That is exactly the range a difference of
+    two :math:`|{\bf G}+{\bf k}|<g_{k\max}` vectors can reach, so the lookup
+    must land inside it; this asserts that rather than reading past the end,
+    which is what the Fortran would do.
+    """
+    if table is None:
+        table = reciprocal_lookup(groundstate)
+    ivg = np.asarray(groundstate["ivg"])
+    grid = tuple(int(n) for n in groundstate["ngridg"])
+    g = ivg[:, np.asarray(igpig) - 1]
+    difference = g[:, :, None] - g[:, None, :]
+    index = table[tuple(difference[axis] % grid[axis] for axis in range(3))]
+    if index.min() < 0:
+        raise ValueError("a G-vector difference is not in the exported list")
+
+    cfunig = jnp.asarray(groundstate["cfunig"])
+    vsig = jnp.asarray(groundstate["vsig"])
+    if index.max() >= vsig.size:
+        raise ValueError(
+            f"a G-vector difference reaches index {index.max()}, past vsig's "
+            f"ngvc = {vsig.size}; the |G| <= 2 gkmax bound has been violated")
+    theta = cfunig[jnp.asarray(index)]
+    vgkc = jnp.asarray(vgkc)
+    kinetic = 0.5 * (vgkc @ vgkc.T)
+    return vsig[jnp.asarray(index)] + kinetic * theta, theta
+
+
+def eigenproblem_on_gset(lapw, groundstate, igpig, vgkc, ngp):
+    """(H, O) at a k-point given by its own G set, in Elk's full basis.
+
+    The muffin-tin blocks come from `lapw`'s radial integrals with `apwalm`
+    rebuilt at this k; the interstitial ones from `vsig`/`cfunig`.  Unlike
+    `eigenproblem_at` this is not tied to the exported k-point's G set, which
+    is what lets a zone sum use it.
+    """
+    apwalm = matching_coefficients(lapw, jnp.asarray(vgkc))
+    nlotot = int(lapw["nlotot"])
+    nmatp = ngp + nlotot
+    local = dict(lapw)
+    local["apwalm"] = apwalm
+    local["ngp"] = ngp
+    local["nmatp"] = nmatp
+    istl_h, istl_o = interstitial_blocks(igpig, vgkc, groundstate)
+
+    def _pad(block):
+        return jnp.zeros((nmatp, nmatp), dtype=complex).at[:ngp, :ngp].add(block)
+
+    return (muffin_tin_hamiltonian(local) + _pad(istl_h),
+            muffin_tin_overlap(local) + _pad(istl_o))
