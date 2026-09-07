@@ -30,6 +30,7 @@ $V_s$ itself, which is what this phase is for.
 | **2c′** the Weinert Poisson solve | **done** (§2e, patch 0017): `vclir` to 1.6e-15 relative and `vclmt` to 4e-20 (l=0) / 7e-14 (l>0) on two structures. The monopole identity recovers Z = 14, 5, 7 exactly from a separate code path, and two mutation tests pin the step order and the region split — both mutants are smooth, of the right order and wrong |
 | **2d″** `symrfmt` | **done** (§2g, patch 0018): the operator is EXPORTED rather than transcribed, so Elk's Euler-angle/Wigner-D construction and atom bookkeeping are not re-derived at all. Applying it takes the pointwise `vxcmt` gap from 5.3e-3 to 6.4e-14. Idempotent to 1e-16 on a cubic lattice and 1.2e-11 on a hexagonal one — Elk's own `roteuler`, not the export |
 | **2b** the density from the eigenvectors | **done for the valence density, both regions** (§2h, patch 0019, `elkjax/density.py`): 9e-16 in the muffin tin and 7.5e-16 in the interstitial, against a reference patch 0019 builds by looping Elk's own `rhomagk` — so `rhomagsh`, `symrf`, `rfmtctof` and `rhocore` need no transcription. On a reduced mesh the interstitial is 16% off because `symrf` is not applied, and the residual against the STORED density is `rhonorm`'s uniform shift (2.82e-05 to 2.8e-18 with `trhonorm` off) |
+| **2i** the Kohn-Sham potential, composed | **done** (§2i): `v_cl + S v_xc` from three separate modules reproduces Elk's own to <1e-14 in the muffin tin and <1e-13 against `vsir`, which Elk forms itself and is therefore the independent reference. A mutation test pins the one thing it catches: trimming the Coulomb term too is smooth, of the right magnitude, and wrong |
 | **2f** total energy at fixed input potential | **done** (§2f, `elkjax/energy.py`): every density-functional term of `energy.f90` matches Elk's own exported scalars to <1e-13 relative on two structures, asserted term by term. `evalsum`, `engyts` and `engynn` are imported — they need the second-variational step, a zone sum, and the lattice. **§2d's prediction of a 1e-4 error here was wrong**: symmetrisation is an orthogonal projection and rho is in its range, so the leak is orthogonal to the density (1e-16 relative, measured) |
 
 ---
@@ -923,3 +924,55 @@ exact.
 symmetry-reduced mesh (§2g's `symrfmt` has the muffin-tin operator, the
 interstitial's `symrfir` is not exported); `rhonorm`, which is one constant; and
 the magnetic branches `rmk1`/`rmk2`.
+
+---
+
+## 2i. The Kohn-Sham potential, composed
+
+### What was at stake
+
+§§2a-2g each checked one piece against Elk, and §2f checked that the pieces are
+consistent *inside an integral*. Nothing had checked the composition
+**pointwise**, which is what an SCF iteration actually consumes:
+
+$$v_s = v_{\rm cl}[\rho] + \hat S\,v_{xc}[\rho] .$$
+
+Every term on the right is built here — the Weinert solve (§2e), the functional
+on the angular grid (§2a/§2d), the symmetrisation (§2g) — from three different
+modules, driven by one density. The left is Elk's own.
+
+### Two references, and only one of them is independent
+
+In the muffin tin Elk stores `vclmt` and `vxcmt` separately, so their sum is
+`vsmt` by construction; comparing against it adds nothing beyond §2e and §2g
+except that the two land in the same array. Measured $<10^{-14}$ relative on
+bulk Si and monolayer h-BN.
+
+In the interstitial Elk stores **`vsir` itself**, formed inside `potks` *after*
+`trimrfg` has been applied to `vxcir` and **not** to `vclir`. That is an
+independent reference, and it is the one with teeth: measured $<10^{-13}$.
+
+### The mutation that only `vsir` catches
+
+Trimming the Coulomb potential as well — a natural-looking symmetry, and wrong —
+leaves a smooth interstitial potential of the right magnitude, since the
+high-$|G|$ content it removes is small. It integrates against $\rho$ correctly
+to the same order. The test asserts **both** that the mutant differs from `vsir`
+*and* that the difference is below $10^{-2}$, i.e. that a loose tolerance would
+have missed it. That is why the tolerance above is $10^{-13}$ and not something
+comfortable.
+
+### Where this leaves Phase 2
+
+Both directions now exist and are exact:
+
+* density → potential → energy (§§2a-2g, and this section for the potential
+  itself),
+* eigenvectors → density (§2h, all of `rhomagv` at `symtype=0`).
+
+What is missing to close the loop is not a transcription problem: `rhocore` (an
+input at fixed potential, exactly as `vsmt` is), `rhonorm` (one constant), a
+zone-summed Fermi level (§1i has it at a single $k$), and `symrfir` for a
+symmetry-reduced mesh. The open question is whether the **composition** is
+stable, which nothing here has tested — every check in Phase 2 starts from Elk's
+own converged density.
