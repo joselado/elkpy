@@ -16,6 +16,7 @@ from collections import namedtuple
 
 from .parsers.eigenstates import (
     parse_groundstate_response,
+    parse_densityk_response,
     parse_angular_momentum_response,
     parse_eigenstates_response,
     parse_momentum_response,
@@ -587,6 +588,19 @@ class EigenstateSession:
         """
         self._send("GROUNDSTATE")
         return parse_groundstate_response(self._read_until_sentinel())
+
+    def density_k(self):
+        """The `DENSITYK` query: the k-set, occupations and `evecfv` that
+        `rhomagv` feeds to `rhomagk`, plus the COARSE interstitial grid the
+        density is accumulated on.
+
+        Separate from `ground_state()` because it is per-k and over the whole
+        zone, and from `lapw_problem()` because that is one k-point of the
+        caller's choosing rather than Elk's own set.  See
+        `docs/jax_port_phase2.md`.
+        """
+        self._send("DENSITYK")
+        return parse_densityk_response(self._read_until_sentinel())
 
     def lapw_problem(self, k):
         """Every ingredient of the first-variational LAPW eigenvalue problem

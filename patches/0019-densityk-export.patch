@@ -1,0 +1,90 @@
+--- a/src/elkpy_eigenstates.f90
++++ b/src/elkpy_eigenstates.f90
+@@ -1595,6 +1595,75 @@
+ !EOC
+ 
+ !BOP
++! !ROUTINE: elkpy_denskexport
++! !INTERFACE:
++subroutine elkpy_denskexport
++! !USES:
++use modmain
++! !DESCRIPTION:
++!   Writes, to standard output, exactly what {\tt rhomagv} feeds to
++!   {\tt rhomagk}: for every k-point of the ground state's own set, the
++!   number of ${\bf G+k}$ vectors, the map {\tt igkig} from each of them to
++!   the global {\bf G} list, the k-point weight, the second-variational
++!   occupation numbers, and the first-variational eigenvectors read back
++!   from file the same way {\tt rhomagv} reads them.
++!
++!   This is the one query whose output is per-k AND over the whole k-set,
++!   which is why it is not part of {\tt LAPW} (one k-point, chosen by the
++!   caller) or {\tt GROUNDSTATE} (k-independent). The valence density is a
++!   zone sum, so a transcription needs the set Elk actually used, weights
++!   included -- reconstructing it from {\tt ngridk} would silently differ
++!   whenever {\tt reducek} is nonzero.
++!
++!   Also written are the COARSE interstitial grid's dimensions and its
++!   {\bf G}-to-FFT map {\tt igfc}. {\tt rhomagk} accumulates the
++!   interstitial density on that grid, not on the fine one the
++!   {\tt GROUNDSTATE} query's {\tt rhoir} lives on; {\tt rfirctof}
++!   interpolates afterwards by zero-padding, so the coarse function is
++!   recoverable from the fine one exactly and a comparison can be made on
++!   either.
++!
++! !REVISION HISTORY:
++!   Created 2026 (elkpy)
++!EOP
++!BOC
++implicit none
++! local variables
++integer ik,ispn,ist,igp,i
++! allocatable arrays
++complex(8), allocatable :: evecfv(:,:,:)
++write(*,*) nkpt,nspnfv,nstfv,nstsv,ngkmax
++write(*,*) ngdgc(1),ngdgc(2),ngdgc(3)
++write(*,*) ngtc,ngvc
++do i=1,ngvc
++  write(*,*) igfc(i)
++end do
++allocate(evecfv(nmatmax,nstfv,nspnfv))
++do ik=1,nkpt
++  write(*,'(4ES25.16E3)') wkpt(ik)
++  write(*,'(4ES25.16E3)') vkl(1:3,ik)
++  write(*,'(4ES25.16E3)') occsv(1:nstsv,ik)
++  do ispn=1,nspnfv
++    write(*,*) ngk(ispn,ik)
++    do igp=1,ngk(ispn,ik)
++      write(*,*) igkig(igp,ispn,ik)
++    end do
++  end do
++  call getevecfv(filext,ik,vkl(:,ik),vgkl(:,:,:,ik),evecfv)
++  do ispn=1,nspnfv
++    do ist=1,nstfv
++      do igp=1,ngk(ispn,ik)
++        write(*,'(4ES25.16E3)') dble(evecfv(igp,ist,ispn)), &
++         aimag(evecfv(igp,ist,ispn))
++      end do
++    end do
++  end do
++end do
++deallocate(evecfv)
++end subroutine
++!EOC
++
++!BOP
+ ! !ROUTINE: elkpy_gsexport
+ ! !INTERFACE:
+ subroutine elkpy_gsexport
+@@ -1961,6 +2030,11 @@
+     write(*,'("ELKPY_SESSION_END")')
+     call flush(6)
+ 
++  case('DENSITYK')
++    call elkpy_denskexport
++    write(*,'("ELKPY_SESSION_END")')
++    call flush(6)
++
+   case('QUIT')
+     exit
+ 

@@ -893,3 +893,69 @@ def unpack_muffin_tin(packed, nr, nri, lmmaxi, lmmaxo):
         packed[lmmaxi * nri:lmmaxi * nri + lmmaxo * (nr - nri)])
     out[nri:, :] = outer.reshape(nr - nri, lmmaxo)
     return out
+
+
+def parse_densityk_response(tokens):
+    """The `DENSITYK` query: what `rhomagv` feeds to `rhomagk`, per k-point.
+
+    The valence density is a zone sum, so a transcription needs the k-set Elk
+    actually used -- weights included.  Reconstructing it from `ngridk` would
+    silently differ whenever `reducek` is nonzero, which is the default.
+
+    Returns a dict:
+
+      nkpt, nspnfv, nstfv, nstsv, ngkmax
+      ngdgc                     -- (3,) the COARSE interstitial FFT grid, which
+                                   is where `rhomagk` accumulates.  Not the
+                                   `ngridg` the `GROUNDSTATE` query's `rhoir`
+                                   lives on; `rfirctof` interpolates between
+                                   them by zero-padding
+      ngtc, ngvc                -- its size and its G-vector count
+      igfc                      -- (ngvc,) 1-based map from the G index to the
+                                   coarse FFT array position
+      wkpt                      -- (nkpt,)
+      vkl                       -- (3, nkpt) k in fractional coordinates
+      occsv                     -- (nkpt, nstsv) second-variational occupations
+      ngk                       -- (nkpt, nspnfv) the |G+k| < gkmax count
+      igkig                     -- list per (ik, ispn) of 1-based indices into
+                                   the global G list
+      evecfv                    -- list per (ik, ispn) of (nstfv, ngk) complex
+                                   first-variational eigenvectors, TRUNCATED to
+                                   this k-point's own `ngk` rather than padded
+                                   to `nmatmax`
+    """
+    pos = 0
+    head, pos = _take(tokens, pos, 5, int)
+    out = dict(zip(("nkpt", "nspnfv", "nstfv", "nstsv", "ngkmax"), head))
+    nkpt, nspnfv, nstfv, nstsv, _ = head
+    flat, pos = _take(tokens, pos, 3, int)
+    out["ngdgc"] = np.array(flat)
+    pair, pos = _take(tokens, pos, 2, int)
+    out["ngtc"], out["ngvc"] = pair
+    flat, pos = _take(tokens, pos, int(out["ngvc"]), int)
+    out["igfc"] = np.array(flat)
+
+    wkpt = np.zeros(nkpt)
+    vkl = np.zeros((3, nkpt))
+    occsv = np.zeros((nkpt, nstsv))
+    ngk = np.zeros((nkpt, nspnfv), dtype=int)
+    igkig, evecfv = {}, {}
+    for ik in range(nkpt):
+        (wkpt[ik],), pos = _take(tokens, pos, 1, float)
+        flat, pos = _take(tokens, pos, 3, float)
+        vkl[:, ik] = flat
+        flat, pos = _take(tokens, pos, nstsv, float)
+        occsv[ik] = flat
+        for ispn in range(nspnfv):
+            (n,), pos = _take(tokens, pos, 1, int)
+            ngk[ik, ispn] = n
+            flat, pos = _take(tokens, pos, n, int)
+            igkig[(ik, ispn)] = np.array(flat)
+        for ispn in range(nspnfv):
+            n = int(ngk[ik, ispn])
+            flat, pos = _take(tokens, pos, 2 * nstfv * n, float)
+            reim = np.array(flat).reshape(nstfv, n, 2)
+            evecfv[(ik, ispn)] = reim[:, :, 0] + 1j * reim[:, :, 1]
+    out.update(wkpt=wkpt, vkl=vkl, occsv=occsv, ngk=ngk, igkig=igkig,
+               evecfv=evecfv)
+    return out
