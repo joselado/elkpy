@@ -1175,12 +1175,32 @@ V_H(\mathbf R_\alpha)$ supplies the missing $\tfrac12v_{\rm nuc}$ by
 reciprocity. Adding `engynn` changes nothing, being constant in $\rho$. Yet the
 residual is 0.33.
 
+**And "0.33" overstates it.** Splitting $v_{\rm cl}$ into its Hartree and
+nuclear parts — by rerunning the same solve with `vcln` zeroed, which gives the
+electrons' potential alone — shows they nearly cancel:
+
+| | interstitial range |
+|---|---|
+| $v_H$ | 2.169 |
+| $v_{\rm nuc}=v_{\rm cl}-v_H$ | 2.480 |
+| $v_{\rm cl}$ | **0.312** |
+
+So the identity is a difference of terms eight times larger than their sum, and
+the residual is $0.10$ Ha absolute — 4% of the pieces, 33% of the answer.
+Quoting either number alone misleads.
+
 Candidates not yet separated: whether `vclmt(1,ias)` — the $l=0$ coefficient at
 the *first* radial mesh point, not at the nucleus — makes the reciprocity
 inexact at this order; whether the muffin-tin density being held fixed while
 only $\rho^{\rm I}$ varies breaks a cancellation that the full variation would
-keep; and whether Elk's `engyen`/`engyhar` split means something other than the
-decomposition above.
+keep; whether Elk's `engyen`/`engyhar` split means something other than the
+decomposition above; and whether the near-cancellation above simply means the
+discretised Coulomb kernel's reciprocity, $\int\rho\,\delta v_H/\delta\rho=v_H$,
+is only accurate to the pseudocharge construction's own error — which would make
+this a property of the Weinert method rather than a bug. The measured
+per-term derivatives do not match the predicted $v_H+\tfrac12v_{\rm nuc}$ and
+$\tfrac12v_{\rm nuc}$ split either, so that last candidate is the one to test
+first.
 
 `tests/test_calculation_functional_derivative.py` pins it two-sidedly — that the
 Madelung term improves it, and that the residual is between 0.05 and 1.0 — so a
