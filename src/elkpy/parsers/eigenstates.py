@@ -919,15 +919,24 @@ def parse_densityk_response(tokens):
       ngk                       -- (nkpt, nspnfv) the |G+k| < gkmax count
       igkig                     -- list per (ik, ispn) of 1-based indices into
                                    the global G list
-      evecfv                    -- list per (ik, ispn) of (nstfv, ngk) complex
-                                   first-variational eigenvectors, TRUNCATED to
-                                   this k-point's own `ngk` rather than padded
-                                   to `nmatmax`
+      nmat                      -- (nkpt, nspnfv) = ngk + nlotot, the FULL
+                                   basis size
+      evecfv                    -- list per (ik, ispn) of (nstfv, nmat) complex
+                                   first-variational eigenvectors, cut to this
+                                   k-point's own `nmat` rather than padded to
+                                   `nmatmax`.  NOT cut to `ngk`: the entries
+                                   beyond it are the local-orbital
+                                   coefficients, which `wfmtsv` reads as
+                                   `evecfv(ngp + idxlo(...))`
     """
     pos = 0
     head, pos = _take(tokens, pos, 5, int)
     out = dict(zip(("nkpt", "nspnfv", "nstfv", "nstsv", "ngkmax"), head))
     nkpt, nspnfv, nstfv, nstsv, _ = head
+    shapes, pos = _take(tokens, pos, 4, int)
+    out.update(zip(("natmtot", "nspecies", "lmmaxi", "lmmaxo"), shapes))
+    flat, pos = _take(tokens, pos, int(out["natmtot"]), int)
+    out["idxis"] = np.array(flat)
     flat, pos = _take(tokens, pos, 3, int)
     out["ngdgc"] = np.array(flat)
     pair, pos = _take(tokens, pos, 2, int)
@@ -939,6 +948,7 @@ def parse_densityk_response(tokens):
     vkl = np.zeros((3, nkpt))
     occsv = np.zeros((nkpt, nstsv))
     ngk = np.zeros((nkpt, nspnfv), dtype=int)
+    nmat = np.zeros((nkpt, nspnfv), dtype=int)
     igkig, evecfv = {}, {}
     for ik in range(nkpt):
         (wkpt[ik],), pos = _take(tokens, pos, 1, float)
@@ -947,15 +957,47 @@ def parse_densityk_response(tokens):
         flat, pos = _take(tokens, pos, nstsv, float)
         occsv[ik] = flat
         for ispn in range(nspnfv):
-            (n,), pos = _take(tokens, pos, 1, int)
-            ngk[ik, ispn] = n
-            flat, pos = _take(tokens, pos, n, int)
+            pair, pos = _take(tokens, pos, 2, int)
+            ngk[ik, ispn], nmat[ik, ispn] = pair
+            flat, pos = _take(tokens, pos, int(ngk[ik, ispn]), int)
             igkig[(ik, ispn)] = np.array(flat)
         for ispn in range(nspnfv):
-            n = int(ngk[ik, ispn])
+            n = int(nmat[ik, ispn])
             flat, pos = _take(tokens, pos, 2 * nstfv * n, float)
             reim = np.array(flat).reshape(nstfv, n, 2)
             evecfv[(ik, ispn)] = reim[:, :, 0] + 1j * reim[:, :, 1]
-    out.update(wkpt=wkpt, vkl=vkl, occsv=occsv, ngk=ngk, igkig=igkig,
-               evecfv=evecfv)
+    out.update(wkpt=wkpt, vkl=vkl, occsv=occsv, ngk=ngk, nmat=nmat,
+               igkig=igkig, evecfv=evecfv)
+
+    pair, pos = _take(tokens, pos, 2, int)
+    out["lradstp"], out["npcmtmax"] = pair
+    nrcmt = np.zeros(int(out["nspecies"]), dtype=int)
+    nrcmti = np.zeros_like(nrcmt)
+    npcmt = np.zeros_like(nrcmt)
+    npcmti = np.zeros_like(nrcmt)
+    for is_ in range(nrcmt.size):
+        quad, pos = _take(tokens, pos, 4, int)
+        nrcmt[is_], nrcmti[is_], npcmt[is_], npcmti[is_] = quad
+    out.update(nrcmt=nrcmt, nrcmti=nrcmti, npcmt=npcmt, npcmti=npcmti)
+
+    for key, n in (("zbshti", int(out["lmmaxi"])),
+                   ("zbshto", int(out["lmmaxo"]))):
+        # written as the whole real part then the whole imaginary part, each
+        # in Fortran order -- NOT interleaved like the complex arrays above
+        flat, pos = _take(tokens, pos, 2 * n * n, float)
+        real = np.array(flat[:n * n]).reshape(n, n, order="F")
+        imag = np.array(flat[n * n:]).reshape(n, n, order="F")
+        out[key] = real + 1j * imag
+
+    natmtot = int(out["natmtot"])
+    idxis = np.asarray(out["idxis"])
+    rhomt = np.zeros((natmtot, int(out["npcmtmax"])))
+    for ias in range(natmtot):
+        n = int(npcmt[int(idxis[ias]) - 1])
+        flat, pos = _take(tokens, pos, n, float)
+        rhomt[ias, :n] = flat
+    out["rhomt_coarse"] = rhomt
+    flat, pos = _take(tokens, pos, int(out["ngtc"]), float)
+    out["rhoir_coarse"] = np.array(flat)
     return out
+

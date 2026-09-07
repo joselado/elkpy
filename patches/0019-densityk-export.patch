@@ -1,6 +1,6 @@
 --- a/src/elkpy_eigenstates.f90
 +++ b/src/elkpy_eigenstates.f90
-@@ -1595,6 +1595,75 @@
+@@ -1595,6 +1595,135 @@
  !EOC
  
  !BOP
@@ -38,10 +38,26 @@
 +!BOC
 +implicit none
 +! local variables
-+integer ik,ispn,ist,igp,i
++integer ik,ispn,ist,igp,i,is,ias
 +! allocatable arrays
-+complex(8), allocatable :: evecfv(:,:,:)
++real(8), allocatable :: rhomt_(:,:),rhoir_(:),magmt_(:,:,:),magir_(:,:)
++complex(8), allocatable :: apwalm(:,:,:,:,:),evecfv(:,:,:),evecsv(:,:)
++! Regenerate the radial functions from the CURRENT potential, exactly as
++! elkpy_lapwexport does and for the same reason (patch 0015): gndstate calls
++! genapwlofr at the top of an SCF iteration and mixes the potential at the
++! bottom, so on entry apwfr/lofr belong to the previous iteration. Without
++! this the rhomagk reference below is built from stale radial functions while
++! a transcription uses the regenerated ones, and the two differ by 1.2e-10 --
++! close enough to look like a transcription bug. It also makes this query
++! independent of whether LAPW was asked for first, which it was not before.
++call genapwlofr
 +write(*,*) nkpt,nspnfv,nstfv,nstsv,ngkmax
++! the shapes the tail of this query needs, so it can be parsed without the
++! GROUNDSTATE query beside it
++write(*,*) natmtot,nspecies,lmmaxi,lmmaxo
++do ias=1,natmtot
++  write(*,*) idxis(ias)
++end do
 +write(*,*) ngdgc(1),ngdgc(2),ngdgc(3)
 +write(*,*) ngtc,ngvc
 +do i=1,ngvc
@@ -53,15 +69,19 @@
 +  write(*,'(4ES25.16E3)') vkl(1:3,ik)
 +  write(*,'(4ES25.16E3)') occsv(1:nstsv,ik)
 +  do ispn=1,nspnfv
-+    write(*,*) ngk(ispn,ik)
++    write(*,*) ngk(ispn,ik),nmat(ispn,ik)
 +    do igp=1,ngk(ispn,ik)
 +      write(*,*) igkig(igp,ispn,ik)
 +    end do
 +  end do
 +  call getevecfv(filext,ik,vkl(:,ik),vgkl(:,:,:,ik),evecfv)
++! NOTE the full nmat = ngk + nlotot coefficients, not just the ngk plane-wave
++! ones: wfmtsv's local-orbital block reads evecfv(ngp+idxlo(...)), so an
++! export truncated at ngk silently drops every local orbital -- which leaves
++! a smooth, correctly-scaled and completely wrong muffin-tin density.
 +  do ispn=1,nspnfv
 +    do ist=1,nstfv
-+      do igp=1,ngk(ispn,ik)
++      do igp=1,nmat(ispn,ik)
 +        write(*,'(4ES25.16E3)') dble(evecfv(igp,ist,ispn)), &
 +         aimag(evecfv(igp,ist,ispn))
 +      end do
@@ -69,6 +89,46 @@
 +  end do
 +end do
 +deallocate(evecfv)
++! the COARSE muffin-tin mesh and the COMPLEX spherical-harmonic transform,
++! which is what wfmtsv applies with tsh=.false. -- not the real rbsht that
++! patch 0016 exports, the wavefunction being complex
++write(*,*) lradstp,npcmtmax
++do is=1,nspecies
++  write(*,*) nrcmt(is),nrcmti(is),npcmt(is),npcmti(is)
++end do
++write(*,'(4ES25.16E3)') dble(zbshti(1:lmmaxi,1:lmmaxi)), &
++ aimag(zbshti(1:lmmaxi,1:lmmaxi))
++write(*,'(4ES25.16E3)') dble(zbshto(1:lmmaxo,1:lmmaxo)), &
++ aimag(zbshto(1:lmmaxo,1:lmmaxo))
++! and the REFERENCE: rhomagv's own accumulation, rebuilt here rather than
++! read from the converged arrays, because what a transcription of rhomagk
++! should be compared against is the density BEFORE rhomagsh (which converts
++! spherical coordinates to harmonics), symrf, rfmtctof (which interpolates
++! the muffin tin to the fine radial mesh) and rhocore (which adds the core).
++! Rebuilding it touches nothing global: rhomt_/rhoir_ are local.
++allocate(rhomt_(npcmtmax,natmtot),rhoir_(ngtc))
++allocate(magmt_(1,1,1),magir_(1,1))
++rhomt_(:,:)=0.d0
++rhoir_(:)=0.d0
++magmt_(:,:,:)=0.d0
++magir_(:,:)=0.d0
++allocate(apwalm(ngkmax,apwordmax,lmmaxapw,natmtot,nspnfv))
++allocate(evecfv(nmatmax,nstfv,nspnfv),evecsv(nstsv,nstsv))
++do ik=1,nkpt
++  call getevecfv(filext,ik,vkl(:,ik),vgkl(:,:,:,ik),evecfv)
++  call getevecsv(filext,ik,vkl(:,ik),evecsv)
++  do ispn=1,nspnfv
++    call match(ngk(ispn,ik),vgkc(:,:,ispn,ik),gkc(:,ispn,ik), &
++     sfacgk(:,:,ispn,ik),apwalm(:,:,:,:,ispn))
++  end do
++  call rhomagk(ngk(:,ik),igkig(:,:,ik),wkpt(ik),occsv(:,ik),apwalm,evecfv, &
++   evecsv,rhomt_,rhoir_,magmt_,magir_)
++end do
++do ias=1,natmtot
++  write(*,'(4ES25.16E3)') rhomt_(1:npcmt(idxis(ias)),ias)
++end do
++write(*,'(4ES25.16E3)') rhoir_(1:ngtc)
++deallocate(apwalm,evecfv,evecsv,rhomt_,rhoir_,magmt_,magir_)
 +end subroutine
 +!EOC
 +
@@ -76,7 +136,7 @@
  ! !ROUTINE: elkpy_gsexport
  ! !INTERFACE:
  subroutine elkpy_gsexport
-@@ -1961,6 +2030,11 @@
+@@ -1961,6 +2090,11 @@
      write(*,'("ELKPY_SESSION_END")')
      call flush(6)
  

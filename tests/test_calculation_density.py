@@ -39,7 +39,7 @@ pytestmark = [
 SI_AVEC = [(5.13, 5.13, 0.00), (5.13, 0.00, 5.13), (0.00, 5.13, 5.13)]
 
 
-def _run(workdir, extra_blocks):
+def _run(workdir, extra_blocks, lapw=False):
     calculation = Structure(
         avec=SI_AVEC,
         species={"Si": [(0.0, 0.0, 0.0), (0.25, 0.25, 0.25)]},
@@ -47,14 +47,26 @@ def _run(workdir, extra_blocks):
                       extra_blocks=extra_blocks)
     calculation.ensure_ground_state()
     with calculation.eigenstate_session() as session:
-        return session.ground_state(), session.density_k()
+        # DENSITYK deliberately FIRST, so the test would fail if the query
+        # depended on LAPW having regenerated the radial functions -- which it
+        # did until `genapwlofr` was added to it (see the docstring below)
+        out = (session.ground_state(), session.density_k())
+        return out + ((session.lapw_problem((0.0, 0.0, 0.0)),) if lapw else ())
 
 
 @pytest.fixture(scope="module")
 def unreduced(tmp_path_factory):
     """`symtype=0`, so `symrf` is the identity and the 2x2x2 mesh is unreduced."""
     return _run(tmp_path_factory.mktemp("density") / "si_nosym",
-                {"symtype": [0], "trhonorm": [False]})
+                {"symtype": [0], "trhonorm": [False]}, lapw=True)[:2]
+
+
+@pytest.fixture(scope="module")
+def unreduced_with_lapw(tmp_path_factory):
+    """The same, keeping the `LAPW` query the muffin-tin half needs for the
+    radial functions, the Gaunt-free matching machinery and `idxlo`."""
+    return _run(tmp_path_factory.mktemp("density") / "si_mt",
+                {"symtype": [0], "trhonorm": [False]}, lapw=True)
 
 
 @pytest.fixture(scope="module")
@@ -186,7 +198,7 @@ def test_the_grid_indirection_is_load_bearing(unreduced):
             if abs(occupation) < 1e-8:
                 continue
             array = np.zeros(int(densityk["ngtc"]), dtype=complex)
-            array[igkig - 1] = vectors[ist]          # the mutation: no igfc
+            array[igkig - 1] = vectors[ist][:igkig.size]   # the mutation: no igfc
             psi = np.fft.ifftn(array.reshape(grid, order="F")
                                ).reshape(-1, order="F") * np.prod(grid)
             total += (occupation * weight
@@ -194,3 +206,89 @@ def test_the_grid_indirection_is_load_bearing(unreduced):
     assert total.min() >= 0.0, "the mutant is still a density, as claimed"
     assert np.abs(total - elk).max() / np.abs(elk).max() > 1e-2
     assert np.abs(good - elk).max() / np.abs(elk).max() < 1e-13
+
+
+def test_the_muffin_tin_density_matches_rhomagk(unreduced_with_lapw):
+    """`wfmtsv` + `rmk3`, against Elk's own accumulation.
+
+    The reference is built by patch 0019 calling `rhomagk` over the k-set in a
+    LOCAL array -- so it is the density BEFORE `rhomagsh` (spherical
+    coordinates to harmonics), `symrf`, `rfmtctof` (coarse to fine radial mesh)
+    and `rhocore`.  That is deliberate: each of those is a step this does not
+    transcribe, and comparing against the converged `rhomt` would fold all four
+    into one number.
+    """
+    from elkjax import density
+    groundstate, densityk, lapw = unreduced_with_lapw
+    values = density.muffin_tin_density(densityk, groundstate, lapw)
+    for ias in range(int(groundstate["natmtot"])):
+        packed = np.asarray(density.pack_coarse(values[ias], densityk,
+                                                groundstate, ias))
+        reference = np.asarray(densityk["rhomt_coarse"][ias])[:packed.size]
+        assert np.abs(reference).max() > 1.0
+        assert np.abs(packed - reference).max() \
+            / np.abs(reference).max() < 1e-13
+
+
+def test_the_interstitial_matches_the_direct_reference(unreduced):
+    """The same comparison for the interstitial, against patch 0019's own
+    pre-`symrf`, pre-`rhonorm` array rather than through `coarsen`.
+
+    This and `test_the_interstitial_density_is_exact_on_an_unreduced_mesh`
+    check the same arithmetic against two different references -- one built by
+    Elk before any post-processing, one recovered from the stored density by
+    inverting `rfirctof`.  Agreement of both is what says `coarsen` is right.
+    """
+    from elkjax import density
+    groundstate, densityk = unreduced
+    mine = np.asarray(density.interstitial_density(
+        densityk, float(groundstate["omega"])))
+    reference = np.asarray(densityk["rhoir_coarse"])
+    assert np.abs(mine - reference).max() / np.abs(reference).max() < 1e-13
+
+
+def test_the_local_orbital_coefficients_are_load_bearing(unreduced_with_lapw):
+    """A mutation test on the one bug this feature actually hit.
+
+    `evecfv` has `nmat = ngk + nlotot` coefficients; the first `ngk` are plane
+    waves and the rest are local orbitals.  An export truncated at `ngk` -- the
+    first version of patch 0019 -- leaves the interstitial density EXACT, since
+    local orbitals vanish there, and the muffin-tin density smooth, positive,
+    correctly scaled and 100% wrong.  Nothing but a reference catches it.
+    """
+    from elkjax import density
+    groundstate, densityk, lapw = unreduced_with_lapw
+    assert int(densityk["nmat"][0, 0]) > int(densityk["ngk"][0, 0])
+
+    truncated = dict(densityk)
+    truncated["evecfv"] = {
+        key: np.pad(value[:, :int(densityk["ngk"][key[0], key[1]])],
+                    ((0, 0), (0, value.shape[1]
+                              - int(densityk["ngk"][key[0], key[1]]))))
+        for key, value in densityk["evecfv"].items()}
+    values = density.muffin_tin_density(truncated, groundstate, lapw)
+    packed = np.asarray(density.pack_coarse(values[0], truncated,
+                                            groundstate, 0))
+    reference = np.asarray(densityk["rhomt_coarse"][0])[:packed.size]
+    assert packed.min() >= 0.0, "the mutant is still a density"
+    assert np.abs(packed - reference).max() / np.abs(reference).max() > 0.1
+
+
+def test_the_two_radial_regions_restart_the_stride(unreduced_with_lapw):
+    """`wfmtsv`'s outer region does not continue the inner one's stride.
+
+    `zfzrf` is handed `apwfr(iro, ...)` with `iro = nrmti + lradstp`, one full
+    step PAST the inner boundary rather than continuing from it.  Off by one
+    step, the outer half of the density is still smooth and still the right
+    order; only the reference sees it.
+    """
+    from elkjax import density
+    groundstate, densityk, _ = unreduced_with_lapw
+    inner, outer = density.coarse_radial_indices(densityk, groundstate, 0)
+    step = int(densityk["lradstp"])
+    isp = int(groundstate["idxis"][0]) - 1
+    assert inner[0] == 0
+    assert inner[-1] == int(groundstate["nrmti"][isp]) - 1
+    assert outer[0] == inner[-1] + step
+    assert outer[-1] == int(groundstate["nrmt"][isp]) - 1
+    assert inner.size + outer.size == int(densityk["nrcmt"][isp])

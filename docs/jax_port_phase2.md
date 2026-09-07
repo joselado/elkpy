@@ -29,7 +29,7 @@ $V_s$ itself, which is what this phase is for.
 | **2d′** the muffin-tin angular transform | **done** (§2d): `rbsht`/`rfsht` are mutual inverses to 2.7e-12 and give `exmt`/`ecmt` exactly. `vxcmt` misses by 1.2e-4 relative **because `potxc.f90:55-58` symmetrises the potential and not the energy density** — on a `symtype=0` ground state the same code gives 1.4e-14 |
 | **2c′** the Weinert Poisson solve | **done** (§2e, patch 0017): `vclir` to 1.6e-15 relative and `vclmt` to 4e-20 (l=0) / 7e-14 (l>0) on two structures. The monopole identity recovers Z = 14, 5, 7 exactly from a separate code path, and two mutation tests pin the step order and the region split — both mutants are smooth, of the right order and wrong |
 | **2d″** `symrfmt` | **done** (§2g, patch 0018): the operator is EXPORTED rather than transcribed, so Elk's Euler-angle/Wigner-D construction and atom bookkeeping are not re-derived at all. Applying it takes the pointwise `vxcmt` gap from 5.3e-3 to 6.4e-14. Idempotent to 1e-16 on a cubic lattice and 1.2e-11 on a hexagonal one — Elk's own `roteuler`, not the export |
-| **2b** the density from the eigenvectors | **interstitial half done** (§2h, patch 0019, `elkjax/density.py`): exact (9e-16) on an unreduced mesh, 16% off on a reduced one because `symrf` is not applied, and the residual is `rhonorm`'s uniform shift — identified by switching `trhonorm` off, 2.82e-05 to 2.8e-18. The muffin-tin half needs the core states and is not done |
+| **2b** the density from the eigenvectors | **done for the valence density, both regions** (§2h, patch 0019, `elkjax/density.py`): 9e-16 in the muffin tin and 7.5e-16 in the interstitial, against a reference patch 0019 builds by looping Elk's own `rhomagk` — so `rhomagsh`, `symrf`, `rfmtctof` and `rhocore` need no transcription. On a reduced mesh the interstitial is 16% off because `symrf` is not applied, and the residual against the STORED density is `rhonorm`'s uniform shift (2.82e-05 to 2.8e-18 with `trhonorm` off) |
 | **2f** total energy at fixed input potential | **done** (§2f, `elkjax/energy.py`): every density-functional term of `energy.f90` matches Elk's own exported scalars to <1e-13 relative on two structures, asserted term by term. `evalsum`, `engyts` and `engynn` are imported — they need the second-variational step, a zone sum, and the lattice. **§2d's prediction of a 1e-4 error here was wrong**: symmetrisation is an orthogonal projection and rho is in its range, so the leak is orthogonal to the density (1e-16 relative, measured) |
 
 ---
@@ -834,11 +834,55 @@ smooth, non-negative and correctly normalised — a permutation of the Fourier
 content is still a density — and differs from Elk by 16%. Nothing structural
 notices, which is why it is pinned.
 
-### What is not done
+### The muffin-tin half, and the reference that made it one routine
 
-The muffin-tin half. `rhomagk` calls `wfmtsv` on the coarse *radial* mesh, then
-`rhomagsh` converts spherical coordinates to harmonics, `rfmtctof` interpolates
-to the fine radial mesh, and `rhocore` adds the core density — which brings in
-`gencore`/`rdirac` and a core-state solver. The magnetic branches (`rmk1`,
-`rmk2`) are not transcribed either. So Phase 2 now has **both directions of the
-interstitial** and only one direction of the muffin tin.
+The muffin-tin density needs `wfmtsv` on the coarse *radial* mesh, and then
+`rhomagsh`, `symrf`, `rfmtctof` and `rhocore` — the last of which brings in a
+core-state solver. **None of those four is transcribed**, because patch 0019
+exports the reference from *before* them: `elkpy_denskexport` loops `rhomagk`
+over the k-set into a **local** array, touching nothing global, and writes the
+result. That is patch 0018's design again — Elk's own routine produces the
+reference — and it cuts the work to exactly one routine.
+
+So the comparison is against the density in **spherical coordinates on the
+coarse mesh**, which is what `rhomagk` actually produces. Measured on bulk Si
+(`symtype=0`, `trhonorm` off):
+
+| | |
+|---|---|
+| muffin tin, atom 0 / atom 1 | **9.0e-16 / 7.7e-16** |
+| interstitial, against the same direct reference | **7.5e-16** |
+
+**Two things were nearly wrong, and one of them was.**
+
+*The local orbitals.* `evecfv` has $n_{\rm mat}=n_{gk}+n_{\rm lotot}$
+coefficients — 177 against 169 here — and the first version of patch 0019
+exported only $n_{gk}$ of them. The interstitial density stayed **exact**, local
+orbitals vanishing there, while the muffin-tin density came out smooth,
+non-negative, correctly scaled and 100% wrong. Only a reference catches that,
+which is the argument for exporting one.
+
+*The radial stride.* `wfmtsv`'s `zfzrf` declares `rf(lrstp, n)` and is handed
+`apwfr(1,...)` for the inner region and `apwfr(iro,...)` with
+$i_{ro}=n_r^{\rm i}+l_{\rm rstp}$ for the outer — so the outer region restarts
+one full step *past* the inner boundary rather than continuing the stride. Off by
+one step the density is still smooth and still the right order.
+
+**And patch 0015's finding recurred, with a sharper consequence.** The first
+measurement was 1.2e-10, not 9e-16 — close enough to read as a transcription
+bug. The cause: `gndstate` mixes the potential *after* building the radial
+functions, so on session entry `apwfr`/`lofr` belong to the previous iteration.
+`elkpy_lapwexport` calls `genapwlofr` to fix that; `elkpy_denskexport` did not,
+so its `rhomagk` reference used stale radial functions while the transcription
+used regenerated ones. Diagnosed by reordering the two queries — asking for
+`LAPW` first took the residual to 9e-16 — and then fixed properly in Fortran,
+because **a query whose answer depends on which query ran before it is a trap**,
+not a documentation problem. The test now asks for `DENSITYK` first, so the
+ordering dependence cannot come back silently.
+
+### What is still not done
+
+`rhocore` and the core states; `rhomagsh`, `symrf` and `rfmtctof`, which are the
+post-processing between `rhomagk` and the converged `rhomt`; and the magnetic
+branches `rmk1`/`rmk2`. What *is* done is the valence density itself, both
+regions, which is the part that is a functional of the eigenvectors.

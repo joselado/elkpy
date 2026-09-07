@@ -44,7 +44,8 @@ import numpy as np
 import jax.numpy as jnp
 
 __all__ = ["interstitial_wavefunction", "interstitial_density", "coarsen",
-           "normalisation_offset"]
+           "normalisation_offset", "coarse_radial_indices",
+           "muffin_tin_wavefunctions", "muffin_tin_density"]
 
 EPSOCC = 1.0e-8
 
@@ -72,9 +73,14 @@ def interstitial_wavefunction(coefficients, igkig, densityk):
     """
     grid = tuple(int(n) for n in densityk["ngdgc"])
     igfc = np.asarray(densityk["igfc"])
-    slots = igfc[np.asarray(igkig) - 1] - 1
+    igkig = np.asarray(igkig)
+    slots = igfc[igkig - 1] - 1
     array = jnp.zeros(int(densityk["ngtc"]), dtype=complex)
-    array = array.at[jnp.asarray(slots)].set(jnp.asarray(coefficients))
+    # only the first `ngk` coefficients: the rest are local orbitals, which
+    # live entirely inside the muffin tins and contribute nothing here.  The
+    # muffin-tin half uses all `nmat` of them.
+    array = array.at[jnp.asarray(slots)].set(
+        jnp.asarray(coefficients)[:igkig.size])
     return _inverse_fft(array, grid)
 
 
@@ -131,3 +137,133 @@ def normalisation_offset(mine, elk_coarse):
     """
     difference = np.asarray(elk_coarse) - np.asarray(mine)
     return float(difference.mean()), float(difference.std())
+
+
+# ------------------------------------------------------- the muffin-tin half
+
+
+def coarse_radial_indices(densityk, groundstate, ias):
+    r"""Which fine radial points the coarse mesh is, for one atom.
+
+    ``wfmtsv``'s inner ``zfzrf`` declares its radial argument ``rf(lrstp, n)``
+    and uses ``rf(1, 1:n)``, i.e. every ``lradstp``-th element from wherever it
+    was handed.  It is handed ``apwfr(1, ...)`` for the inner region and
+    ``apwfr(iro, ...)`` with :math:`i_{ro}=n_{r}^{\rm i}+l_{\rm rstp}` for the
+    outer one -- so the outer region does **not** continue the inner region's
+    stride from where it stopped, it restarts one full step past the inner
+    boundary.  Getting that wrong shifts the outer half of the density by one
+    radial point and leaves it perfectly smooth.
+    """
+    isp = int(groundstate["idxis"][ias]) - 1
+    step = int(densityk["lradstp"])
+    nrcmti = int(densityk["nrcmti"][isp])
+    nrcmt = int(densityk["nrcmt"][isp])
+    nrmti = int(groundstate["nrmti"][isp])
+    inner = step * np.arange(nrcmti)
+    outer = (nrmti + step - 1) + step * np.arange(nrcmt - nrcmti)
+    return inner, outer
+
+
+def muffin_tin_wavefunctions(coefficients, apwalm, ngk, ias, densityk,
+                             groundstate, lapw):
+    r"""``wfmtsv`` with ``tsh=.false.``: one state on the coarse angular grid.
+
+    Returns a dense ``(nrcmt, lmmaxo)`` complex array of VALUES on the angular
+    grid (not harmonic coefficients), which is what ``rhomagk`` squares.
+
+    The augmented part and the local-orbital part are summed into the same
+    array, in that order, exactly as ``wfmtsv`` does; the sum over APW orders
+    ``io`` is inside the sum over :math:`lm`, and the coefficient is a plain
+    ``zdotu`` -- **not** conjugated, since these are expansion coefficients of
+    the state rather than an inner product with it.
+    """
+    isp = int(groundstate["idxis"][ias]) - 1
+    lmaxi, lmaxo = int(groundstate["lmaxi"]), int(groundstate["lmaxo"])
+    lmmaxi, lmmaxo = int(groundstate["lmmaxi"]), int(groundstate["lmmaxo"])
+    nrcmti = int(densityk["nrcmti"][isp])
+    nrcmt = int(densityk["nrcmt"][isp])
+    inner, outer = coarse_radial_indices(densityk, groundstate, ias)
+    rows = np.concatenate([inner, outer])
+
+    apword = np.asarray(lapw["apword"])
+    apwfr = np.asarray(lapw["apwfr_full"])[:, 0]          # the function itself
+    lofr = np.asarray(lapw["lofr"])[:, 0]
+    idxlo = np.asarray(lapw["idxlo"])
+    nlorb = int(np.asarray(lapw["nlorb"])[isp])
+    lorbl = np.asarray(lapw["lorbl"])[isp]
+
+    coefficients = jnp.asarray(coefficients)
+    out = jnp.zeros((nrcmt, lmmaxo), dtype=complex)
+
+    for l in range(lmaxo + 1):
+        for io in range(int(apword[l, isp])):
+            radial = jnp.asarray(apwfr[rows, io, l, ias])
+            for lm in range(l * l, (l + 1) ** 2):
+                y = jnp.dot(coefficients[:ngk], jnp.asarray(apwalm[:ngk, io, lm]))
+                out = out.at[:, lm].add(y * radial)
+
+    for ilo in range(nlorb):
+        l = int(lorbl[ilo])
+        radial = jnp.asarray(lofr[rows, ilo, ias])
+        for lm in range(l * l, (l + 1) ** 2):
+            index = int(idxlo[lm, ilo, ias]) - 1
+            y = coefficients[ngk + index]
+            out = out.at[:, lm].add(y * radial)
+
+    # harmonic coefficients -> values on the angular grid, region by region.
+    # The COMPLEX transform, not patch 0016's real `rbsht`: a wavefunction is
+    # complex and Elk keeps a separate matrix for it.
+    zbshti = jnp.asarray(densityk["zbshti"])
+    zbshto = jnp.asarray(densityk["zbshto"])
+    top = out[:nrcmti, :lmmaxi] @ zbshti.T
+    bottom = out[nrcmti:] @ zbshto.T
+    return jnp.concatenate(
+        [jnp.zeros((nrcmti, lmmaxo), dtype=complex).at[:, :lmmaxi].set(top),
+         bottom], axis=0)
+
+
+def muffin_tin_density(densityk, groundstate, lapw, ispn=0):
+    r"""``rhomagk``'s muffin-tin accumulation, summed over the zone.
+
+    Returned dense per atom as ``(natmtot, nrcmt, lmmaxo)`` VALUES on the
+    angular grid -- the representation Elk holds before ``rhomagsh``.  Note
+    there is **no** :math:`1/\Omega` here: the muffin-tin weight is
+    :math:`f_{n\mathbf k}w_{\mathbf k}` and only the interstitial carries the
+    cell volume.
+    """
+    from .hamiltonian import matching_coefficients
+
+    natmtot = int(groundstate["natmtot"])
+    lmmaxo = int(groundstate["lmmaxo"])
+    bvec = np.asarray(groundstate["bvec"])
+    vgc = np.asarray(groundstate["vgc"])
+
+    out = [None] * natmtot
+    for ik in range(int(densityk["nkpt"])):
+        weight = float(densityk["wkpt"][ik])
+        vectors = densityk["evecfv"][(ik, ispn)]
+        igkig = np.asarray(densityk["igkig"][(ik, ispn)])
+        ngk = int(densityk["ngk"][ik, ispn])
+        vgkc = (vgc[:, igkig - 1].T
+                + (bvec @ np.asarray(densityk["vkl"])[:, ik])[None, :])
+        apwalm = matching_coefficients(lapw, jnp.asarray(vgkc))
+        occupations = np.asarray(densityk["occsv"][ik])
+        for ias in range(natmtot):
+            for ist, occupation in enumerate(occupations[:vectors.shape[0]]):
+                if abs(occupation) < EPSOCC:
+                    continue
+                psi = muffin_tin_wavefunctions(
+                    vectors[ist], apwalm[..., ias], ngk, ias, densityk,
+                    groundstate, lapw)
+                term = (occupation * weight) * jnp.abs(psi) ** 2
+                out[ias] = term if out[ias] is None else out[ias] + term
+    return jnp.stack(out)
+
+
+def pack_coarse(values, densityk, groundstate, ias):
+    """A dense coarse ``(nrcmt, lmmaxo)`` array into Elk's packed layout."""
+    isp = int(groundstate["idxis"][ias]) - 1
+    nrcmti = int(densityk["nrcmti"][isp])
+    lmmaxi = int(groundstate["lmmaxi"])
+    return jnp.concatenate([values[:nrcmti, :lmmaxi].reshape(-1),
+                            values[nrcmti:].reshape(-1)])
