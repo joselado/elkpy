@@ -1,6 +1,6 @@
 # Continue here
 
-Working state as of 2026-09-07, written to be picked up cold. Last verified: fast suite **440 passed**, the Phase 1+2 integration suites **200 passed / 9 skipped**, and all 21 patches apply to a fresh `vendor/elk/` with no fuzz, reproducing `build/elk/src/elkpy_eigenstates.f90` byte for byte.
+Working state as of 2026-09-07, written to be picked up cold. Last verified: fast suite **440 passed**, the Phase 1+2 integration suites **204 passed / 9 skipped**, and all 21 patches apply to a fresh `vendor/elk/` with no fuzz, reproducing `build/elk/src/elkpy_eigenstates.f90` byte for byte.
 
 **Status in one paragraph.** Both workstreams are on `master` and `master` is pushed.
 *Workstream A* — the full-coverage Elk wrapper — is complete and untouched since the
@@ -75,24 +75,30 @@ over the k-axis is the memory default; `vmap(eigh)` materialises every k-point a
 Recent commits, newest first:
 
 ```
+6f5ea27  Carry the differentiability result and its open half into the index
+94a3f08  Sharpen the open electrostatic-derivative question
+c81ee1d  Differentiate Phase 2, and record the half that does not close
+2fc5d0e  Record the final verification state and this session's commits
 3a63abc  Untangle the Phase 2 index table
 1102ccf  Record the second-structure check and what it found
 86d5392  Check the density chain on a second structure, and fix what it found
-2c75bde  Run the density chain to Elk's converged arrays                  patches/0021
+2c75bde  Run the density chain to Elk's converged arrays
 14a495f  Carry the closed loop into the index documents
-cb335b6  Close the loop: potential to eigenvectors to density             elkjax/density.py, hamiltonian.py
-f67750e  Check that the Kohn-Sham potential composes, pointwise           tests/test_calculation_kohn_sham.py
+cb335b6  Close the loop: potential to eigenvectors to density
+f67750e  Check that the Kohn-Sham potential composes, pointwise
 e90b2f4  Carry the completed density chain into the index documents
-54b31f7  Close the density chain: rhomagsh and rfmtctof                   patches/0020
+54b31f7  Close the density chain: rhomagsh and rfmtctof
 32a557a  Carry the completed valence density into the index documents
-6684a5e  Complete the valence density: the muffin-tin half too            patches/0019
+6684a5e  Complete the valence density: the muffin-tin half too
 89c77c0  Write up the interstitial density across the index documents
-ff2b19e  Build the interstitial valence density from the eigenvectors     patches/0019, elkjax/density.py
+ff2b19e  Build the interstitial valence density from the eigenvectors
 308f673  Record the session's commits and the verification state
-8a8044e  Export symrfmt's operator, closing 2d's remaining consequence    patches/0018, elkjax/symmetry.py
+8a8044e  Export symrfmt's operator, closing 2d's remaining consequence
 be38b85  Carry the total energy into the two index documents
-6b837bd  Assemble the total energy, and correct a prediction 2d got wrong elkjax/energy.py
+6b837bd  Assemble the total energy, and correct a prediction 2d got wrong
 9f31ccb  Write up the Poisson solve across the four documents
+1389745  Transcribe Elk's Weinert Poisson solve
+19de80c  Retire the scan item from the three places that still list it as open
 ```
 
 ---
