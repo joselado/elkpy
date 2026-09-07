@@ -697,7 +697,25 @@ named in item 12 need no Elk run and are the cheapest work available.
     reciprocity is only as accurate as the pseudocharge construction, which
     would make this a property of the Weinert method rather than a bug.
 
-19. **The Phase 1 leftovers**, neither of which needs an Elk run. (`lax.scan` over the
+19. **~~`symrfir`, and the `symtype=0` restriction.~~ LIFTED** (patch 0022).
+    `symrfir` acts in $G$-space as a permutation plus a phase, so the whole
+    operator is two small arrays; exported for §2g's reason. On Elk's **default**
+    mesh (3 k-points, 48 operations) against the converged arrays, the
+    interstitial goes 0.165 → **1.1e-15** and the muffin tin 8.0e-6 →
+    **1.9e-13**. `converged_density` detects `nsymcrys > 1` rather than being
+    asked.
+
+    **One detail nothing structural catches**: `rhomag` calls `symrf` *before*
+    `rfmtctof`, so the array is on the coarse mesh and §2g's operator needs the
+    **coarse** boundary `nrcmti`. Passing the fine `nrmti` treats every coarse
+    point as interior — still a rotation, still a smooth positive density, wrong
+    at 8e-6 where the correct one is 1.9e-13.
+
+    §2h's own claim needed correcting with it: its reference is written *before*
+    `symrf`, so the un-symmetrised zone sum matched it exactly even on a reduced
+    mesh. The 16% was never the k-sum, only the missing post-processing.
+
+20. **The Phase 1 leftovers**, neither of which needs an Elk run. (`lax.scan` over the
     Newton-Schulz tape is **done**, §1m.) Smeared occupations at **second**
     order, which needs a Chebyshev expansion of the Fermi function — `sign_projector`
     is hard-window only, and §1i removed the tolerance from the smeared *first*

@@ -1300,9 +1300,16 @@ interpolates the whole radial range below $l_{\max}^{\rm i}$ and the outer regio
 above it; using the wrong one reads the inner region's zeros as data, which is smooth,
 finite and wrong. **With `symtype=0` those three stages are the whole of `rhomagv`**, so
 the chain from first-variational eigenvectors to the valence density on the fine mesh is
-closed and exact. Still not done: `rhocore` and the core states (an input at fixed
-potential, so an export would do), `symrfir` for a symmetry-reduced mesh, `rhonorm`'s one
-constant, and the magnetic branches. §§2i-2j then put the pieces together: the Kohn-Sham
+closed and exact. Patch **0022** then lifts the `symtype=0`
+restriction: `symrfir` acts in $G$-space as a permutation plus a phase, so the whole
+operator is two small arrays, and on Elk's DEFAULT mesh (3 k-points, 48 operations) the
+density against the converged arrays goes 0.165 → **1.1e-15** (interstitial) and 8.0e-6 →
+**1.9e-13** (muffin tin). One detail nothing structural catches: `rhomag` calls `symrf`
+BEFORE `rfmtctof`, so §2g's operator needs the COARSE boundary `nrcmti` — passing the
+fine `nrmti` treats every coarse point as interior, and the result is still a rotation,
+still a smooth positive density, and wrong at 8e-6. Still not done: `rhocore` and the
+core states (an input at fixed potential, so an export would do), `rhonorm`'s one
+constant is done, and the magnetic branches. §§2i-2j then put the pieces together: the Kohn-Sham
 potential COMPOSES pointwise ($v_{\rm cl}+\hat Sv_{xc}$ from three separate modules,
 <1e-14 in the muffin tin and <1e-13 against Elk's own `vsir`, which `potks` forms after
 trimming `vxcir` and not `vclir` — a mutation test pins that trimming the Coulomb term
