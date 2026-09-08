@@ -441,3 +441,49 @@ def test_a_run_from_the_input_file_reaches_elks_ground_state(
                        tol=1e-7, maxiter=60)
     assert abs(exact.energy - energy) < 1e-6
     assert abs(exact.mu - fermi) < 1e-7
+
+
+# ------------------------------- §3d: the padded, mapped zone (compile time)
+
+
+def test_the_padded_zone_gives_the_same_spectrum_as_the_per_k_assembly(
+        silicon_initial):
+    """§3d: `zone_matrices_padded` against `zone_matrices`, k-point by k-point.
+
+    The batched path builds every k-point on a plane-wave block of the same
+    size `ngkmax` so the loop can be a `lax.map`.  The dead rows get identity
+    in O and `shift` times identity in H -- O is Cholesky-factorised, so
+    masking them to zero would make it singular -- which decouples them
+    exactly and puts the spurious eigenvalues at `shift`.
+
+    Both halves of that are asserted: the physical spectrum is unchanged, and
+    the spurious states are all at `shift` and all ABOVE the `nstfv` taken.
+    If they ever landed inside the window the density would be built from
+    padding, and nothing else in the suite would notice.
+    """
+    from elkjax import density, response
+    groundstate, densityk, lapw = silicon_initial
+    nstfv = int(densityk["nstfv"])
+    shift = 1.0e3
+
+    per_k = density.zone_matrices(lapw, groundstate, densityk)
+    padded_h, padded_o = density.zone_matrices_padded(lapw, groundstate,
+                                                      densityk)
+    _, _, ngk = density.zone_basis(densityk, groundstate)
+    ngkmax = int(densityk["ngkmax"])
+    assert padded_h.shape[1] == ngkmax + int(lapw["nlotot"])
+    assert min(int(h.shape[0]) for h, _ in per_k) < padded_h.shape[1], (
+        "every k-point already has the maximum G count on this fixture, so "
+        "the padding is never exercised and this test is vacuous")
+
+    for ik, (h, o) in enumerate(per_k):
+        reference = np.asarray(response.eigenvalues(h, o))[:nstfv]
+        values = np.asarray(response.eigenvalues(padded_h[ik], padded_o[ik]))
+        assert np.abs(values[:nstfv] - reference).max() < 1e-13
+
+        dead = ngkmax - int(ngk[ik])
+        if dead:
+            spurious = np.sort(values)[-dead:]
+            assert np.abs(spurious - shift).max() < 1e-8
+            assert values[nstfv - 1] < 0.5 * shift, (
+                "a spurious padding state is inside the occupied window")

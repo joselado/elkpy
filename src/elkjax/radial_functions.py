@@ -152,16 +152,18 @@ def rschrodint(sol, l, e, r, vr):
     :math:`Q_\ell` and :math:`dQ_\ell/dr` on the mesh `r`, with `vr` the
     spherical part of the potential there.
 
-    `l` must be a Python int (it enters as the centrifugal coefficient and as
-    nothing else); `e`, `r` and `vr` are traced.  The first three mesh points
-    are special in Elk -- their stencil windows overlap the
+    `l` enters only as the centrifugal coefficient :math:`\ell(\ell+1)`, so it
+    may be a Python int or a traced scalar -- the latter is what lets
+    :func:`_solve_batch` `vmap` this over every :math:`(\ell,\text{order})` of
+    an atom at once.  `e`, `r` and `vr` are traced.  The first three mesh
+    points are special in Elk -- their stencil windows overlap the
     :math:`r\to0` boundary values and the initial derivative extrapolation --
     so they are unrolled here and the `lax.scan` starts at the fourth, which
     is the first point whose window is entirely behind it.
     """
     nr = r.shape[0]
     t1 = 1.0 / sol ** 2
-    t2 = float(l * (l + 1))
+    t2 = jnp.asarray(l, dtype=r.dtype) * (jnp.asarray(l, dtype=r.dtype) + 1.0)
     ri = 1.0 / r
     t3 = 2.0 + t1 * (e - vr)
     t4 = (t2 * ri ** 2) / t3 + vr - e
@@ -246,6 +248,48 @@ def _atom_mesh(export, ias):
     return is_, nr, r, w
 
 
+def _species_atoms(export):
+    """`{species index: [atom indices]}`, in Elk's own atom order."""
+    idxis = np.asarray(export["idxis"]) - 1
+    groups = {}
+    for ias in range(int(export["natmtot"])):
+        groups.setdefault(int(idxis[ias]), []).append(ias)
+    return groups
+
+
+def _solve_batch(sol, jobs, r, vr_all, energies):
+    r"""Every radial integration of one SPECIES, as a single ``lax.scan``.
+
+    ``jobs`` is a list of ``(ias, l, ...)`` tuples and ``energies`` the
+    matching list of linearisation energies; the return is
+    ``(p0, p1)``, each ``(len(jobs), nr)``.
+
+    **Why this is batched rather than looped.**  ``rschrodint`` is a
+    ``lax.scan`` over the radial mesh -- 397 points on silicon -- and it is
+    called once per :math:`(\text{atom},\ell,\text{order})`, which is 26 times
+    for a two-atom cell at ``lmaxapw=8``.  Written as a Python loop that is 26
+    separate scans in the compiled program, and it was measured to be **47 s
+    of the whole step's 93 s of XLA compile time and 36k of its 84k HLO
+    lines** -- by far the largest single contribution, and one that grows
+    linearly with :math:`n_{\rm atoms}\times\ell_{\max}`.  The integrations are
+    independent, so one ``vmap`` collapses them into a single scan of the same
+    length carrying a vector -- two on a one-species cell, this batch and
+    :func:`lo_radial_functions`', against 26 before.
+
+    The grouping is by species and not by atom because that is exactly what
+    can share a mesh: ``r`` and ``nr`` belong to the species (``in_axes=None``
+    below), while ``vr`` is the atom's own spherical potential.  Batching
+    across species instead would need every mesh padded to ``nrmtmax``, and a
+    padded :math:`r` reaches ``poly3``'s :math:`1/(x_2-x_1)`.
+    """
+    ls = jnp.asarray([float(job[1]) for job in jobs])
+    es = jnp.stack([jnp.asarray(e) for e in energies])
+    vrs = jnp.stack([vr_all[job[0]][:r.shape[0]] for job in jobs])
+    p0, p1, _, _ = jax.vmap(rschrodint, in_axes=(None, 0, 0, None, 0))(
+        sol, ls, es, r, vrs)
+    return p0, p1
+
+
 def apw_radial_functions(export, potential=None, apwe=None):
     """`genapwfr`: returns `(apwfr, apwdfr)` in Elk's own index order,
     `apwfr[ir, {u, Hu}, io, l, ias]` and `apwdfr[io, l, ias]`.
@@ -266,33 +310,41 @@ def apw_radial_functions(export, potential=None, apwe=None):
     nrmtmax = int(export["nrmtmax"])
     fr = jnp.zeros((nrmtmax, 2, apwordmax, nl, natmtot))
     dfr = jnp.zeros((apwordmax, nl, natmtot))
-    for ias in range(natmtot):
-        is_, nr, r, w = _atom_mesh(export, ias)
-        vr = vr_all[ias][:nr]
-        for l in range(nl):
-            p0s, ep0s, p1ss = [], [], []
-            for io in range(int(apword[l, is_])):
-                e = apwe[io, l, ias] + apwdm[io, l, is_] * deapw
-                p0, p1, _, _ = rschrodint(sol, l, e, r, vr)
-                p0 = p0 / r                     # P = r g, and u is g
-                ep0 = e * p0
-                t1 = 1.0 / jnp.sqrt(jnp.abs(jnp.sum(w * p0 ** 2)))
-                p0, ep0, p1s = t1 * p0, t1 * ep0, t1 * p1[nr - 1]
-                for jo in range(io):            # Gram-Schmidt, in place
-                    t1 = -jnp.sum(w * p0 * p0s[jo])
-                    p0 = p0 + t1 * p0s[jo]
-                    p1s = p1s + t1 * p1ss[jo]
-                    ep0 = ep0 + t1 * ep0s[jo]
-                if io > 0:
-                    t1 = 1.0 / jnp.sqrt(jnp.sum(w * p0 ** 2))
-                    p0, ep0, p1s = t1 * p0, t1 * ep0, t1 * p1s
-                p0s.append(p0)
-                ep0s.append(ep0)
-                p1ss.append(p1s)
-                fr = fr.at[:nr, 0, io, l, ias].set(p0)
-                fr = fr.at[:nr, 1, io, l, ias].set(ep0)
-                dfr = dfr.at[io, l, ias].set(
-                    (p1s - p0[nr - 1]) * rmt[is_] / 2.0)
+    # One `lax.scan` per SPECIES rather than one per (atom, l, order) -- see
+    # `_solve_batch`.  Everything after the integration is elementwise and
+    # stays a Python loop, which costs a handful of HLO instructions each.
+    for is_, atoms in _species_atoms(export).items():
+        _, nr, r, w = _atom_mesh(export, atoms[0])
+        jobs = [(ias, l, io) for ias in atoms for l in range(nl)
+                for io in range(int(apword[l, is_]))]
+        energies = [apwe[io, l, ias] + apwdm[io, l, is_] * deapw
+                    for ias, l, io in jobs]
+        p0_all, p1_all = _solve_batch(sol, jobs, r, vr_all, energies)
+        at = {job: i for i, job in enumerate(jobs)}
+        for ias in atoms:
+            for l in range(nl):
+                p0s, ep0s, p1ss = [], [], []
+                for io in range(int(apword[l, is_])):
+                    i = at[(ias, l, io)]
+                    p0 = p0_all[i] / r          # P = r g, and u is g
+                    ep0 = energies[i] * p0
+                    t1 = 1.0 / jnp.sqrt(jnp.abs(jnp.sum(w * p0 ** 2)))
+                    p0, ep0, p1s = t1 * p0, t1 * ep0, t1 * p1_all[i, nr - 1]
+                    for jo in range(io):        # Gram-Schmidt, in place
+                        t1 = -jnp.sum(w * p0 * p0s[jo])
+                        p0 = p0 + t1 * p0s[jo]
+                        p1s = p1s + t1 * p1ss[jo]
+                        ep0 = ep0 + t1 * ep0s[jo]
+                    if io > 0:
+                        t1 = 1.0 / jnp.sqrt(jnp.sum(w * p0 ** 2))
+                        p0, ep0, p1s = t1 * p0, t1 * ep0, t1 * p1s
+                    p0s.append(p0)
+                    ep0s.append(ep0)
+                    p1ss.append(p1s)
+                    fr = fr.at[:nr, 0, io, l, ias].set(p0)
+                    fr = fr.at[:nr, 1, io, l, ias].set(ep0)
+                    dfr = dfr.at[io, l, ias].set(
+                        (p1s - p0[nr - 1]) * rmt[is_] / 2.0)
     return fr, dfr
 
 
@@ -321,45 +373,54 @@ def lo_radial_functions(export, potential=None, lorbe=None):
     nlomax = int(export["nlomax"])
     nrmtmax = int(export["nrmtmax"])
     out = jnp.zeros((nrmtmax, 2, nlomax, natmtot))
-    for ias in range(natmtot):
-        is_, nr, r, w = _atom_mesh(export, ias)
-        vr = vr_all[ias][:nr]
-        done = {}                                # ilo -> (u, Hu), for the
-        for i in range(int(nlorb[is_])):         # Gram-Schmidt below
-            ilo = int(idxelo[i, is_]) - 1
-            l = int(lorbl[is_][ilo])
-            ord_ = int(lorbord[ilo, is_])
-            p0s, ep0s, rows = [], [], []
-            for jo in range(ord_):
-                e = lorbe[jo, ilo, ias] + lorbdm[jo, ilo, is_] * delorb
-                p0, _, _, _ = rschrodint(sol, l, e, r, vr)
-                p0 = p0 / r
-                p0s.append(p0)
-                ep0s.append(e * p0)
-                tail = slice(nr - nplorb, nr)
-                col = [p0[nr - 1]]
-                for io in range(1, ord_):
-                    col.append(polynm(io, r[tail], p0[tail], rmt[is_]))
-                rows.append(jnp.stack(col))
-            amat = jnp.stack(rows, axis=1)       # a[io, jo]
-            b = jnp.zeros(ord_).at[ord_ - 1].set(1.0)
-            coeff = jnp.linalg.solve(amat, b)
-            u = sum(coeff[io] * p0s[io] for io in range(ord_))
-            hu = sum(coeff[io] * ep0s[io] for io in range(ord_))
-            t1 = 1.0 / jnp.sqrt(jnp.abs(jnp.sum(w * u ** 2)))
-            u, hu = t1 * u, t1 * hu
-            for j in range(i):
-                jlo = int(idxelo[j, is_]) - 1
-                if int(lorbl[is_][jlo]) == l:
-                    uj, huj = done[jlo]
-                    t1 = -jnp.sum(w * u * uj)
-                    u, hu = u + t1 * uj, hu + t1 * huj
-            if i > 0:
-                t1 = 1.0 / jnp.sqrt(jnp.sum(w * u ** 2))
+    # Batched exactly as `apw_radial_functions` is, and for the same reason:
+    # one `lax.scan` per species instead of one per (atom, orbital, order).
+    for is_, atoms in _species_atoms(export).items():
+        _, nr, r, w = _atom_mesh(export, atoms[0])
+        jobs = [(ias, int(lorbl[is_][int(idxelo[i, is_]) - 1]),
+                 int(idxelo[i, is_]) - 1, jo)
+                for ias in atoms for i in range(int(nlorb[is_]))
+                for jo in range(int(lorbord[int(idxelo[i, is_]) - 1, is_]))]
+        energies = [lorbe[jo, ilo, ias] + lorbdm[jo, ilo, is_] * delorb
+                    for ias, _, ilo, jo in jobs]
+        p0_all, _ = _solve_batch(sol, jobs, r, vr_all, energies)
+        at = {job: k for k, job in enumerate(jobs)}
+        for ias in atoms:
+            done = {}                            # ilo -> (u, Hu), for the
+            for i in range(int(nlorb[is_])):     # Gram-Schmidt below
+                ilo = int(idxelo[i, is_]) - 1
+                l = int(lorbl[is_][ilo])
+                ord_ = int(lorbord[ilo, is_])
+                p0s, ep0s, rows = [], [], []
+                for jo in range(ord_):
+                    k = at[(ias, l, ilo, jo)]
+                    p0 = p0_all[k] / r
+                    p0s.append(p0)
+                    ep0s.append(energies[k] * p0)
+                    tail = slice(nr - nplorb, nr)
+                    col = [p0[nr - 1]]
+                    for io in range(1, ord_):
+                        col.append(polynm(io, r[tail], p0[tail], rmt[is_]))
+                    rows.append(jnp.stack(col))
+                amat = jnp.stack(rows, axis=1)   # a[io, jo]
+                b = jnp.zeros(ord_).at[ord_ - 1].set(1.0)
+                coeff = jnp.linalg.solve(amat, b)
+                u = sum(coeff[io] * p0s[io] for io in range(ord_))
+                hu = sum(coeff[io] * ep0s[io] for io in range(ord_))
+                t1 = 1.0 / jnp.sqrt(jnp.abs(jnp.sum(w * u ** 2)))
                 u, hu = t1 * u, t1 * hu
-            done[ilo] = (u, hu)
-            out = out.at[:nr, 0, ilo, ias].set(u)
-            out = out.at[:nr, 1, ilo, ias].set(hu)
+                for j in range(i):
+                    jlo = int(idxelo[j, is_]) - 1
+                    if int(lorbl[is_][jlo]) == l:
+                        uj, huj = done[jlo]
+                        t1 = -jnp.sum(w * u * uj)
+                        u, hu = u + t1 * uj, hu + t1 * huj
+                if i > 0:
+                    t1 = 1.0 / jnp.sqrt(jnp.sum(w * u ** 2))
+                    u, hu = t1 * u, t1 * hu
+                done[ilo] = (u, hu)
+                out = out.at[:nr, 0, ilo, ias].set(u)
+                out = out.at[:nr, 1, ilo, ias].set(hu)
     return out
 
 

@@ -494,3 +494,146 @@ implicit route has not been exercised on this map, and none of Phase 3's three
 gradient signatures has been started.
 
 ---
+
+
+## 3d. The compiled step, and the two loops that were Python
+
+### What was at stake
+
+§3c's run takes about three minutes and **92% of it is XLA**, not physics: one
+step compiles in 93 s and runs in 208 ms. That is not a performance
+complaint at this size — 40 iterations of arithmetic is 8 seconds — it is a
+statement about what the port can be pointed at next. Compile time that grows
+with the cell and with the k-mesh is the difference between a production mesh
+being expensive and being impossible, and `docs/jax_port_status.md` already
+records XLA dying with `std::bad_alloc` at Kohn-Sham scale.
+
+Measured piece by piece on bulk Si (`nmat` 158-177, 2 atoms, `nrmt` 397,
+`lmaxapw` 8, 3 k-points), before anything was changed:
+
+| piece | compile | run | HLO lines |
+|---|---|---|---|
+| radial functions (`genapwlofr`) | **47.4 s** | 28 ms | **35 900** |
+| radial integrals (`olprad`/`hmlrad`) | +3.1 s | 28 ms | +1 700 |
+| `zone_matrices` (H, O over the zone) | 6.3 s | 37 ms | 4 100 |
+| eigenvalues (3 × `eigh`) | 1.2 s | 71 ms | 750 |
+| `potks` | 13.7 s | 44 ms | 20 800 |
+| **the whole step** | **93.0 s** | **208 ms** | **84 000** |
+
+### The eigensolve is not duplicated, which had to be checked rather than assumed
+
+`response.eigenvalues` and `response.density_factors` each call `_solve` on the
+same $(H,O)$, and the module docstring asserts that costs nothing. It is right,
+and the check is a fact about the compiler rather than about silicon:
+compiling both together gives 104 `cholesky` mentions in the HLO against 103
+for `density_factors` alone — not 164. XLA folds it. **Nothing to do here**,
+recorded so it is not re-investigated.
+
+### The radial functions: 26 scans that should be one
+
+`rschrodint` is a `lax.scan` over the radial mesh, and `genapwfr`/`genlofr`
+call it once per $(\text{atom},\ell,\text{order})$ — 26 times for a two-atom
+cell at `lmaxapw=8`, each emitted separately into the compiled program. The
+integrations are independent, so they are now one `vmap`ped scan per species
+and per kind (`radial_functions._solve_batch`) — **two** on silicon, an APW
+batch and a local-orbital one, against 26 before.
+
+The grouping is **by species, not by atom and not globally**, and that is the
+one design choice in it: $r$ and $n_r$ belong to the species while $v_r$ is the
+atom's own spherical potential, so a species is exactly what can share a mesh
+with `in_axes=None`. Batching across species would need every mesh padded to
+`nrmtmax`, and a padded $r$ reaches `poly3`'s $1/(x_2-x_1)$.
+
+Result: the radial half goes from 47.4 s to **12.7 s** of compile and 35 900 to
+21 900 HLO lines, and the whole step from 93.0 s to **48.0 s** (run 208 to
+172 ms). Pinned by `tests/test_calculation_lapw_radial_functions.py`, whose
+three fixtures cover exactly what this could break: `si_apword2` has the
+Gram-Schmidt over orders, and `hbn` has two species with different meshes.
+
+### The k-loop: one traced body instead of $n_{\bf k}$ copies
+
+Every loop over the zone was a Python loop, so the compiled program carried
+`nkpt` copies of the assembly, the eigensolve and the accumulation — measured
+at **1 950 HLO lines and 4.5 s of compile per k-point** after the radial fix.
+
+They are now `lax.map` (`density.zone_eigenvalues`) and `lax.scan`
+(`density.zone_valence_density`). That needs every k-point to have the same
+matrix size, which `density.zone_basis` gets by padding the plane-wave block to
+a common `ngkmax`: the local orbitals then sit at a fixed offset instead of at
+`ngk`, which is why `muffin_tin_wavefunctions` grew an explicit `lo_offset`.
+
+**Two hazards, both real and both handled where they arise.**
+
+*The overlap must stay factorisable.* Zeroing the dead rows makes $O$ singular
+and the solve goes through its Cholesky factor. So the dead block is set to the
+identity in $O$ and to $\lambda$ times the identity in $H$, which decouples it
+exactly: the dead rows are zero in every other block, so the physical
+eigenvectors have exactly zero weight there and the spurious eigenvalues sit at
+$\lambda$, above the `nstfv` states taken from the bottom. $\lambda$ is
+**1000 Ha, measured rather than picked** — it enters the norm of the matrix the
+Cholesky and the eigensolver work on, and against the un-padded assembly the
+worst eigenvalue difference over the zone is 5.2e-15 Ha at $10^2$, 7.7e-15 at
+$10^3$, 3.0e-14 at $10^4$ and **6.3e-10 at $10^6$**. The last is large enough
+to move §3b's fixed-point residual, so the obvious "make it huge and forget it"
+is the wrong instinct.
+
+*A padded G-vector index is still an index.* The dead slots carry G-vector
+index 1 and the zero $\mathbf{G+k}$. The zero vector is safe only because
+§1f's rewrite of `match` never forms $|\mathbf{G+k}|$ or
+$\widehat{\mathbf{G+k}}$ — the change that made it differentiable at $\Gamma$
+also made it finite here. The repeated index is *not* safe by itself:
+`interstitial_wavefunction` scatters into the coarse FFT grid, and a dead slot
+sharing a G with a live one would overwrite the real coefficient. The scatter
+is now an `add` onto zeroed dead coefficients rather than a `set`.
+
+The result is that the compiled program stops growing with the mesh:
+
+| k-points | HLO lines | compile | run |
+|---|---|---|---|
+| 3 | 86 844 | 32.1 s | 187 ms |
+| 8 | 86 839 | 34.4 s | 403 ms |
+| 16 | 86 839 | 36.1 s | 788 ms |
+
+Same program, five times the mesh. Extrapolated to $n_{\bf k}=100$ that is
+~40 s of compile against ~8 minutes before. The run time scales linearly, as it
+must — that is the arithmetic.
+
+**The scan also fixes a memory bound nobody had hit yet.** The Python loop held
+every k-point's $H$ and $O$ simultaneously; at the production shapes
+`docs/jax_port_status.md` names that is 26.8 GiB. The scan carries the running
+density and rebuilds $H,O$ inside the body, so the memory is flat in
+$n_{\bf k}$ and only the compiled code is shared.
+
+### What this does not change
+
+**No physical number.** Both are restructurings of the compiled graph, and the
+acceptance criterion is the existing pins rather than a new measurement:
+`test_calculation_scf.py` still has Elk's converged potential as a fixed point
+to 1.8e-15 (muffin tin) and 1.0e-9 (interstitial) — far more sensitive than any
+energy — and the `jvp`-versus-central-difference check still closes at 6.6e-9
+in the interstitial half. `test_calculation_density.py`,
+`test_calculation_lapw_*`, `test_calculation_occupations.py` and
+`test_calculation_energy.py` pass unchanged: 104 tests.
+
+**The per-k matrix is slightly bigger.** `ngkmax + nlotot` rather than
+`ngk + nlotot`, so the eigensolve does marginally more work at every k-point
+but the last. On bulk Si that is 177 against 158-177.
+
+**Two species were checked, not assumed.** The padded layout moves the local
+orbitals from `ngk` to `ngkmax`, which is a different `idxlo` offset — and
+h-BN is where B and N have *different* local-orbital counts (2 and 3), so an
+offset that is right on silicon and wrong there reads plane-wave coefficients
+as local-orbital ones and leaves a muffin-tin density that is smooth,
+positive and completely wrong.
+`test_the_batched_scf_half_step_holds_on_two_species` runs the whole batched
+half-step on h-BN against Elk's own `rhomt`/`rhoir` (1e-8 / 1e-7, the same
+bounds the per-k path is held to). The scan carries a *tuple* of per-atom
+arrays rather than one stack, so two coarse meshes of different length need
+no padding.
+
+**The old paths are still there.** `density.zone_matrices`,
+`density.solve_zone` and `hamiltonian.interstitial_blocks` are unchanged and
+still un-padded, because the Phase 2 checks compare eigenvectors against Elk's
+own and those are in Elk's layout, where the local orbitals begin at `ngk`.
+
+---

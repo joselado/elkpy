@@ -43,12 +43,14 @@ import numpy as np
 
 import jax
 import jax.numpy as jnp
+from jax import lax
 
 __all__ = ["skip_below_epsocc", "interstitial_wavefunction",
            "interstitial_density", "coarsen", "normalisation_offset",
            "coarse_radial_indices", "muffin_tin_wavefunctions",
            "muffin_tin_density", "pack_coarse", "pack_fine", "to_harmonics",
-           "coarse_to_fine", "state_factors", "zone_matrices", "solve_zone",
+           "coarse_to_fine", "state_factors", "zone_matrices",
+           "zone_basis", "zone_matrices_padded", "solve_zone",
            "density_from_potential", "add_core", "normalise", "refine",
            "converged_density", "symmetrise_interstitial"]
 
@@ -85,7 +87,7 @@ def _forward_fft(values, grid):
                         ).reshape(-1, order="F") / np.prod(grid)
 
 
-def interstitial_wavefunction(coefficients, igkig, densityk):
+def interstitial_wavefunction(coefficients, igkig, densityk, live=None):
     r""":math:`\psi_n({\bf r})` on the coarse interstitial grid.
 
     ``coefficients`` is ``evecfv(1:ngk, n)`` for one state, or a ``(nst, nmat)``
@@ -96,9 +98,9 @@ def interstitial_wavefunction(coefficients, igkig, densityk):
     Elk's own: ``igkig`` is a property of the k-point, ``igfc`` of the grid.
     """
     grid = tuple(int(n) for n in densityk["ngdgc"])
-    igfc = np.asarray(densityk["igfc"])
-    igkig = np.asarray(igkig)
-    slots = jnp.asarray(igfc[igkig - 1] - 1)
+    igfc = jnp.asarray(np.asarray(densityk["igfc"]))
+    igkig = jnp.asarray(igkig)
+    slots = igfc[igkig - 1] - 1
     coefficients = jnp.asarray(coefficients)
     flat = coefficients.ndim == 1
     coefficients = coefficients[None, :] if flat else coefficients
@@ -107,7 +109,16 @@ def interstitial_wavefunction(coefficients, igkig, densityk):
     # only the first `ngk` coefficients: the rest are local orbitals, which
     # live entirely inside the muffin tins and contribute nothing here.  The
     # muffin-tin half uses all `nmat` of them.
-    array = array.at[:, slots].set(coefficients[:, :igkig.size])
+    #
+    # `live` marks which of a PADDED G set is real (`zone_basis`).  The dead
+    # slots all carry G-vector index 1, so two things are needed and neither is
+    # optional: their coefficients are zeroed, and the scatter is an `add`
+    # rather than a `set` -- a `set` would let a dead slot overwrite the real
+    # coefficient sitting at that same G with a zero.
+    values = coefficients[:, :igkig.shape[0]]
+    if live is not None:
+        values = jnp.where(jnp.asarray(live)[None, :], values, 0.0)
+    array = array.at[:, slots].add(values)
     out = jax.vmap(lambda row: _inverse_fft(row, grid))(array)
     return out[0] if flat else out
 
@@ -212,7 +223,7 @@ def coarse_radial_indices(densityk, groundstate, ias):
 
 
 def muffin_tin_wavefunctions(coefficients, apwalm, ngk, ias, densityk,
-                             groundstate, lapw):
+                             groundstate, lapw, lo_offset=None):
     r"""``wfmtsv`` with ``tsh=.false.``: states on the coarse angular grid.
 
     ``coefficients`` is one state's ``evecfv(:, n)`` or a ``(nst, nmat)`` stack
@@ -255,6 +266,14 @@ def muffin_tin_wavefunctions(coefficients, apwalm, ngk, ias, densityk,
     # it does not, which is why silicon never saw this.
     lorbl = np.asarray(lapw["lorbl"][isp])
 
+    # `lo_offset` is where the local-orbital coefficients begin.  In Elk's own
+    # layout that is `ngk`, which is why it is the default; the padded layout
+    # of `zone_matrices_padded` puts the plane-wave block at a fixed `ngkmax`
+    # for every k-point, so there the offset is `ngkmax` instead.  Getting it
+    # wrong reads plane-wave coefficients as local-orbital ones and leaves a
+    # smooth, positive, completely wrong muffin-tin density -- exactly the
+    # failure patch 0019's note records.
+    lo_offset = ngk if lo_offset is None else lo_offset
     coefficients = jnp.asarray(coefficients)
     flat = coefficients.ndim == 1
     coefficients = coefficients[None, :] if flat else coefficients
@@ -279,7 +298,7 @@ def muffin_tin_wavefunctions(coefficients, apwalm, ngk, ias, densityk,
         index = np.array([int(idxlo[lm, ilo, ias]) - 1
                           for ilo, lm in zip(which, slots)], dtype=int)
         out = out.at[:, :, jnp.asarray(slots)].add(
-            coefficients[:, ngk + jnp.asarray(index)][:, None, :]
+            coefficients[:, lo_offset + jnp.asarray(index)][:, None, :]
             * lofr[rows[:, None], which[None, :], ias][None, :, :])
 
     # harmonic coefficients -> values on the angular grid, region by region.
@@ -437,6 +456,69 @@ def zone_matrices(lapw, groundstate, densityk, ispn=0):
     return out
 
 
+def zone_basis(densityk, groundstate, ispn=0):
+    r"""Every k-point's plane-wave basis, padded to a COMMON ``ngkmax``.
+
+    Returns ``(igkig, vgkc, ngk)`` shaped ``(nkpt, ngkmax)``,
+    ``(nkpt, ngkmax, 3)`` and ``(nkpt,)``.  The dead slots carry G-vector
+    index 1 and the zero vector, both of which
+    `elkjax.hamiltonian.padded_eigenproblem` masks out; they are chosen to be
+    *harmless* rather than meaningful, since a padded index still has to be a
+    legal one for the difference lookup and a padded :math:`{\bf G+k}` still
+    goes through ``match``.
+
+    The point of the padding is that every k-point then has the same matrix
+    size, so the loop over the zone can be a ``lax.scan`` instead of a Python
+    loop -- see :func:`zone_matrices_padded`.
+    """
+    nkpt = int(densityk["nkpt"])
+    ngkmax = int(densityk["ngkmax"])
+    bvec = np.asarray(groundstate["bvec"])
+    vgc = np.asarray(groundstate["vgc"])
+    vkl = np.asarray(densityk["vkl"])
+    igkig = np.ones((nkpt, ngkmax), dtype=np.int64)
+    vgkc = np.zeros((nkpt, ngkmax, 3))
+    ngk = np.zeros(nkpt, dtype=np.int64)
+    for ik in range(nkpt):
+        index = np.asarray(densityk["igkig"][(ik, ispn)])
+        n = int(densityk["ngk"][ik, ispn])
+        igkig[ik, :n] = index[:n]
+        ngk[ik] = n
+        vgkc[ik, :n] = vgc[:, index[:n] - 1].T + (bvec @ vkl[:, ik])[None, :]
+    return igkig, vgkc, ngk
+
+
+def zone_matrices_padded(lapw, groundstate, densityk, ispn=0):
+    r"""``(H, O)`` at every k-point as two STACKED ``(nkpt, nmat, nmat)`` arrays.
+
+    The batched counterpart of :func:`zone_matrices`, and the one
+    `elkjax.scf` uses.  ``nmat = ngkmax + nlotot`` for every k-point rather
+    than ``ngk + nlotot``, so the local orbitals sit at a fixed offset and the
+    assembly can run under ``lax.map``: the compiled program then holds ONE
+    k-point's worth of instructions instead of ``nkpt`` copies.  Measured on
+    bulk Si before this existed, the k-loop cost 4.5 s of XLA compile time per
+    k-point, which at a production mesh is the dominant term.
+
+    The bounds `elkjax.hamiltonian.traced_interstitial_blocks` can no longer
+    check are checked here, once per k-point, on concrete indices.
+    """
+    from .hamiltonian import (check_gset_bounds, padded_eigenproblem,
+                              reciprocal_lookup)
+
+    igkig, vgkc, ngk = zone_basis(densityk, groundstate, ispn=ispn)
+    table = reciprocal_lookup(groundstate)
+    for ik in range(igkig.shape[0]):
+        check_gset_bounds(igkig[ik, :int(ngk[ik])], groundstate, table=table)
+
+    def one(args):
+        index, vectors, count = args
+        return padded_eigenproblem(lapw, groundstate, index, vectors, count,
+                                   table=table)
+
+    return lax.map(one, (jnp.asarray(igkig), jnp.asarray(vgkc),
+                         jnp.asarray(ngk)))
+
+
 def solve_zone(lapw, groundstate, densityk, ispn=0, eigenvalues=False):
     r"""Diagonalise at every k-point of Elk's own set, from the potential.
 
@@ -469,6 +551,110 @@ def solve_zone(lapw, groundstate, densityk, ispn=0, eigenvalues=False):
         out[(ik, ispn)] = vectors.T
         spectrum.append(values[:nstfv])
     return (out, jnp.stack(spectrum)) if eigenvalues else out
+
+
+def zone_eigenvalues(lapw, groundstate, densityk, ispn=0):
+    r"""The first ``nstfv`` eigenvalues at every k-point, ``(nkpt, nstfv)``.
+
+    Builds :math:`H,O` INSIDE the map and keeps only the spectrum, so nothing
+    of size :math:`n_{\bf k}n_{\rm mat}^2` is ever held -- which is the whole
+    reason this is not :func:`zone_matrices_padded` followed by a solve.
+    """
+    from . import response
+    from .hamiltonian import padded_eigenproblem, reciprocal_lookup
+
+    nstfv = int(densityk["nstfv"])
+    igkig, vgkc, ngk = zone_basis(densityk, groundstate, ispn=ispn)
+    table = reciprocal_lookup(groundstate)
+
+    def one(args):
+        index, vectors, count = args
+        h, o = padded_eigenproblem(lapw, groundstate, index, vectors, count,
+                                   table=table)
+        return response.eigenvalues(h, o)[:nstfv]
+
+    return lax.map(one, (jnp.asarray(igkig), jnp.asarray(vgkc),
+                         jnp.asarray(ngk)))
+
+
+def zone_valence_density(lapw, groundstate, densityk, factors, ispn=0):
+    r"""``rhomagk`` summed over the zone with ``lax.scan``, not a Python loop.
+
+    ``factors`` is a callable ``(H, O) -> (bra, ket)`` applied at each
+    k-point, both ``(nmat, nstfv)`` in the PADDED layout of
+    :func:`zone_matrices_padded`; `elkjax.scf` passes
+    `elkjax.response.density_factors` closed over :math:`\mu`.
+
+    Returns the same pair :func:`density_from_potential` does -- muffin-tin
+    values on the coarse angular grid (a list over atoms, since two species
+    may have coarse meshes of different length) and the interstitial on the
+    coarse FFT grid.
+
+    **Why a scan and not a map.**  The k-points are independent, so ``lax.map``
+    would work and would be shorter.  It would also materialise every
+    k-point's density before summing them, and at a production mesh that is
+    :math:`n_{\bf k}` copies of an array the loop only ever needs one of --
+    beside :math:`n_{\bf k}` copies of :math:`H` and :math:`O`, which is
+    26.8 GiB at the shapes `docs/jax_port_status.md` names.  The scan carries
+    the running sum and rebuilds :math:`H,O` inside the body, so the memory is
+    flat in :math:`n_{\bf k}` and only the compile is shared.
+    """
+    from .hamiltonian import (padded_eigenproblem, reciprocal_lookup)
+
+    natmtot = int(groundstate["natmtot"])
+    omega = float(groundstate["omega"])
+    igkig, vgkc, ngk = zone_basis(densityk, groundstate, ispn=ispn)
+    ngkmax = int(densityk["ngkmax"])
+    table = reciprocal_lookup(groundstate)
+    weights = np.asarray(densityk["wkpt"], dtype=float)
+
+    # A TUPLE of per-atom arrays, not one rectangular stack: Elk's `nrcmt` is
+    # per species, so two species can have coarse meshes of different length.
+    # `lax.scan` carries a pytree, and a tuple of differently shaped arrays is
+    # one -- so there is no need to pad to `nrcmtmax` and no restriction to
+    # a single species.
+    nrcmt = [int(densityk["nrcmt"][int(groundstate["idxis"][ias]) - 1])
+             for ias in range(natmtot)]
+    lmmaxo = int(groundstate["lmmaxo"])
+
+    def body(carry, args):
+        muffin, interstitial, index, vectors, count, weight = (
+            carry[0], carry[1], *args)
+        live = jnp.arange(ngkmax) < count
+        h, o = padded_eigenproblem(lapw, groundstate, index, vectors, count,
+                                   table=table)
+        bra, ket = factors(h, o)
+        left_ir = interstitial_wavefunction(bra.T, index, densityk, live=live)
+        right_ir = interstitial_wavefunction(ket.T, index, densityk, live=live)
+        interstitial = interstitial + (weight / omega) * jnp.sum(
+            jnp.real(jnp.conj(left_ir) * right_ir), axis=0)
+        apwalm = _matching(lapw, vectors, live)
+        updated = []
+        for ias in range(natmtot):
+            left = muffin_tin_wavefunctions(
+                bra.T, apwalm[..., ias], ngkmax, ias, densityk, groundstate,
+                lapw, lo_offset=ngkmax)
+            right = muffin_tin_wavefunctions(
+                ket.T, apwalm[..., ias], ngkmax, ias, densityk, groundstate,
+                lapw, lo_offset=ngkmax)
+            updated.append(muffin[ias] + weight * jnp.sum(
+                jnp.real(jnp.conj(left) * right), axis=0))
+        return (tuple(updated), interstitial), None
+
+    init = (tuple(jnp.zeros((n, lmmaxo)) for n in nrcmt),
+            jnp.zeros(int(densityk["ngtc"])))
+    (muffin, interstitial), _ = lax.scan(
+        body, init, (jnp.asarray(igkig), jnp.asarray(vgkc), jnp.asarray(ngk),
+                     jnp.asarray(weights)))
+    return list(muffin), interstitial
+
+
+def _matching(lapw, vgkc, live):
+    """`apwalm` at a padded G+k set, with the dead rows zeroed."""
+    from .hamiltonian import matching_coefficients
+
+    apwalm = matching_coefficients(lapw, jnp.asarray(vgkc))
+    return jnp.where(jnp.asarray(live)[:, None, None, None], apwalm, 0.0)
 
 
 def density_from_potential(lapw, groundstate, densityk, ispn=0):
@@ -566,7 +752,7 @@ def refine(coarse, groundstate, densityk):
 
 
 def converged_density(densityk, groundstate, lapw, vectors=None, ispn=0,
-                      symmetrise=None, factors=None):
+                      symmetrise=None, factors=None, zone=None):
     r"""The whole of ``rhomag``: eigenvectors to Elk's converged ``rhomt``/``rhoir``.
 
     ``rhomagk`` → ``rhomagsh`` → ``symrf`` → ``rfmtctof`` / ``rfirctof`` →
@@ -601,12 +787,19 @@ def converged_density(densityk, groundstate, lapw, vectors=None, ispn=0,
     if symmetrise is None:
         symmetrise = int(densityk.get("nsymcrys", 1)) > 1
 
-    values = muffin_tin_density(local, groundstate, lapw, ispn=ispn,
-                                factors=factors)
+    # `zone` short-circuits the two per-k accumulations with a pair already
+    # summed over the zone -- what `zone_valence_density` returns.  Everything
+    # after this point is k-independent, so it is shared rather than
+    # duplicated.
+    if zone is None:
+        values = muffin_tin_density(local, groundstate, lapw, ispn=ispn,
+                                    factors=factors)
+        coarse = interstitial_density(local, float(groundstate["omega"]),
+                                      ispn=ispn, factors=factors)
+    else:
+        values, coarse = zone
     harmonics = jnp.stack([to_harmonics(values[ias], densityk, groundstate, ias)
                            for ias in range(natmtot)])
-    coarse = interstitial_density(local, float(groundstate["omega"]),
-                                  ispn=ispn, factors=factors)
     if symmetrise:
         harmonics = symmetry.symmetrise(harmonics, groundstate,
                                         inner_points=densityk["nrcmti"])

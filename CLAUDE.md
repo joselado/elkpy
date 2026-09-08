@@ -318,7 +318,14 @@ The five rules that must hold even if you never open it:
 - **`taskset -c 0-3` every JAX invocation.** `OMP_NUM_THREADS` does NOT govern XLA — measured, one
   matmul spawns 40 threads under it. `launcher.py`'s semaphore sees none of this.
 - **`lax.map`/`lax.scan` over the k-axis is the default; `vmap(eigh)` is opt-in** (0.411 GiB vs
-  40.2 GiB of temporaries at production shape).
+  40.2 GiB of temporaries at production shape). A **Python** loop over k (or over atoms, or over
+  $\ell$) is the same mistake one level up: it unrolls into the compiled program, so XLA compile
+  time and HLO size grow linearly with the loop count. Measured on the SCF step (§3d): 4.5 s of
+  compile per k-point, and 47 s of 93 s spent on one `lax.scan` emitted 26 times. Batching both
+  made the compiled program independent of the k-mesh — same 86,839 HLO lines at 3, 8 and 16
+  k-points. **Padding to a common shape is what makes that possible, and padding a matrix that
+  gets Cholesky-factorised needs a diagonal, not a mask** — with the shift measured, since it
+  enters the norm the eigensolver works on (1e3 Ha costs 8e-15 Ha, 1e6 costs 6e-10).
 - **Import `elkjax` first** — `jax_enable_x64` must be set before the first array exists. All of
   this work is float64/complex128; an all-electron spectrum spans ~2500 Ha.
 

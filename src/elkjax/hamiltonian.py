@@ -833,6 +833,127 @@ def interstitial_blocks(igpig, vgkc, groundstate, table=None):
     return vsig[jnp.asarray(index)] + kinetic * theta, theta
 
 
+def traced_interstitial_blocks(igpig, vgkc, groundstate, table=None):
+    r"""`interstitial_blocks` with every index computed in ``jnp``.
+
+    Same arithmetic, same result -- the difference is that ``igpig`` may be a
+    *traced* array, which is what lets the whole k-point loop run under
+    ``lax.map`` (`elkjax.density.zone_matrices`).  The two Python ``raise``
+    guards of :func:`interstitial_blocks` cannot survive tracing and are gone;
+    they are bounds checks on the exported list, so they are asserted once,
+    outside the map, by :func:`check_gset_bounds`.
+    """
+    if table is None:
+        table = reciprocal_lookup(groundstate)
+    ivg = jnp.asarray(np.asarray(groundstate["ivg"]))
+    grid = tuple(int(n) for n in groundstate["ngridg"])
+    g = ivg[:, jnp.asarray(igpig) - 1]                       # (3, ngp)
+    difference = g[:, :, None] - g[:, None, :]
+    flat = jnp.asarray(np.asarray(table).reshape(-1))
+    strides = (grid[1] * grid[2], grid[2], 1)
+    offset = sum(strides[axis] * (difference[axis] % grid[axis])
+                 for axis in range(3))
+    index = flat[offset]
+
+    cfunig = jnp.asarray(groundstate["cfunig"])
+    vsig = jnp.asarray(groundstate["vsig"])
+    theta = cfunig[index]
+    vgkc = jnp.asarray(vgkc)
+    kinetic = 0.5 * (vgkc @ vgkc.T)
+    return vsig[index] + kinetic * theta, theta
+
+
+def check_gset_bounds(igpig, groundstate, table=None):
+    """The two bounds :func:`traced_interstitial_blocks` can no longer raise.
+
+    Every difference of two :math:`{\\bf G}+{\\bf k}` vectors must be in the
+    exported list and inside ``vsig``'s ``ngvc``.  Run once per k-point on
+    concrete indices, before the traced assembly.
+
+    Only the INDEX array is built, never the matrices: this runs per k-point
+    outside the compiled region, and calling :func:`interstitial_blocks` here
+    would put an :math:`n_{\\bf k}n_{gp}^2` NumPy pass in front of a loop
+    whose whole point is to be flat in :math:`n_{\\bf k}`.
+    """
+    if table is None:
+        table = reciprocal_lookup(groundstate)
+    ivg = np.asarray(groundstate["ivg"])
+    grid = tuple(int(n) for n in groundstate["ngridg"])
+    g = ivg[:, np.asarray(igpig) - 1]
+    difference = g[:, :, None] - g[:, None, :]
+    index = table[tuple(difference[axis] % grid[axis] for axis in range(3))]
+    if index.min() < 0:
+        raise ValueError("a G-vector difference is not in the exported list")
+    ngvc = int(np.asarray(groundstate["vsig"]).size)
+    if index.max() >= ngvc:
+        raise ValueError(
+            f"a G-vector difference reaches index {index.max()}, past vsig's "
+            f"ngvc = {ngvc}; the |G| <= 2 gkmax bound has been violated")
+    return index
+
+
+def padded_eigenproblem(lapw, groundstate, igpig, vgkc, ngk, table=None,
+                        shift=1.0e3):
+    r"""(H, O) at one k-point on a plane-wave block of FIXED size ``ngkmax``.
+
+    ``igpig`` and ``vgkc`` are padded to ``ngkmax`` -- with index 1 and with
+    the zero vector, both harmless -- and ``ngk`` is the number of rows that
+    are real.  The matrices come out ``(ngkmax + nlotot)`` square for every
+    k-point, which is what makes them stackable and the loop mappable.
+
+    **Why the padding needs a diagonal and not just a mask.**  Zeroing the
+    dead rows of :math:`O` makes it singular, and the eigenproblem is solved
+    through a Cholesky factor of :math:`O`.  So the dead block is set to the
+    identity in :math:`O` and to ``shift`` times the identity in :math:`H`,
+    which decouples it completely: the dead rows are *exactly* zero in every
+    other block, so the physical eigenvectors have exactly zero weight there
+    and the spurious eigenvalues sit at ``shift``.  ``eigh`` returns them
+    ascending and every consumer takes the lowest ``nstfv``, so with ``shift``
+    above the valence spectrum they are never selected.
+
+    ``shift`` is 1000 Ha, which is **measured** rather than picked.  It has to
+    clear the highest of the ``nstfv`` states taken (0.61 Ha on bulk Si, and no
+    LAPW valence state is anywhere near 1000 Ha), and it enters the norm of the
+    matrix the Cholesky and the eigensolver work on, so making it larger spends
+    digits on nothing.  Against the un-padded assembly the worst eigenvalue
+    difference over the zone is 5.2e-15 Ha at ``shift`` 1e2, 7.7e-15 at 1e3,
+    3.0e-14 at 1e4 and **6.3e-10 at 1e6** -- the last large enough to move
+    §3b's fixed-point residual.
+
+    Padding with the zero vector is safe because `elkjax.lapw.match` never
+    forms :math:`|{\bf G}+{\bf k}|` or :math:`\widehat{{\bf G}+{\bf k}}` -- the
+    §1f rewrite that made it differentiable at :math:`\Gamma` also made it
+    finite here.  The rows are masked to zero immediately afterwards anyway.
+    """
+    ngkmax = int(jnp.asarray(vgkc).shape[0])
+    nlotot = int(lapw["nlotot"])
+    nmat = ngkmax + nlotot
+    live = jnp.arange(ngkmax) < ngk
+
+    apwalm = matching_coefficients(lapw, jnp.asarray(vgkc))
+    apwalm = jnp.where(live[:, None, None, None], apwalm, 0.0)
+    local = dict(lapw)
+    local["apwalm"] = apwalm
+    local["ngp"] = ngkmax
+    local["nmatp"] = nmat
+
+    istl_h, istl_o = traced_interstitial_blocks(igpig, vgkc, groundstate,
+                                                table=table)
+    pair = live[:, None] & live[None, :]
+    istl_h = jnp.where(pair, istl_h, 0.0)
+    istl_o = jnp.where(pair, istl_o, 0.0)
+
+    def _pad(block):
+        return jnp.zeros((nmat, nmat), dtype=complex).at[:ngkmax, :ngkmax] \
+            .add(block)
+
+    h = muffin_tin_hamiltonian(local) + _pad(istl_h)
+    o = muffin_tin_overlap(local) + _pad(istl_o)
+    dead = (jnp.arange(nmat) >= ngk) & (jnp.arange(nmat) < ngkmax)
+    return (h + shift * jnp.diag(dead.astype(complex)),
+            o + jnp.diag(dead.astype(complex)))
+
+
 def eigenproblem_on_gset(lapw, groundstate, igpig, vgkc, ngp):
     """(H, O) at a k-point given by its own G set, in Elk's full basis.
 

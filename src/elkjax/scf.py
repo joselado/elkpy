@@ -196,21 +196,26 @@ def density_at_potential(lapw, groundstate, densityk, vsmt, vsir, ispn=0):
     :math:`n_{\rm mat}\sim200` cost nothing beside the assembly.
     """
     refreshed, local = at_potential(lapw, groundstate, densityk, vsmt, vsir)
-    matrices = density.zone_matrices(refreshed, local, densityk, ispn=ispn)
     nstfv = int(densityk["nstfv"])
-    evalsv = jnp.stack([response.eigenvalues(h, o)[:nstfv]
-                        for h, o in matrices])
+    # Both passes over the zone are `lax.map`/`lax.scan` (`elkjax.density`),
+    # not Python loops: the compiled program then holds ONE k-point's worth of
+    # instructions rather than `nkpt` copies, and never `nkpt` copies of H and
+    # O.  Measured before that change, each k-point cost 4.5 s of XLA compile
+    # time and 1.9k HLO lines.
+    evalsv = density.zone_eigenvalues(refreshed, local, densityk, ispn=ispn)
     mu, occsv = occupations.occupy(evalsv, densityk)
 
     got = occupations.inputs(densityk)
-    factors = {}
-    for ik, (h, o) in enumerate(matrices):
-        bra, ket = response.density_factors(
+
+    def factors(h, o):
+        return response.density_factors(
             h, o, mu, nstfv, got["swidth"], got["occmax"], got["e0min"],
             got["stype"])
-        factors[(ik, ispn)] = (bra.T, ket.T)
+
+    zone = density.zone_valence_density(refreshed, local, densityk, factors,
+                                        ispn=ispn)
     muffin, interstitial = density.converged_density(
-        densityk, groundstate, refreshed, ispn=ispn, factors=factors)
+        densityk, groundstate, refreshed, ispn=ispn, zone=zone)
     natmtot = int(groundstate["natmtot"])
     packed = jnp.stack([density.pack_fine(muffin[ias], groundstate, ias)
                         for ias in range(natmtot)])

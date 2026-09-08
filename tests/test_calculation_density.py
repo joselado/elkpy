@@ -607,6 +607,38 @@ def test_the_loop_closes_on_two_species(hbn_with_lapw):
         / np.abs(reference).max() < 1e-7
 
 
+def test_the_batched_scf_half_step_holds_on_two_species(hbn_with_lapw):
+    """§3d's padded, scanned zone -- the whole of `rhomag` -- on h-BN.
+
+    `elkjax.scf.density_at_potential` runs the batched path end to end:
+    `lax.map` for the spectrum, `lax.scan` for the accumulation, both on a
+    plane-wave block padded to `ngkmax` with the local orbitals moved to a
+    fixed offset.  h-BN is the fixture that can see what silicon cannot --
+    two species with different nuclear charges, different meshes and
+    **different local-orbital counts (2 and 3)**.  A padded offset that was
+    right on silicon and wrong here reads plane-wave coefficients as
+    local-orbital ones, which leaves a muffin-tin density that is smooth,
+    positive and completely wrong.
+
+    The reference is Elk's own converged `rhomt`/`rhoir`, at Elk's own
+    potential -- the same assertion `test_the_loop_closes_on_two_species`
+    makes about the per-k path, so the two are directly comparable.
+    """
+    from elkjax import scf
+    groundstate, densityk, lapw = hbn_with_lapw
+    got = scf.density_at_potential(lapw, groundstate, densityk,
+                                   lapw["vsmt"], groundstate["vsir"])
+    for ias in range(int(groundstate["natmtot"])):
+        mine = np.asarray(got["rhomt"][ias])
+        reference = np.asarray(groundstate["rhomt"][ias])[:mine.size]
+        assert np.abs(mine - reference).max() \
+            / np.abs(reference).max() < 1e-8, ias
+    reference = np.asarray(groundstate["rhoir"])
+    assert np.abs(np.asarray(got["rhoir"]) - reference).max() \
+        / np.abs(reference).max() < 1e-7
+    assert abs(float(got["mu"]) - float(densityk["efermi"])) < 1e-8
+
+
 @pytest.fixture(scope="module")
 def reduced_with_lapw(tmp_path_factory):
     """Elk's DEFAULT everything: symmetry on, so 3 k-points instead of 8 and
