@@ -4690,3 +4690,67 @@ Elk's own, **separately**, so a failure names one upstream routine rather than
 `apword` 1 and 2 and on monolayer h-BN, and diagonalising the assembled pair
 returns Elk's `evalfv` to 9e-15 Ha. The measurements, the three fixtures and
 what each one alone can catch are in `docs/jax_port_phase1.md`.
+
+
+### Patch 0024: the same exports at iteration zero
+
+Everything above describes a **converged** calculation. `eigenstate_session()`
+copies `STATE.OUT` into a fresh subdirectory and runs task 1 before task 9002,
+so `readstate` fixes the potential, the density and the eigenvectors at Elk's
+own answer. That was the right default while the port was checking
+transcriptions against a reference — but it makes a self-consistent loop
+untestable in the only way that matters. Elk's converged potential is a fixed
+point of the port's map (`docs/jax_port_phase3.md` §3b), so a loop started
+there does nothing, and the alternative was to perturb it by hand: a start
+still built out of the answer.
+
+Patch **0024** adds task **9006** (`src/elkpy_initstate.f90`,
+`Calculation.initial_state_session()`), which is `gndstate.f90`'s *other*
+branch. Where task 1 takes `trdstate=.true.` and calls `readstate`, this takes
+`trdstate=.false.`:
+
+```
+init0; init1; rhoinit; maginit; potks(.true.); genvsig
+```
+
+and then the top of `gndstate`'s first self-consistent iteration:
+
+```
+gencore; linengy; genapwlofr; gensocfr; genevfsv; occupy
+```
+
+and stops. No `rhomag`, no `potks` on a new density, no `mixerifc`. Every array
+the 9002 queries read then holds its iteration-zero value: the density is the
+superposition of free atomic densities `rhoinit` builds, the potential is that
+density's Kohn-Sham potential, and — because no mixing has happened — the two
+halves of the potential are on the *same* side of `mixerifc` for once, so the
+"Elk mixes in the middle of its own iteration" trap does not apply here.
+
+Nothing in the new file is new physics: every line is an upstream call, in
+`gndstate`'s own order, with no arguments. What it costs on an upstream bump is
+that the sequence is *mirrored* rather than called — `gndstate`'s
+initialisation is not a subroutine — so re-checking it means diffing that
+branch and the head of its SCF loop. That is the same exposure patch 0011
+already carries, and it is the reason the file documents the sequence it
+mirrors rather than just executing it.
+
+The alternative was transcribing `init0`/`init1`/`rhoinit` into Python. That is
+not a smaller job: `rhoinit` superposes the free-atom densities that
+`allatoms` → `atom.f90` produces, i.e. a full radial Dirac solver for every
+species, plus the whole of Elk's grid, symmetry and species bookkeeping. None
+of it is a functional of the density — it is identical at every iteration and
+for every potential — so none of it is on the path a gradient would take.
+Exporting it is the cheap and correct move; §8's "prefer Elk's own export
+routes" is exactly this case.
+
+**One extra export travels with the patch**, appended to `elkpy_lapwexport`:
+`autolinengy` and the per-orbital `apwve`/`lorbve` flags. The port freezes the
+linearisation energies across its loop, and whether that is exact or an
+approximation is decided entirely by those flags — `linengy` calls `findband`
+only where they are true, and otherwise leaves `apwe`/`lorbe` at the species
+file's own `apwe0`/`lorbe0` for the whole run. `apwe` alone cannot say which
+happened: a searched energy and a default one are the same kind of number. Elk
+ships every stock species file with the flags false and `autolinengy` off, so
+for those the freeze is exact and `elkjax.driver.check_linearisation_frozen()`
+passes; where it is not, that function raises rather than returning a plausible
+total energy.

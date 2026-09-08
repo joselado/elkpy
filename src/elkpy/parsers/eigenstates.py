@@ -558,6 +558,16 @@ def _parse_lapw_potential(tokens, pos, out):
       apwdfr         -- (apwordmax, lmaxapw+1, natmtot), the surface
                         derivative term (p1s - p0(nr)) * rmt / 2
       lofr           -- (nrmtmax, 2, nlomax, natmtot), same pairing
+      autolinengy    -- bool; apwve, lorbve -- bool arrays shaped like
+                        `apwdm`/`lorbdm` (patch 0024).  True where
+                        `linengy.f90` calls `findband` and re-searches the
+                        linearisation energy every SCF iteration; false
+                        where `apwe`/`lorbe` stay at the species file's own
+                        `apwe0`/`lorbe0` for the whole run.  This is what
+                        says whether freezing them outside Elk (as
+                        `elkjax.driver` does) is exact or an approximation
+                        -- `apwe` alone cannot say, a searched energy and a
+                        default one being the same kind of number
 
     Ragged axes (`apword(l, is)` orders per l, `lorbord(ilo, is)` per local
     orbital) are zero-padded to the maximum, so every field above is a dense
@@ -665,6 +675,26 @@ def _parse_lapw_potential(tokens, pos, out):
                 flat, pos = _take(tokens, pos, nr, float)
                 lofr[:nr, j, ilo, ias] = flat
     out["lofr"] = lofr
+    # patches/0024: whether `linengy` would SEARCH these energies.  Elk only
+    # calls `findband` where the species file sets apwve/lorbve true; with
+    # every flag false and `autolinengy` off, `apwe`/`lorbe` are the species
+    # file's own defaults and never move, so a loop run outside Elk can
+    # freeze them exactly.  Written as 0/1 ints rather than Fortran T/F.
+    autolinengy, pos = _take(tokens, pos, 1, int)
+    out["autolinengy"] = bool(autolinengy[0])
+    apwve = np.zeros((apwordmax, nl, nspecies), dtype=bool)
+    for is_ in range(nspecies):
+        for l in range(nl):
+            flat, pos = _take(tokens, pos, int(apword[l, is_]), int)
+            apwve[:int(apword[l, is_]), l, is_] = np.asarray(flat, dtype=bool)
+    out["apwve"] = apwve
+    lorbve = np.zeros((lorbordmax, nlomax, nspecies), dtype=bool)
+    for is_ in range(nspecies):
+        for ilo in range(int(nlorb[is_])):
+            n = int(lorbord[ilo, is_])
+            flat, pos = _take(tokens, pos, n, int)
+            lorbve[:n, ilo, is_] = np.asarray(flat, dtype=bool)
+    out["lorbve"] = lorbve
 
 
 def parse_groundstate_response(tokens):
@@ -1069,6 +1099,12 @@ def parse_densityk_response(tokens):
         evalsv[ik] = flat
     out["evalsv"] = evalsv
     (out["evalsumcr"],), pos = _take(tokens, pos, 1, float)
+    # patches/0024: `energykncr` at this potential, i.e. `evalsumcr` MINUS
+    # the integral of the core density against v_s.  Elk recomputes both
+    # halves every iteration; a loop that freezes the core must freeze this
+    # difference rather than `evalsumcr` alone, or the same core density is
+    # integrated against a potential its eigenvalues never saw.
+    (out["engykncr"],), pos = _take(tokens, pos, 1, float)
     return out
 
 

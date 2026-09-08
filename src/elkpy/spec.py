@@ -66,6 +66,13 @@ TASKS = {
                            # src/elkpy_transport.f90 --
                            # patches/0012-vertical-transport.patch
 
+    "initial_state": 9006,  # elkpy extension: the ground state as init0/init1/
+                           # rhoinit/potks leave it, i.e. at the TOP of Elk's
+                           # first SCF iteration, with no STATE.OUT read and no
+                           # density update -- the starting point the JAX port
+                           # iterates from, src/elkpy_initstate.f90 --
+                           # patches/0024-initial-state.patch
+
     # --- ground state, geometry, mechanical and electric response (docs/design.md #32)
     "hartree_fock": 5,  # src/hartfock.f90 -- Hartree-Fock / hybrid ground state
     "ramdisk_status": 68,  # src/modramdisk.f90 (rdstatus) -- RAM-disk report,

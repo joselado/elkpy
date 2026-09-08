@@ -36,19 +36,27 @@ different point.  That is the Phase 3 boundary, not a tolerance.
 spin-orbit ground state is refused rather than silently treated as
 first-variational -- :func:`check_scalar` is the refusal.
 
-**Forward only, so far.**  The loop runs on concrete arrays: the density
-accumulation skips states below ``epsocc`` with a Python ``continue``, exactly
-as ``rhomagk`` does, and that comparison needs a value.  Making the chain
-traceable (the skip as a zeroed weight) is what "Gradient A" of the study's
-Phase 3 needs and is not done here.
+**Differentiable, and not by accident.**  Two things had to change for
+:func:`step` to be a function JAX can trace rather than only evaluate.  The
+small one: ``rhomagk``'s ``epsocc`` skip was a Python ``continue`` on the
+occupation value, and is now a zeroed weight
+(`elkjax.density.skip_below_epsocc`) -- the same arithmetic, as a value.  The
+large one: JAX's own rule for ``eigh`` differentiates each eigenvector
+separately and divides by :math:`\varepsilon_a-\varepsilon_b`, which inside
+silicon's roundoff-split :math:`\Gamma_{25'}` triplet is a ratio of rounding
+errors.  Measured on this map, that costs **1.9e-3 relative** in the
+interstitial half of :math:`dF` -- stable across three step sizes, so it is the
+rule and not the difference.  `elkjax.response` replaces it with the
+divided-difference form, and the same comparison then closes.
 """
 
 import numpy as np
 
+import jax
 import jax.numpy as jnp
 
 from . import density, energy, fixedpoint, occupations, poisson, radial
-from . import radial_functions
+from . import radial_functions, response
 
 __all__ = ["check_scalar", "interstitial_potential_transform",
            "potential_from_density", "at_potential", "pack", "unpack",
@@ -171,24 +179,38 @@ def at_potential(lapw, groundstate, densityk, vsmt, vsir):
     return refreshed, local
 
 
-def density_at_potential(lapw, groundstate, densityk, vsmt, vsir):
-    """One half-step: a potential to ``(rhomt packed, rhoir, mu, occsv, evalsv)``.
+def density_at_potential(lapw, groundstate, densityk, vsmt, vsir, ispn=0):
+    r"""One half-step: a potential to ``(rhomt packed, rhoir, mu, occsv, evalsv)``.
 
     All of ``rhomag``: the zone eigensolve, ``occupy``, ``rhomagk``,
     ``rhomagsh``, ``symrf``, the two interpolations, ``rhocore`` and
     ``rhonorm``.
+
+    The eigensolve enters twice and deliberately so.  `elkjax.response` owns
+    the derivative of the density through the spectrum, and the two things it
+    supplies -- the eigenvalues, whose derivative has no denominator in it, and
+    the occupation-weighted coefficient pair, whose derivative has the whole
+    degenerate-multiplet cancellation in it -- cannot come from one call,
+    because :math:`\mu` is a functional of the eigenvalues *of every k-point*
+    and the pair is a function of :math:`\mu`.  Two ``eigh`` calls at
+    :math:`n_{\rm mat}\sim200` cost nothing beside the assembly.
     """
     refreshed, local = at_potential(lapw, groundstate, densityk, vsmt, vsir)
-    vectors, evalsv = density.solve_zone(refreshed, local, densityk,
-                                         eigenvalues=True)
+    matrices = density.zone_matrices(refreshed, local, densityk, ispn=ispn)
+    nstfv = int(densityk["nstfv"])
+    evalsv = jnp.stack([response.eigenvalues(h, o)[:nstfv]
+                        for h, o in matrices])
     mu, occsv = occupations.occupy(evalsv, densityk)
 
-    # concrete, not traced: `rhomagk`'s `epsocc` skip is a Python branch on the
-    # occupation, and reproducing Elk means keeping it.  See the module note.
-    occupied = dict(densityk)
-    occupied["occsv"] = np.asarray(occsv)
+    got = occupations.inputs(densityk)
+    factors = {}
+    for ik, (h, o) in enumerate(matrices):
+        bra, ket = response.density_factors(
+            h, o, mu, nstfv, got["swidth"], got["occmax"], got["e0min"],
+            got["stype"])
+        factors[(ik, ispn)] = (bra.T, ket.T)
     muffin, interstitial = density.converged_density(
-        occupied, groundstate, refreshed, vectors=vectors)
+        densityk, groundstate, refreshed, ispn=ispn, factors=factors)
     natmtot = int(groundstate["natmtot"])
     packed = jnp.stack([density.pack_fine(muffin[ias], groundstate, ias)
                         for ias in range(natmtot)])
@@ -232,27 +254,33 @@ def total_energy(lapw, groundstate, densityk, vsmt, vsir):
 
     The occupations come from this module's own ``occupy``, so
     :math:`\Sigma_\varepsilon` and :math:`E_{TS}` -- the two scalars §2f had to
-    import -- are computed here.  What is still imported is the core half of
-    :math:`\Sigma_\varepsilon` (patch 0023's ``evalsumcr``, an input at fixed
-    potential like ``rhocr``) and :math:`E_{nn}`, which is a property of the
-    lattice rather than of the density.
+    import -- are computed here.  What is still imported is the core KINETIC
+    energy (patch 0023's ``evalsumcr``, corrected to the potential in use by
+    `elkjax.energy.core_eigenvalue_sum`; the core solver is not transcribed,
+    so this is an input at fixed potential like ``rhocr``) and :math:`E_{nn}`,
+    which is a property of the lattice rather than of the density.
     """
     got = density_at_potential(lapw, groundstate, densityk, vsmt, vsir)
     local = dict(groundstate)
     local["rhomt"], local["rhoir"] = got["rhomt"], got["rhoir"]
     inputs = occupations.inputs(densityk)
+    # NOT `evalsumcr` as exported: the core's share of the kinetic energy is
+    # `energykncr`, and its two halves must sit at the SAME potential.  See
+    # `energy.core_eigenvalue_sum` -- getting this wrong is worth 2.0 Ha on a
+    # run started from the atomic superposition, and exactly nothing on one
+    # started from Elk's converged state, which is why §3b never saw it.
+    evalsumcr = energy.core_eigenvalue_sum(vsmt, densityk, groundstate)
     return energy.terms(
         local,
         evalsum=energy.eigenvalue_sum(got["evalsv"], got["occsv"],
-                                      inputs["wkpt"],
-                                      float(densityk["evalsumcr"])),
+                                      inputs["wkpt"], evalsumcr),
         engyts=energy.entropy_term(got["occsv"], inputs["wkpt"],
                                    inputs["swidth"], inputs["occmax"],
                                    inputs["stype"])), got
 
 
 def run(lapw, groundstate, densityk, vsmt=None, vsir=None, mixing=0.4,
-        tol=1e-7, maxiter=60, history=0):
+        tol=1e-7, maxiter=60, history=0, jit=True):
     """Iterate :math:`v=F(v)` from a starting potential.
 
     ``vsmt``/``vsir`` default to Elk's converged potential, which is a fixed
@@ -264,14 +292,32 @@ def run(lapw, groundstate, densityk, vsmt=None, vsir=None, mixing=0.4,
     of :math:`F(v)-v` on the packed vector, so it is not Elk's ``epspot`` (an
     RMS over the same arrays) and the two should not be compared as if they
     were.
+
+    ``jit`` compiles :func:`step` once instead of re-tracing it every
+    iteration.  The exports are closed over as constants, which is what makes
+    it possible at all -- they are concrete arrays, not traced values -- and
+    on bulk Si it takes the loop from ~16 s per iteration to a one-off compile
+    plus a fraction of that.  Set it false to trace each step, which is what a
+    ``jax.debug`` print inside the map needs.
     """
     check_scalar(densityk)
     vsmt = jnp.asarray(lapw["vsmt"]) if vsmt is None else jnp.asarray(vsmt)
     vsir = (jnp.asarray(groundstate["vsir"]) if vsir is None
             else jnp.asarray(vsir))
     shape = tuple(int(n) for n in vsmt.shape)
+    arguments = (lapw, groundstate, densityk)
+    if jit:
+        # The exports are CLOSED OVER, not passed: they are dicts of concrete
+        # arrays mixed with Python ints, and `step` reads several of those
+        # ints (`natmtot`, `ngtot`, `nstfv`) to build shapes.  As jit
+        # arguments they would arrive traced and the shapes could not be
+        # taken.  Closed over, they are compile-time constants.
+        compiled = jax.jit(lambda v: step(v, arguments))
+        map_ = lambda v, _: compiled(v)  # noqa: E731
+    else:
+        map_ = step
     solution, iterations, residual = fixedpoint.iterate(
-        step, (lapw, groundstate, densityk), pack(vsmt, vsir),
+        map_, arguments, pack(vsmt, vsir),
         mixing=mixing, tol=tol, maxiter=maxiter, history=history)
     return unpack(solution, shape,
                   int(groundstate["ngtot"])) + (iterations, residual)

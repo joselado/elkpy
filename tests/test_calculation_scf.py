@@ -37,22 +37,40 @@ SI_AVEC = [(5.13, 5.13, 0.00), (5.13, 0.00, 5.13), (0.00, 5.13, 5.13)]
 
 
 @pytest.fixture(scope="module")
-def silicon(tmp_path_factory):
+def silicon_calculation(tmp_path_factory):
     """Bulk Si on Elk's own defaults, reduced mesh included.
 
     Nothing here switches `symtype` off: the loop runs `symrf` on both regions
     (patches 0018 and 0022), so a symmetry-reduced k-set is the case it has to
     handle rather than one to avoid.
+
+    Nothing has been RUN on it -- `silicon` converges it, `silicon_initial`
+    deliberately does not.
     """
-    calculation = Structure(
+    return Structure(
         avec=SI_AVEC,
         species={"Si": [(0.0, 0.0, 0.0), (0.25, 0.25, 0.25)]},
     ).get_calculation(tmp_path_factory.mktemp("scf") / "si", xc="PW",
                       ngridk=(2, 2, 2), rgkmax=7.0)
-    calculation.ensure_ground_state()
-    with calculation.eigenstate_session() as session:
-        return (session.ground_state(), session.density_k(),
-                session.lapw_problem((0.0, 0.0, 0.0)))
+
+
+@pytest.fixture(scope="module")
+def silicon(silicon_calculation):
+    """The three export dicts at Elk's own CONVERGED ground state."""
+    from elkjax import driver
+    return driver.converged_state(silicon_calculation)
+
+
+@pytest.fixture(scope="module")
+def silicon_initial(silicon_calculation):
+    """The same three, at the TOP of Elk's first iteration (task 9006).
+
+    The density is the superposition of free atomic densities `rhoinit`
+    builds; no `STATE.OUT` is read and no SCF has run.  This is what
+    `elkjax.driver` starts from.
+    """
+    from elkjax import driver
+    return driver.initial_state(silicon_calculation)
 
 
 def test_genvsig_transforms_the_potential_times_the_characteristic_function(
@@ -212,6 +230,56 @@ def test_the_energy_no_longer_imports_the_eigenvalue_sum_or_the_entropy(
     assert abs(float(got["mu"]) - float(densityk["efermi"])) < 1e-8
 
 
+def test_the_step_is_differentiable_and_the_derivative_is_the_right_one(
+        silicon):
+    """`jvp(F)` against a central difference of F, along a random direction.
+
+    The direction is random and therefore breaks every crystal symmetry, which
+    matters: a symmetry-respecting perturbation makes the off-diagonal matrix
+    elements inside silicon's `Gamma_25'` multiplet vanish and hides exactly the
+    term that `elkjax.response` exists to get right.
+
+    **The two halves are compared separately and only one of them is a test of
+    the derivative.**  The muffin-tin half of the potential carries the nuclear
+    -Z/r at the first radial point and is 4.8e8 in norm, so a central difference
+    of it cannot resolve better than 4.8e8 * eps / (2h) -- at h = 1e-3 that is
+    2.4e-5 against a tangent of norm 3.8e-2, i.e. 6e-4, and the measured 5.1e-4
+    is that floor and nothing else (it grows as 1/h, measured 5.9e-3 at 1e-4 and
+    9.2e-2 at 1e-5, which is the difference degrading and not the derivative).
+    The interstitial half is 1e2 in norm and resolves cleanly: measured 6.6e-9.
+
+    With JAX's own `eigh` rule in place of `elkjax.response` the same
+    interstitial number is **1.9e-3, and does not move with h** -- flat across
+    1e-3, 1e-4 and 1e-5, which is the signature of a wrong derivative rather
+    than a noisy difference.
+    """
+    import jax
+    import jax.numpy as jnp
+    from elkjax import scf
+    groundstate, densityk, lapw = silicon
+    shape = tuple(int(n) for n in np.asarray(lapw["vsmt"]).shape)
+    ngtot = int(groundstate["ngtot"])
+
+    step = jax.jit(lambda v: scf.step(v, (lapw, groundstate, densityk)))
+    start = jnp.asarray(scf.pack(np.asarray(lapw["vsmt"]),
+                                 groundstate["vsir"]))
+    rng = np.random.default_rng(0)
+    direction = jnp.asarray(rng.normal(size=start.shape))
+    direction = direction / jnp.linalg.norm(direction)
+
+    _, tangent = jax.jvp(step, (start,), (direction,))
+    h = 1e-3
+    difference = (step(start + h * direction)
+                  - step(start - h * direction)) / (2 * h)
+    for name, bound, mine, theirs in zip(
+            ("muffin tin", "interstitial"), (2e-3, 1e-7),
+            scf.unpack(tangent, shape, ngtot),
+            scf.unpack(difference, shape, ngtot)):
+        error = float(jnp.linalg.norm(mine - theirs)
+                      / jnp.linalg.norm(theirs))
+        assert error < bound, f"{name}: {error:.3e}"
+
+
 @pytest.mark.skipif(os.environ.get("ELKPY_RUN_SLOW_TESTS") != "1",
                     reason="the SCF loop is ~8 min; set ELKPY_RUN_SLOW_TESTS=1")
 def test_the_loop_converges_to_elks_ground_state(silicon):
@@ -259,3 +327,117 @@ def test_the_loop_converges_to_elks_ground_state(silicon):
     assert abs(float(terms["engytot"])
                - float(groundstate["engytot"])) < 1e-6
     assert abs(float(got["mu"]) - float(densityk["efermi"])) < 1e-8
+
+
+# ------------------------------------- §3c: a run from the input file alone
+
+
+def test_the_initial_state_needs_no_converged_ground_state(silicon_initial):
+    """Task 9006 comes up on an `elk.in` and nothing else.
+
+    The fixture itself is most of the test -- `initial_state_session()` does
+    not call `ensure_ground_state()`, so if task 9006 needed a `STATE.OUT`
+    this would not have got here.  What is checked beyond that is that the
+    state really is Elk's INITIALISATION and not its answer.
+
+    The electron count is the sharp version of that.  `rhoinit` superposes
+    free ATOMIC densities and does not normalise them -- `rhonorm` acts on the
+    density the SCF produces, not on the starting guess -- so the count comes
+    out 6.4e-3 SHORT of 28 on Si.  A converged density is normalised to
+    machine precision, so the assertion is two-sided on purpose: close enough
+    to be a real density, and far enough to prove this is not one Elk has
+    iterated.
+    """
+    from elkjax import driver, integrate
+    groundstate, densityk, lapw = silicon_initial
+
+    driver.check_linearisation_frozen(lapw)
+    assert not np.asarray(lapw["apwve"]).any()
+    assert not np.asarray(lapw["lorbve"]).any()
+
+    count = float(integrate.cell_integral(
+        groundstate["rhomt"], groundstate["rhoir"], groundstate))
+    missing = abs(count - float(densityk["chgtot"]))
+    assert missing < 1e-2, "this is not a plausible starting density"
+    assert missing > 1e-6, (
+        "the starting density is normalised to the electron count, so this is "
+        "a converged density rather than rhoinit's superposition")
+
+
+def test_the_core_integral_reproduces_elks_own_energykncr(silicon_initial,
+                                                          silicon):
+    """`int rho_core v_s`, at BOTH exports, against `evalsumcr - engykncr`.
+
+    This is the whole transcription behind `core_eigenvalue_sum`, and it is
+    checked at two different potentials on purpose: the quantity it exists to
+    correct is the one that MOVES between them.
+    """
+    from elkjax import energy
+    for groundstate, densityk, lapw in (silicon_initial, silicon):
+        mine = float(energy.core_potential_energy(
+            lapw["vsmt"], densityk, groundstate))
+        theirs = float(densityk["evalsumcr"]) - float(densityk["engykncr"])
+        assert abs(mine - theirs) / abs(theirs) < 1e-14
+
+
+def test_the_frozen_core_quantity_is_the_kinetic_energy_not_the_eigenvalues(
+        silicon_initial, silicon):
+    """Which core scalar may be held fixed across the loop, measured.
+
+    `energy.f90` builds the kinetic energy as
+    `evalsum - engyvcl - engyvxc`, so the core's share of it is
+    `evalsumcr - int rho_core v_s` -- BOTH halves at the current potential.
+    Freezing `evalsumcr` alone integrates the same core density against a
+    potential its eigenvalues never saw.  Between the atomic superposition and
+    the converged answer the two scalars move by three orders of magnitude
+    apart, which is why one of them is a wrong formula and the other is the
+    approximation this port actually makes.
+    """
+    _, initial, _ = silicon_initial
+    _, converged, _ = silicon
+    moved_eigenvalues = abs(float(converged["evalsumcr"])
+                            - float(initial["evalsumcr"]))
+    moved_kinetic = abs(float(converged["engykncr"])
+                        - float(initial["engykncr"]))
+    assert moved_eigenvalues > 1.0
+    assert moved_kinetic < 1e-2
+    assert moved_eigenvalues / moved_kinetic > 100
+
+
+@pytest.mark.skipif(os.environ.get("ELKPY_RUN_SLOW_TESTS") != "1",
+                    reason="the run-from-input loop is ~3 min; set "
+                           "ELKPY_RUN_SLOW_TESTS=1")
+def test_a_run_from_the_input_file_reaches_elks_ground_state(
+        silicon_initial, silicon):
+    """§3c: 40 iterations from `rhoinit`'s atomic superposition.
+
+    The start is not a perturbation of the answer -- its Fermi level is
+    0.1249 Ha against the converged 0.2140 -- and linear mixing at 0.4 reaches
+    a residual of 9.3e-8 in 40 iterations.  Measured: `engytot` within
+    3.6e-4 Ha of Elk's own and the Fermi level within 4.3e-5 Ha.
+
+    **Both of those bounds are the FROZEN CORE and nothing else**, which is
+    the second half of this test: putting the converged `rhocr`/`engykncr`
+    into the same initial triple, and changing nothing else, takes the same
+    run to 3.8e-8 Ha and 4.5e-9 Ha -- §3b's own agreement, from a cold start.
+    So a regression here that moves only the first pair is core physics, and
+    one that moves the second pair is the map.
+    """
+    from elkjax import driver
+    groundstate, densityk, lapw = silicon_initial
+    reference, converged, _ = silicon
+    energy, fermi = float(reference["engytot"]), float(converged["efermi"])
+
+    frozen = driver.run(state=silicon_initial, mixing=0.4, tol=1e-7,
+                        maxiter=60)
+    assert frozen.iterations < 60 and float(frozen.residual) < 1e-7
+    assert abs(frozen.energy - energy) < 1e-3
+    assert abs(frozen.mu - fermi) < 1e-4
+
+    swapped = dict(densityk)
+    for key in ("rhocr", "evalsumcr", "engykncr"):
+        swapped[key] = converged[key]
+    exact = driver.run(state=(groundstate, swapped, lapw), mixing=0.4,
+                       tol=1e-7, maxiter=60)
+    assert abs(exact.energy - energy) < 1e-6
+    assert abs(exact.mu - fermi) < 1e-7

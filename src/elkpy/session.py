@@ -604,6 +604,13 @@ class EigenstateSession:
         Elk's own `efermi`, so a transcription of the zone-summed Fermi level
         can be checked on Elk's own eigenvalues, with no assembly in the path
         (`docs/jax_port_phase3.md`).
+
+        Two core scalars come with them: `evalsumcr`, the core half of
+        `evalsum` (patch 0021), and `engykncr`, the core KINETIC energy at
+        this potential (patch 0024). A loop run outside Elk must freeze the
+        second, not the first -- `energy.f90` builds the kinetic energy as
+        `evalsum - engyvcl - engyvxc`, so both halves of the core's share
+        have to sit at the same potential.
         """
         self._send("DENSITYK")
         return parse_densityk_response(self._read_until_sentinel())

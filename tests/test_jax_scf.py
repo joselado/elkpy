@@ -92,3 +92,30 @@ def test_the_eigenvalue_sum_carries_the_weights_and_the_core():
     got = float(energy.eigenvalue_sum(evalsv, occsv, wkpt, -10.0))
     expected = 0.25 * (2 * -1.0) + 0.75 * (2 * -2.0 + 1 * 0.25) - 10.0
     assert got == pytest.approx(expected, rel=1e-15)
+
+
+def test_a_species_whose_linearisation_energies_elk_searches_is_refused():
+    """`linengy.f90` only calls `findband` where the species file sets
+    `apwve`/`lorbve` true; otherwise `apwe`/`lorbe` keep the defaults `init1`
+    copied in and never move for the whole run.  `elkjax.driver` freezes them,
+    which is exact in the second case and an approximation in the first -- and
+    `apwe` alone cannot tell the two apart, a searched energy and a default
+    one being the same kind of number.  So the flags themselves are exported
+    (patch 0024) and this reads them.
+    """
+    from elkjax import driver
+    frozen = {"autolinengy": False,
+              "apwve": np.zeros((1, 9, 1), dtype=bool),
+              "lorbve": np.zeros((2, 2, 1), dtype=bool)}
+    driver.check_linearisation_frozen(frozen)
+
+    searched = dict(frozen, apwve=np.ones((1, 9, 1), dtype=bool))
+    with pytest.raises(ValueError, match="apwve"):
+        driver.check_linearisation_frozen(searched)
+
+    automatic = dict(frozen, autolinengy=True)
+    with pytest.raises(ValueError, match="autolinengy"):
+        driver.check_linearisation_frozen(automatic)
+
+    with pytest.raises(KeyError, match="0024"):
+        driver.check_linearisation_frozen({})

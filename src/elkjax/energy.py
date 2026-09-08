@@ -42,8 +42,8 @@ import jax.numpy as jnp
 from . import grid, integrate, poisson, symmetry, xc
 
 __all__ = ["madelung", "coulomb_terms", "exchange_correlation_terms",
-           "kohn_sham_potentials", "eigenvalue_sum", "entropy_term", "terms",
-           "report"]
+           "kohn_sham_potentials", "eigenvalue_sum", "entropy_term",
+           "core_potential_energy", "core_eigenvalue_sum", "terms", "report"]
 
 Y00 = 0.28209479177387814347
 
@@ -171,6 +171,67 @@ def eigenvalue_sum(evalsv, occsv, wkpt, evalsumcr):
     """
     return (jnp.sum(jnp.asarray(wkpt)[:, None] * jnp.asarray(occsv)
                     * jnp.asarray(evalsv)) + evalsumcr)
+
+
+def core_potential_energy(vsmt, densityk, groundstate):
+    r"""``energykncr``'s second half: :math:`\int\rho_{\rm core}\,v_s\,d^3r`.
+
+    The core density is spherical and stored as the :math:`(0,0)`
+    *coefficient* (`elkjax.density.add_core` has the convention), so
+    ``rfmtinp``'s sum over :math:`(\ell,m)` keeps only the :math:`\ell=0`
+    column of :math:`v_s`.  Muffin tins only -- the core does not leak into
+    the interstitial.
+    """
+    lmmaxi, lmmaxo = int(groundstate["lmmaxi"]), int(groundstate["lmmaxo"])
+    vsmt, rhocr = jnp.asarray(vsmt), jnp.asarray(densityk["rhocr"])
+    total = 0.0
+    for ias in range(int(groundstate["natmtot"])):
+        is_ = int(np.asarray(groundstate["idxis"])[ias]) - 1
+        nr = int(np.asarray(groundstate["nrmt"])[is_])
+        nri = int(np.asarray(groundstate["nrmti"])[is_])
+        weights = jnp.asarray(np.asarray(groundstate["wr2mt"])[is_, :nr])
+        core = rhocr[ias, :, :nr].sum(axis=0)
+        spherical = integrate._dense(vsmt[ias], nr, nri, lmmaxi, lmmaxo)[:, 0]
+        total = total + jnp.sum(weights * core * spherical)
+    return total
+
+
+def core_eigenvalue_sum(vsmt, densityk, groundstate):
+    r"""The core's share of ``evalsum``, moved to the potential it is used at.
+
+    **This is the one place where freezing the core is not simply "an input at
+    fixed potential".**  ``energy.f90`` builds the kinetic energy as
+    :math:`\Sigma_\varepsilon-\int\rho v_{cl}-\int\rho v_{xc}`, and the core's
+    share of that is ``energykncr``,
+
+    .. math::
+
+        T_{\rm core} \;=\; \sum_{\rm core} f\,\varepsilon
+        \;-\; \int\rho_{\rm core}\,v_s ,
+
+    with **both** halves at the current potential -- Elk recomputes
+    :math:`\varepsilon_{\rm core}` (``gencore``) every iteration, and
+    :math:`\rho` in :math:`\int\rho v_{cl}` includes the core.  Freezing
+    :math:`\sum f\varepsilon` alone leaves the same :math:`\rho_{\rm core}`
+    integrated against a potential its eigenvalues never saw, and the mismatch
+    is *first order* in the potential change, over 20 core electrons sitting
+    exactly where the potential moves most.  Measured on bulk Si between the
+    atomic-superposition start and the converged answer, ``evalsumcr`` moves
+    by **2.035 Ha** while :math:`T_{\rm core}` moves by **1.5e-3 Ha**: the
+    first number is a wrong formula, the second is the physics.
+
+    So :math:`T_{\rm core}` is what is held fixed -- patch 0024 exports it as
+    ``engykncr`` -- and the potential term is rebuilt at ``vsmt``.  At the
+    export's own potential this returns ``evalsumcr`` exactly, so nothing that
+    starts from Elk's converged state changes.
+    """
+    if densityk.get("engykncr") is None:
+        raise KeyError(
+            "this DENSITYK export carries no `engykncr` -- rebuild the binary "
+            "with patches/0024-initial-state.patch. Substituting `evalsumcr` "
+            "is only correct at the potential the export was written at.")
+    return (float(densityk["engykncr"])
+            + core_potential_energy(vsmt, densityk, groundstate))
 
 
 def entropy_term(occsv, wkpt, swidth, occmax, stype=3):

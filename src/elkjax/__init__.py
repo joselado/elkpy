@@ -18,5 +18,7 @@ import jax as _jax
 _jax.config.update("jax_enable_x64", True)
 
 from . import memory, reference, projector, fixedpoint, scftoy, lapw  # noqa: E402
+from . import driver  # noqa: E402
 
-__all__ = ["memory", "reference", "projector", "fixedpoint", "scftoy", "lapw"]
+__all__ = ["memory", "reference", "projector", "fixedpoint", "scftoy", "lapw",
+           "driver"]

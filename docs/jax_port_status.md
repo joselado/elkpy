@@ -14,12 +14,17 @@ measured tolerance.
 
 **Where the port is.** Phase 0 closed, Phase 1 closed except for three named items,
 Phase 2 closed as a set of forward checks (§§2a-2k, one open question in §2k), and
-**Phase 3 has its forward criterion**: the Kohn-Sham loop closes, Elk's converged
-potential is a fixed point of it — 1.8e-15 relative in the muffin tin, 1.0e-9 in the
-interstitial, where the start mixes Elk's mixed `vsmt` with its unmixed `vsir` — and a
-run started 0.30 away in potential norm converges to Elk's total energy within 3.0e-8 Ha
-and its Fermi level within 1.4e-9 Ha (`docs/jax_port_phase3.md`). The loop is **forward only** — it runs on
-concrete arrays, and Phase 3's three gradient signatures have not been started.
+**Phase 3 has its forward criterion, now from a cold start**: the Kohn-Sham loop closes,
+Elk's converged potential is a fixed point of it — 1.8e-15 relative in the muffin tin,
+1.0e-9 in the interstitial, where the start mixes Elk's mixed `vsmt` with its unmixed
+`vsir` — and §3c runs bulk Si **from the `elk.in` alone**: patch 0024's task 9006 stops
+Elk at the top of its own first iteration, and the JAX loop converges from `rhoinit`'s
+atomic superposition in 40 iterations to within **3.6e-4 Ha** of Elk's total energy and
+**4.3e-5 Ha** of its Fermi level. All of that gap is the frozen core: swapping Elk's
+converged `rhocr`/`engykncr` in, and changing nothing else, gives 3.8e-8 Ha and
+4.5e-9 Ha (`docs/jax_port_phase3.md`). The loop is **forward only** — the step is
+traceable and its `jvp` is checked, but nothing has been differentiated through the
+converged fixed point, and Phase 3's three gradient signatures have not been started.
 
 ---
 
@@ -635,7 +640,8 @@ size of the observed failure.
 |---|---|---|
 | the occupations and the zone-summed Fermi level (`occupy.f90`) | whether study §8(b)'s rule works with the k-point weights that a single k-point makes cancel | **done, patch 0023** — Elk's `efermi` and `occsv` reproduced **bitwise** on bulk Si and fcc Al, on Elk's own `evalsv`, i.e. with the assembly out of the path. $d\mu$ is a `custom_jvp` over a bisection that is never differentiated; forward against reverse against central FD in all three differentiable arguments on a real metal. Replacing Elk's reduced-mesh weights with uniform ones moves $\mu$, asserted, so the weights cannot silently stop mattering |
 | **Forward:** a converged ground state reproducing Elk's total energy and Fermi level | whether the composition of §2i and §2j is *stable*, which no Phase 2 check asked | **done** — Elk's converged $v^*$ is a fixed point of the map to $1.8\times10^{-15}$ relative in the muffin tin and $1.0\times10^{-9}$ in the interstitial (the two halves differ by four orders of magnitude in norm, so one bound on the packed vector says nothing about the second); from a start $0.30$ away in potential norm, linear mixing at $\beta=0.4$ converges geometrically (~0.62/iteration) with $\lVert v-v^*\rVert$ tracking $\lVert F(v)-v\rVert$ all the way down, reaching `engytot` within **3.0e-8 Ha** and $\mu$ within **1.4e-9 Ha** — inside the study's own 1e-6 and 1e-8. The iteration count is deliberately NOT compared, as the study itself withdraws that criterion |
-| **Gradient A** (inter-mixer difference scaling with `epspot`), **B** ($d\mu/d\varepsilon$ on bcc Fe), **C** (the tolerance plateau) | whether implicit differentiation is actually wired up | **not started.** The blocker is one line, not a research problem: `rhomagk`'s `epsocc` skip is a Python `continue` on the occupation value, so the density accumulation needs concrete arrays. Writing it as a zeroed weight is exactly equivalent |
+| **Forward, from cold:** a ground state from the `elk.in` alone | whether the loop is a *calculation* or only a map with a hand-made starting point | **done, patch 0024** (§3c) — task 9006 stops Elk at the top of its own first iteration, so the exports describe iteration zero, and `elkjax.driver.run()` converges bulk Si from `rhoinit`'s atomic superposition ($\mu=0.1249$ Ha against the converged $0.2140$) in 40 iterations of linear mixing at $\beta=0.4$: `engytot` within **3.6e-4 Ha**, $\mu$ within **4.3e-5 Ha**. **All of that is the frozen core** — the same run with Elk's converged `rhocr`/`engykncr` swapped in gives 3.8e-8 Ha and 4.5e-9 Ha. It also corrected a formula: what may be frozen is $T_{\rm core}$ (`engykncr`), not the core eigenvalue sum, worth **2.0 Ha** and invisible to every test that starts at Elk's answer. The remaining work to close 3.6e-4 Ha is `gencore` in the loop |
+| **Gradient A** (inter-mixer difference scaling with `epspot`), **B** ($d\mu/d\varepsilon$ on bcc Fe), **C** (the tolerance plateau) | whether implicit differentiation is actually wired up | **not started**, but the forward blocker is gone: `rhomagk`'s `epsocc` skip is a zeroed weight now (`density.skip_below_epsocc`) and `elkjax.response` replaced JAX's own `eigh` rule, so `scf.step` traces and its `jvp` matches a central difference to 6.6e-9 in the interstitial half (JAX's rule: 1.9e-3, flat in the step size). Nothing has yet been differentiated *through* the converged fixed point |
 
 **Two facts from Phase 3 worth carrying even if the log is never opened.**
 

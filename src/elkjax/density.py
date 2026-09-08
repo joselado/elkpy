@@ -41,17 +41,36 @@ magnetic case: ``rmk1``/``rmk2`` are not transcribed, only ``rmk3``.
 
 import numpy as np
 
+import jax
 import jax.numpy as jnp
 
-__all__ = ["interstitial_wavefunction", "interstitial_density", "coarsen",
-           "normalisation_offset", "coarse_radial_indices",
-           "muffin_tin_wavefunctions", "muffin_tin_density",
-           "pack_coarse", "pack_fine", "to_harmonics",
-           "coarse_to_fine", "solve_zone", "density_from_potential",
-           "add_core", "normalise", "refine", "converged_density",
-           "symmetrise_interstitial"]
+__all__ = ["skip_below_epsocc", "interstitial_wavefunction",
+           "interstitial_density", "coarsen", "normalisation_offset",
+           "coarse_radial_indices", "muffin_tin_wavefunctions",
+           "muffin_tin_density", "pack_coarse", "pack_fine", "to_harmonics",
+           "coarse_to_fine", "state_factors", "zone_matrices", "solve_zone",
+           "density_from_potential", "add_core", "normalise", "refine",
+           "converged_density", "symmetrise_interstitial"]
 
 EPSOCC = 1.0e-8
+
+
+def skip_below_epsocc(occupations):
+    r"""``rhomagk``'s ``epsocc`` skip, written as a weight rather than a branch.
+
+    Elk leaves a state out of the density sum when :math:`|f|<` ``epsocc``.
+    Multiplying that state by an exact zero is the same arithmetic -- it
+    contributes nothing either way -- but it is a *value* rather than Python
+    control flow, so the accumulation stays a function of the occupations and
+    can be traced.  That is what every Phase 3 gradient needs; as a ``continue``
+    the density could only ever be evaluated on concrete arrays.
+
+    The mask is treated as a constant of the derivative, which is what the
+    skip itself means: a state Elk drops contributes nothing to
+    :math:`d\rho` either.
+    """
+    occupations = jnp.asarray(occupations)
+    return jnp.where(jnp.abs(occupations) < EPSOCC, 0.0, occupations)
 
 
 def _inverse_fft(values, grid):
@@ -69,44 +88,68 @@ def _forward_fft(values, grid):
 def interstitial_wavefunction(coefficients, igkig, densityk):
     r""":math:`\psi_n({\bf r})` on the coarse interstitial grid.
 
-    ``coefficients`` is one state's ``evecfv(1:ngk, n)``; ``igkig`` maps each
-    :math:`{\bf G+k}` to the global :math:`{\bf G}` index, and ``igfc`` maps
-    that to a slot of the coarse FFT array.  The two-step indirection is the
-    part a transcription gets wrong, and it is Elk's own: ``igkig`` is a
-    property of the k-point, ``igfc`` of the grid.
+    ``coefficients`` is ``evecfv(1:ngk, n)`` for one state, or a ``(nst, nmat)``
+    stack of them -- the leading axis is kept, so a whole band set costs one
+    call.  ``igkig`` maps each :math:`{\bf G+k}` to the global :math:`{\bf G}`
+    index, and ``igfc`` maps that to a slot of the coarse FFT array.  The
+    two-step indirection is the part a transcription gets wrong, and it is
+    Elk's own: ``igkig`` is a property of the k-point, ``igfc`` of the grid.
     """
     grid = tuple(int(n) for n in densityk["ngdgc"])
     igfc = np.asarray(densityk["igfc"])
     igkig = np.asarray(igkig)
-    slots = igfc[igkig - 1] - 1
-    array = jnp.zeros(int(densityk["ngtc"]), dtype=complex)
+    slots = jnp.asarray(igfc[igkig - 1] - 1)
+    coefficients = jnp.asarray(coefficients)
+    flat = coefficients.ndim == 1
+    coefficients = coefficients[None, :] if flat else coefficients
+    array = jnp.zeros((coefficients.shape[0], int(densityk["ngtc"])),
+                      dtype=complex)
     # only the first `ngk` coefficients: the rest are local orbitals, which
     # live entirely inside the muffin tins and contribute nothing here.  The
     # muffin-tin half uses all `nmat` of them.
-    array = array.at[jnp.asarray(slots)].set(
-        jnp.asarray(coefficients)[:igkig.size])
-    return _inverse_fft(array, grid)
+    array = array.at[:, slots].set(coefficients[:, :igkig.size])
+    out = jax.vmap(lambda row: _inverse_fft(row, grid))(array)
+    return out[0] if flat else out
 
 
-def interstitial_density(densityk, omega, ispn=0):
+def state_factors(densityk, ispn=0):
+    r"""Elk's own occupations as the two factors the density is bilinear in.
+
+    Returns ``{(ik, ispn): (bra, ket)}`` with ``bra`` the eigenvectors and
+    ``ket = f bra``, so that
+    :math:`\rho=\sum_a\mathrm{Re}[\overline{\psi(\bar c_a)}\,\psi(x_a)]`
+    is :math:`\sum_af_a|\psi_a|^2`.  Splitting the occupation off like this is
+    what lets `elkjax.response.density_factors` hand the same accumulation a
+    pair whose *derivative* carries the whole degenerate-multiplet
+    cancellation; with Elk's own occupations it is just a rewriting.
+    """
+    out = {}
+    for ik in range(int(densityk["nkpt"])):
+        vectors = jnp.asarray(densityk["evecfv"][(ik, ispn)])
+        occupied = skip_below_epsocc(
+            jnp.asarray(densityk["occsv"][ik])[:vectors.shape[0]])
+        out[(ik, ispn)] = (vectors, vectors * occupied[:, None])
+    return out
+
+
+def interstitial_density(densityk, omega, ispn=0, factors=None):
     r"""``rhomagk``'s ``rmk3`` branch, summed over the zone.
 
     Returns the coarse-grid interstitial valence density, *before* ``rhonorm``.
-    States with :math:`|f|<` ``epsocc`` are skipped exactly as Elk skips them;
-    including them would change the result by less than :math:`10^{-8}` times a
-    wavefunction modulus, which is above the tolerance this is compared at.
+    ``factors`` defaults to :func:`state_factors`, i.e. to Elk's own
+    occupations; `elkjax.response.density_factors` is what replaces them when
+    the density is being differentiated.
     """
+    factors = state_factors(densityk, ispn) if factors is None else factors
     total = jnp.zeros(int(densityk["ngtc"]))
     for ik in range(int(densityk["nkpt"])):
         weight = float(densityk["wkpt"][ik])
-        occupations = np.asarray(densityk["occsv"][ik])
-        vectors = densityk["evecfv"][(ik, ispn)]
         igkig = densityk["igkig"][(ik, ispn)]
-        for ist, occupation in enumerate(occupations[:vectors.shape[0]]):
-            if abs(occupation) < EPSOCC:
-                continue
-            psi = interstitial_wavefunction(vectors[ist], igkig, densityk)
-            total = total + (occupation * weight / omega) * jnp.abs(psi) ** 2
+        bra, ket = factors[(ik, ispn)]
+        left = interstitial_wavefunction(bra, igkig, densityk)
+        right = interstitial_wavefunction(ket, igkig, densityk)
+        total = total + (weight / omega) * jnp.sum(
+            jnp.real(jnp.conj(left) * right), axis=0)
     return total
 
 
@@ -170,19 +213,29 @@ def coarse_radial_indices(densityk, groundstate, ias):
 
 def muffin_tin_wavefunctions(coefficients, apwalm, ngk, ias, densityk,
                              groundstate, lapw):
-    r"""``wfmtsv`` with ``tsh=.false.``: one state on the coarse angular grid.
+    r"""``wfmtsv`` with ``tsh=.false.``: states on the coarse angular grid.
 
-    Returns a dense ``(nrcmt, lmmaxo)`` complex array of VALUES on the angular
-    grid (not harmonic coefficients), which is what ``rhomagk`` squares.
+    ``coefficients`` is one state's ``evecfv(:, n)`` or a ``(nst, nmat)`` stack
+    of them; the return is correspondingly ``(nrcmt, lmmaxo)`` or
+    ``(nst, nrcmt, lmmaxo)`` of complex VALUES on the angular grid (not
+    harmonic coefficients), which is what ``rhomagk`` squares.
 
     The augmented part and the local-orbital part are summed into the same
     array, in that order, exactly as ``wfmtsv`` does; the sum over APW orders
     ``io`` is inside the sum over :math:`lm`, and the coefficient is a plain
     ``zdotu`` -- **not** conjugated, since these are expansion coefficients of
     the state rather than an inner product with it.
+
+    The :math:`lm` loop is a matrix product rather than a Python loop: at 49
+    harmonics and two APW orders it is the difference between ~100 traced
+    operations per state and two, which is what makes a traced Kohn-Sham step
+    compile in seconds instead of minutes.  Orders above ``apword(l)`` are
+    masked out of BOTH factors rather than multiplied by a zero radial
+    function, since an unset ``apwalm`` slot may hold anything and
+    :math:`0\times\mathrm{NaN}` is not zero.
     """
     isp = int(groundstate["idxis"][ias]) - 1
-    lmaxi, lmaxo = int(groundstate["lmaxi"]), int(groundstate["lmaxo"])
+    lmaxo = int(groundstate["lmaxo"])
     lmmaxi, lmmaxo = int(groundstate["lmmaxi"]), int(groundstate["lmmaxo"])
     nrcmti = int(densityk["nrcmti"][isp])
     nrcmt = int(densityk["nrcmt"][isp])
@@ -190,8 +243,10 @@ def muffin_tin_wavefunctions(coefficients, apwalm, ngk, ias, densityk,
     rows = np.concatenate([inner, outer])
 
     apword = np.asarray(lapw["apword"])
-    apwfr = np.asarray(lapw["apwfr_full"])[:, 0]          # the function itself
-    lofr = np.asarray(lapw["lofr"])[:, 0]
+    # the radial functions are a FUNCTION of the potential (patch 0015), so
+    # they arrive traced whenever the density is differentiated in v
+    apwfr = jnp.asarray(lapw["apwfr_full"])[:, 0]         # the function itself
+    lofr = jnp.asarray(lapw["lofr"])[:, 0]
     idxlo = np.asarray(lapw["idxlo"])
     nlorb = int(np.asarray(lapw["nlorb"])[isp])
     # `lorbl` is a LIST over species of per-species arrays, not a rectangular
@@ -201,36 +256,46 @@ def muffin_tin_wavefunctions(coefficients, apwalm, ngk, ias, densityk,
     lorbl = np.asarray(lapw["lorbl"][isp])
 
     coefficients = jnp.asarray(coefficients)
-    out = jnp.zeros((nrcmt, lmmaxo), dtype=complex)
+    flat = coefficients.ndim == 1
+    coefficients = coefficients[None, :] if flat else coefficients
+    lvec = np.concatenate([np.full(2 * l + 1, l) for l in range(lmaxo + 1)])
+    out = jnp.zeros((coefficients.shape[0], nrcmt, lmmaxo), dtype=complex)
 
-    for l in range(lmaxo + 1):
-        for io in range(int(apword[l, isp])):
-            radial = jnp.asarray(apwfr[rows, io, l, ias])
-            for lm in range(l * l, (l + 1) ** 2):
-                y = jnp.dot(coefficients[:ngk], jnp.asarray(apwalm[:ngk, io, lm]))
-                out = out.at[:, lm].add(y * radial)
+    for io in range(int(apword[:lmaxo + 1, isp].max())):
+        live = jnp.asarray(io < apword[lvec, isp])
+        matched = jnp.where(live[None, :],
+                            jnp.asarray(apwalm)[:ngk, io, :lmmaxo], 0.0)
+        radial = jnp.where(live[None, :], apwfr[rows[:, None], io,
+                                               lvec[None, :], ias], 0.0)
+        out = out + (coefficients[:, :ngk] @ matched)[:, None, :] \
+            * radial[None, :, :]
 
-    for ilo in range(nlorb):
-        l = int(lorbl[ilo])
-        radial = jnp.asarray(lofr[rows, ilo, ias])
-        for lm in range(l * l, (l + 1) ** 2):
-            index = int(idxlo[lm, ilo, ias]) - 1
-            y = coefficients[ngk + index]
-            out = out.at[:, lm].add(y * radial)
+    slots = np.array([lm for ilo in range(nlorb)
+                      for lm in range(int(lorbl[ilo]) ** 2,
+                                      (int(lorbl[ilo]) + 1) ** 2)], dtype=int)
+    if slots.size:
+        which = np.array([ilo for ilo in range(nlorb)
+                          for _ in range(2 * int(lorbl[ilo]) + 1)], dtype=int)
+        index = np.array([int(idxlo[lm, ilo, ias]) - 1
+                          for ilo, lm in zip(which, slots)], dtype=int)
+        out = out.at[:, :, jnp.asarray(slots)].add(
+            coefficients[:, ngk + jnp.asarray(index)][:, None, :]
+            * lofr[rows[:, None], which[None, :], ias][None, :, :])
 
     # harmonic coefficients -> values on the angular grid, region by region.
     # The COMPLEX transform, not patch 0016's real `rbsht`: a wavefunction is
     # complex and Elk keeps a separate matrix for it.
     zbshti = jnp.asarray(densityk["zbshti"])
     zbshto = jnp.asarray(densityk["zbshto"])
-    top = out[:nrcmti, :lmmaxi] @ zbshti.T
-    bottom = out[nrcmti:] @ zbshto.T
-    return jnp.concatenate(
-        [jnp.zeros((nrcmti, lmmaxo), dtype=complex).at[:, :lmmaxi].set(top),
-         bottom], axis=0)
+    top = out[:, :nrcmti, :lmmaxi] @ zbshti.T
+    bottom = out[:, nrcmti:] @ zbshto.T
+    values = jnp.concatenate(
+        [jnp.zeros((out.shape[0], nrcmti, lmmaxo),
+                   dtype=complex).at[:, :, :lmmaxi].set(top), bottom], axis=1)
+    return values[0] if flat else values
 
 
-def muffin_tin_density(densityk, groundstate, lapw, ispn=0):
+def muffin_tin_density(densityk, groundstate, lapw, ispn=0, factors=None):
     r"""``rhomagk``'s muffin-tin accumulation, summed over the zone.
 
     Returned dense per atom as ``(natmtot, nrcmt, lmmaxo)`` VALUES on the
@@ -238,33 +303,33 @@ def muffin_tin_density(densityk, groundstate, lapw, ispn=0):
     there is **no** :math:`1/\Omega` here: the muffin-tin weight is
     :math:`f_{n\mathbf k}w_{\mathbf k}` and only the interstitial carries the
     cell volume.
+
+    ``factors`` is the ``(bra, ket)`` pair per k-point; see
+    :func:`state_factors`.
     """
     from .hamiltonian import matching_coefficients
 
+    factors = state_factors(densityk, ispn) if factors is None else factors
     natmtot = int(groundstate["natmtot"])
-    lmmaxo = int(groundstate["lmmaxo"])
     bvec = np.asarray(groundstate["bvec"])
     vgc = np.asarray(groundstate["vgc"])
 
     out = [None] * natmtot
     for ik in range(int(densityk["nkpt"])):
         weight = float(densityk["wkpt"][ik])
-        vectors = densityk["evecfv"][(ik, ispn)]
         igkig = np.asarray(densityk["igkig"][(ik, ispn)])
         ngk = int(densityk["ngk"][ik, ispn])
         vgkc = (vgc[:, igkig - 1].T
                 + (bvec @ np.asarray(densityk["vkl"])[:, ik])[None, :])
         apwalm = matching_coefficients(lapw, jnp.asarray(vgkc))
-        occupations = np.asarray(densityk["occsv"][ik])
+        bra, ket = factors[(ik, ispn)]
         for ias in range(natmtot):
-            for ist, occupation in enumerate(occupations[:vectors.shape[0]]):
-                if abs(occupation) < EPSOCC:
-                    continue
-                psi = muffin_tin_wavefunctions(
-                    vectors[ist], apwalm[..., ias], ngk, ias, densityk,
-                    groundstate, lapw)
-                term = (occupation * weight) * jnp.abs(psi) ** 2
-                out[ias] = term if out[ias] is None else out[ias] + term
+            left = muffin_tin_wavefunctions(bra, apwalm[..., ias], ngk, ias,
+                                            densityk, groundstate, lapw)
+            right = muffin_tin_wavefunctions(ket, apwalm[..., ias], ngk, ias,
+                                             densityk, groundstate, lapw)
+            term = weight * jnp.sum(jnp.real(jnp.conj(left) * right), axis=0)
+            out[ias] = term if out[ias] is None else out[ias] + term
     return jnp.stack(out)
 
 
@@ -351,6 +416,27 @@ def pack_fine(values, groundstate, ias):
 # --------------------------------------------- the loop closed, one iteration
 
 
+def zone_matrices(lapw, groundstate, densityk, ispn=0):
+    r"""``(H, O)`` at every k-point of Elk's own set, as a list.
+
+    Split out of :func:`solve_zone` because the differentiable path needs the
+    matrices themselves: `elkjax.response.density_factors` is a function of
+    :math:`(H,O,\mu)` and rebuilds the eigenvectors inside its own rule.
+    """
+    from .hamiltonian import eigenproblem_on_gset
+
+    bvec = np.asarray(groundstate["bvec"])
+    vgc = np.asarray(groundstate["vgc"])
+    out = []
+    for ik in range(int(densityk["nkpt"])):
+        igkig = np.asarray(densityk["igkig"][(ik, ispn)])
+        ngp = int(densityk["ngk"][ik, ispn])
+        vgkc = (vgc[:, igkig - 1].T
+                + (bvec @ np.asarray(densityk["vkl"])[:, ik])[None, :])
+        out.append(eigenproblem_on_gset(lapw, groundstate, igkig, vgkc, ngp))
+    return out
+
+
 def solve_zone(lapw, groundstate, densityk, ispn=0, eigenvalues=False):
     r"""Diagonalise at every k-point of Elk's own set, from the potential.
 
@@ -370,18 +456,12 @@ def solve_zone(lapw, groundstate, densityk, ispn=0, eigenvalues=False):
     (non-spin-polarised, no spin-orbit) calculation ``eveqnsv`` is the
     identity, so these first-variational eigenvalues **are** Elk's ``evalsv``.
     """
-    from .hamiltonian import cholesky_reduce, eigenproblem_on_gset
+    from .hamiltonian import cholesky_reduce
 
-    bvec = np.asarray(groundstate["bvec"])
-    vgc = np.asarray(groundstate["vgc"])
     nstfv = int(densityk["nstfv"])
     out, spectrum = {}, []
-    for ik in range(int(densityk["nkpt"])):
-        igkig = np.asarray(densityk["igkig"][(ik, ispn)])
-        ngp = int(densityk["ngk"][ik, ispn])
-        vgkc = (vgc[:, igkig - 1].T
-                + (bvec @ np.asarray(densityk["vkl"])[:, ik])[None, :])
-        h, o = eigenproblem_on_gset(lapw, groundstate, igkig, vgkc, ngp)
+    for ik, (h, o) in enumerate(zone_matrices(lapw, groundstate, densityk,
+                                              ispn=ispn)):
         reduced, chol = cholesky_reduce(h, o)
         values, y = jnp.linalg.eigh(reduced)
         # c = L^{-dagger} y, which restores Elk's own normalisation
@@ -457,7 +537,7 @@ def normalise(muffin, interstitial, densityk, groundstate):
     natmtot = int(groundstate["natmtot"])
     packed = jnp.stack([pack_fine(muffin[ias], groundstate, ias)
                         for ias in range(natmtot)])
-    count = float(integrate.cell_integral(packed, interstitial, groundstate))
+    count = integrate.cell_integral(packed, interstitial, groundstate)
     omega = float(groundstate["omega"])
     shift = (float(densityk["chgtot"]) - count) / omega
     y00i = 3.54490770181103205460
@@ -486,7 +566,7 @@ def refine(coarse, groundstate, densityk):
 
 
 def converged_density(densityk, groundstate, lapw, vectors=None, ispn=0,
-                      symmetrise=None):
+                      symmetrise=None, factors=None):
     r"""The whole of ``rhomag``: eigenvectors to Elk's converged ``rhomt``/``rhoir``.
 
     ``rhomagk`` → ``rhomagsh`` → ``symrf`` → ``rfmtctof`` / ``rfirctof`` →
@@ -502,7 +582,10 @@ def converged_density(densityk, groundstate, lapw, vectors=None, ispn=0,
 
     ``vectors`` overrides the exported ``evecfv`` -- pass
     :func:`solve_zone`'s output to drive the whole thing from the potential
-    instead.
+    instead.  ``factors`` overrides the ``(bra, ket)`` pair outright and is
+    what `elkjax.scf` uses: the occupations then reach the accumulation inside
+    a pair whose derivative is `elkjax.response`'s, rather than as a separate
+    array.
 
     Returns ``(muffin tin dense on the fine mesh, interstitial on the fine
     grid)``.
@@ -518,11 +601,12 @@ def converged_density(densityk, groundstate, lapw, vectors=None, ispn=0,
     if symmetrise is None:
         symmetrise = int(densityk.get("nsymcrys", 1)) > 1
 
-    values = muffin_tin_density(local, groundstate, lapw, ispn=ispn)
+    values = muffin_tin_density(local, groundstate, lapw, ispn=ispn,
+                                factors=factors)
     harmonics = jnp.stack([to_harmonics(values[ias], densityk, groundstate, ias)
                            for ias in range(natmtot)])
     coarse = interstitial_density(local, float(groundstate["omega"]),
-                                  ispn=ispn)
+                                  ispn=ispn, factors=factors)
     if symmetrise:
         harmonics = symmetry.symmetrise(harmonics, groundstate,
                                         inner_points=densityk["nrcmti"])

@@ -67,7 +67,7 @@ file** — this section is a routing table and grew to 940 lines once by not bei
 | 30 | Spin-polarised STM (Tersoff-Hamann) | 0011 | verified; found an upstream `wkpt` double-count |
 | 31 | Vertical tunnelling transport | 0012 | verified; **magnetic substrate has no physics test** |
 | 32 | Six task-family mixins + `params.py` input table | — | **uneven, labelled per method** — many are format-derived, i.e. untested |
-| 33 | LAPW/ground-state export for the JAX port | 0013-0020, 0022 | see `docs/jax_port_status.md` |
+| 33 | LAPW/ground-state export for the JAX port | 0013-0024 | see `docs/jax_port_status.md` |
 
 **What is open, and must not be quietly asserted as done**
 
@@ -297,9 +297,11 @@ so elkpy's fast unit tests never acquire a `jax` dependency. Install `pip instal
 tests are `tests/test_jax_*.py` and self-skip without jax.
 
 Status: Phase 0 closed (it did not kill the project), Phase 1 done through §1m, Phase 2 done as
-forward checks (§§2a-2k, one open question in §2k), Phase 3 has its **forward** criterion (§§3a-3b:
-the Kohn-Sham loop closes and converges to Elk's own total energy and Fermi level) and none of its
-gradient ones. **Full narrative, phase tables, every measured tolerance, and the compute discipline:
+forward checks (§§2a-2k, one open question in §2k), Phase 3 has its **forward** criterion (§§3a-3c:
+the Kohn-Sham loop closes, and `elkjax.driver.run()` takes a `Calculation` **from its `elk.in`
+alone** — patch 0024's task 9006 stops Elk at the top of its own first iteration — and converges to
+Elk's total energy and Fermi level; the remaining 3.6e-4 Ha on bulk Si is entirely the frozen core)
+and none of its gradient ones. **Full narrative, phase tables, every measured tolerance, and the compute discipline:
 `docs/jax_port_status.md`** — plus `docs/jax_port.md` (the study) and
 `docs/jax_port_phase{0,1,2,3}.md` (the logs). `docs/continue_here.md` §3 is the cold start.
 **New measurements go in `docs/jax_port_phaseN.md` and `docs/jax_port_status.md`; only a rule that
@@ -335,6 +337,13 @@ Working rules distilled from what Phase 0/1 measured (each is a measurement, not
 - **`lax.scan` the Newton-Schulz tape**, not an unroll (230x the HLO instructions at 80 steps).
 - **Recompute $\kappa(O)$ per run** — it is set by `rgkmax`, not matrix size; the study's §8b
   Cholesky estimate is uninformative and must not set a threshold.
+- **Freezing a quantity "at fixed potential" is not free once the potential actually moves.**
+  What may be held fixed is the physically frozen thing, not whichever array Elk happens to
+  export: the core's contribution is $T_{\rm core}$ (`engykncr`), NOT the core eigenvalue sum
+  (`evalsumcr`), because `energy.f90` builds the kinetic energy as
+  $\Sigma_\varepsilon-\int\rho v_{cl}-\int\rho v_{xc}$ and the two halves must sit at the
+  same potential. Measured: 2.0 Ha the wrong way, 3.6e-4 Ha the right way. Invisible on any
+  run that starts at Elk's converged answer.
 - **Never unroll an SCF to differentiate it**: unrolled Anderson's forward value is fine while its
   gradient is wrong by $10^{17}$. Use the implicit route — which also means "implicit agrees between
   mixers" proves nothing.

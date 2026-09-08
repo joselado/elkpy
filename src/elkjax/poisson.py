@@ -371,8 +371,8 @@ def pseudocharge_solve(potentials, rhoir, groundstate):
     zvclir = _forward_fft(rhoir, ngridg)
     qlm = multipoles(potentials, groundstate)
 
-    lslot = np.concatenate([np.full(2 * l + 1, l) for l in range(lmaxo + 1)])
-    lslot = jnp.asarray(lslot)
+    lslot_np = np.concatenate([np.full(2 * l + 1, l) for l in range(lmaxo + 1)])
+    lslot = jnp.asarray(lslot_np)
 
     # what the interstitial density already contributes at the sphere boundary
     for ias in range(natmtot):
@@ -397,7 +397,7 @@ def pseudocharge_solve(potentials, rhoir, groundstate):
     # the pseudocharge, added in G-space
     t1 = _double_factorial(2 * lnpsd + 1) / omega
     denominator = jnp.asarray(
-        [_double_factorial(2 * int(l) + 1) for l in np.asarray(lslot)])
+        [_double_factorial(2 * int(l) + 1) for l in lslot_np])
     for ias in range(natmtot):
         isp = int(groundstate["idxis"][ias]) - 1
         nr = int(groundstate["nrmt"][isp])

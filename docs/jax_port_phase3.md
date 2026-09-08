@@ -307,6 +307,13 @@ equivalent (the state contributes nothing either way) and is what study Phase 3
 "Gradient A" needs. Nothing about the implicit-differentiation machinery has
 been exercised here; `elkjax.fixedpoint` supplies the forward iteration only.
 
+> **Superseded by §3c.** The `epsocc` skip is a zeroed weight now
+> (`density.skip_below_epsocc`), `elkjax.response` replaced JAX's own `eigh`
+> rule, and `scf.step` traces — its `jvp` is checked against a central
+> difference in `tests/test_calculation_scf.py`. What remains true is the last
+> sentence: nothing has been differentiated *through* the converged fixed
+> point.
+
 **One structure, one mixer, no metal.** Bulk Si, linear mixing, `stype=3`.
 Anderson is available (`history>0`) and untried; the study's Gradient A is
 precisely the comparison between the two, and it needs the traced step first.
@@ -314,5 +321,176 @@ precisely the comparison between the two, and it needs the traced step first.
 **Scalar only.** `eveqnsv` is not transcribed, so a spin-polarised or
 spin-orbit ground state is refused (`scf.check_scalar`) rather than silently
 treated as first-variational.
+
+---
+
+
+## 3c. A calculation from the input file
+
+### What was at stake
+
+§3b closed the loop and §3b's own last section says what it did not do: the
+starting potential was Elk's converged one, perturbed by hand. Elk's converged
+potential is a fixed point of $F$, so a loop started there has nothing to do,
+and a loop started 0.30 away from it in potential norm is still a loop whose
+starting point was *built out of the answer*. The port could not be handed an
+`elk.in` and asked for a ground state.
+
+Nothing was missing from the map. What was missing was a way to reach the
+export queries without `readstate`.
+
+### The seam, and why it is one line of Fortran rather than a transcription
+
+`gndstate.f90` has exactly two branches:
+
+```
+if (trdstate) then
+  call readstate
+else
+  call rhoinit; call maginit; call potks(.true.)
+end if
+call genvsig
+```
+
+Task 1 takes the first. Every export in patches 0013-0023 is reached through
+task 1, which is why every measured number in Phases 1-3 describes a converged
+calculation. Patch **0024** adds task **9006**
+(`src/elkpy_initstate.f90`), which takes the second, and then runs the top of
+`gndstate`'s first iteration — `gencore`, `linengy`, `genapwlofr`, `gensocfr`,
+`genevfsv`, `occupy` — and stops. No `rhomag`, no `potks` on a new density, no
+`mixerifc`. Every array the 9002 queries read then holds its iteration-zero
+value.
+
+Two consequences worth stating. The density is `rhoinit`'s superposition of
+free atomic densities, and it is **not normalised** — `rhonorm` acts on the
+density the SCF produces, not on the starting guess, so the count comes out
+27.99358 against 28 on Si, 6.4e-3 short. That is a useful marker rather than a
+defect: a converged density is normalised to machine precision, so the electron
+count alone distinguishes this export from every other one. And because no
+mixing has happened, `vsmt` and `vsir` are for once on the **same** side of
+`mixerifc` — the trap CLAUDE.md records four separate encounters with does not
+apply to this export.
+
+The alternative was transcribing `init0`/`init1`/`rhoinit`, which needs
+`allatoms` → `atom.f90`, a radial Dirac solver for every free atom, plus Elk's
+grid/symmetry/species bookkeeping. None of that is a functional of the density
+— it is identical at every iteration and for every potential, so no gradient
+passes through it. This is exactly the case `docs/design.md` §8 says to export.
+
+### The 2.0 Ha that was a wrong formula, not a tolerance
+
+The first run converged cleanly and missed Elk's total energy by **2.025 Ha**,
+which is 3.5e-3 relative — far too large to be the frozen core and far too
+small to be a broken map. It was neither. It was `evalsumcr`.
+
+`energy.f90` builds the kinetic energy as
+$\Sigma_\varepsilon-\int\rho v_{cl}-\int\rho v_{xc}$, and the core's share of
+that is `energykncr`,
+
+$$T_{\rm core} \;=\; \sum_{\rm core} f\,\varepsilon \;-\; \int\rho_{\rm core}\,v_s ,$$
+
+with **both** halves at the current potential: Elk recomputes
+$\varepsilon_{\rm core}$ every iteration in `gencore`, and the $\rho$ in
+$\int\rho v_{cl}$ includes the core. §3b imported `evalsumcr` — the first term
+alone — and that was harmless there only because the loop converged to the very
+potential `evalsumcr` had been evaluated at. Started from the atomic
+superposition it is not harmless: the same $\rho_{\rm core}$ is integrated
+against a potential its eigenvalues never saw, and the mismatch is *first
+order* in $v-v^{\rm init}$ over 20 core electrons sitting exactly where the
+potential moves most.
+
+The numbers say it plainly. Between the initial and the converged export,
+
+| | initial | converged | moved |
+|---|---|---|---|
+| `evalsumcr` | $-317.3833$ | $-315.3483$ | **2.035** |
+| `engykncr` ($T_{\rm core}$) | $567.7239$ | $567.7254$ | **1.5e-3** |
+
+so the quantity that may be frozen is $T_{\rm core}$, and the quantity that was
+being frozen moved by three orders of magnitude more. Patch 0024 exports
+`engykncr`; `elkjax.energy.core_eigenvalue_sum` holds it fixed and rebuilds
+$\int\rho_{\rm core}v_s$ at whatever potential it is handed.
+`core_potential_energy` reproduces Elk's own $\int\rho_{\rm core}v_s$ — which
+is `evalsumcr - engykncr` — to **5.1e-16** at the initial export and
+**3.9e-16** at the converged one, the two potentials being 2 Ha apart in that
+integral, so the transcription is pinned where it matters and not only where it
+is easy. At the export's own potential the correction returns `evalsumcr`
+exactly, so §3b's numbers are unchanged.
+
+This is **not** another instance of the mixing-side trap CLAUDE.md records
+four encounters with — those were two arrays written on opposite sides of
+`mixerifc`, and the fix was always to move a call. Here both arrays are
+correct and the hidden potential dependence is in the *formula* that combines
+them. The symptom is the same shape, so it is worth separating: a mixing-side
+disagreement is the size of `epspot`, and this one is 2 Ha.
+
+### It runs, and the gap is the frozen core and nothing else
+
+Bulk Si, `xc=PW`, `ngridk=(2,2,2)`, `rgkmax=7`, Elk's own reduced k-set,
+linear mixing at $\beta=0.4$, `tol=1e-7` on $\|F(v)-v\|$. The start is
+`rhoinit`'s atomic superposition, whose Fermi level is 0.1249 Ha against the
+converged 0.2140 — not a perturbation of the answer.
+
+**40 iterations, residual 9.3e-8**, and then
+
+| | elkjax | Elk (task 0) | difference |
+|---|---|---|---|
+| $E_{\rm tot}$ | $-577.9838797268$ | $-577.9835159872$ | $-3.64\times10^{-4}$ Ha |
+| $E_F$ | $0.2139904581$ | $0.2140331833$ | $-4.27\times10^{-5}$ Ha |
+
+$6.3\times10^{-7}$ relative on a $-578$ Ha all-electron total. Cost: about 3
+minutes wall, dominated by one XLA compile of the step (`scf.run(jit=True)`,
+new here — the un-jitted loop is ~16 s/iteration and this is ~2 s).
+
+**And the whole of that difference is the frozen core.** The one experiment
+that settles it: take the *converged* export's `rhocr` and `engykncr`, put them
+into the *initial* triple, and start from the same initial potential. Nothing
+else changes — same map, same mixer, same start, same 40 iterations, residual
+9.2e-8. The result is
+
+$$E_{\rm tot}-E_{\rm tot}^{\rm Elk} = -3.8\times10^{-8}\ {\rm Ha},\qquad
+E_F-E_F^{\rm Elk} = -4.5\times10^{-9}\ {\rm Ha},$$
+
+i.e. exactly §3b's own agreement, reached from a start that has nothing to do
+with Elk's answer. So the map, the Fermi level, the density, the potential and
+the total-energy assembly are all right to 1e-8 Ha from cold; what the port is
+missing to close the last $3.6\times10^{-4}$ Ha is `gencore` — a radial Dirac
+solver in the loop — and nothing else. That is a concrete, bounded, named piece
+of work rather than an unexplained residual.
+
+### The linearisation energies are frozen too, and here that is exact
+
+`linengy.f90` calls `findband` only for an APW or local orbital whose species
+file sets `apwve`/`lorbve` true; otherwise `apwe`/`lorbe` keep the
+`apwe0`/`lorbe0` that `init1` copied in, for the whole run. Elk's stock species
+files — Si's included — set every flag false, and `autolinengy` defaults false,
+so freezing them across this loop changes nothing at all.
+
+That is a property of the input, not of the port, so it is checked rather than
+assumed: patch 0024 exports `autolinengy` and the per-orbital flags, and
+`elkjax.driver.check_linearisation_frozen()` raises on a species file that
+would have searched. `apwe` alone cannot detect this — a searched energy and a
+default one are the same kind of number.
+
+### What this does not settle
+
+**The core is still frozen.** Named above with its price measured: 3.6e-4 Ha
+in the total energy and 4.3e-5 Ha in the Fermi level on bulk Si. Elk's own
+`gencore` runs `rdirac` per core state per atom per iteration; transcribing it
+is the next forward step and is independent of everything else here.
+
+**One structure, one mixer, no metal.** Bulk Si, linear mixing, `stype=3`.
+Anderson (`history>0`) is available and was not needed — linear mixing at 0.4
+converged from the atomic superposition without trouble — so it remains
+untried at this distance.
+
+**Still scalar only.** `eveqnsv` is not transcribed;
+`scf.check_scalar` refuses a spin-polarised or spin-orbit ground state.
+
+**Forward only, still.** The step is now traceable (`elkjax.response` replaced
+JAX's own `eigh` rule, and §3b's `jvp` check passes), but nothing here
+differentiates *through the converged fixed point*: `elkjax.fixedpoint`'s
+implicit route has not been exercised on this map, and none of Phase 3's three
+gradient signatures has been started.
 
 ---

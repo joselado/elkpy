@@ -27,6 +27,16 @@ Three deliberate choices, each from the study:
 * ``jax.custom_vjp`` and an explicit GMRES, **not** ``lax.custom_root`` with an
   iterative ``tangent_solve`` — measured there to raise ``NotImplementedError``, which
   would read as a kill and is not one.
+* **Two GMRES drivers, and which one to use is a size question, not a taste one.**
+  ``jax.scipy.sparse.linalg.gmres`` puts the whole Krylov iteration inside one
+  ``lax.custom_linear_solve``, so the matvec — here a full Kohn-Sham VJP, eigensolve
+  included — is compiled into a single XLA program.  At toy scale that is what makes
+  ``grad(grad)`` possible and it is kept for exactly that.  At Kohn-Sham scale it is
+  measured to die: ``std::bad_alloc`` inside the compiler on bulk silicon
+  (:math:`n\approx4.8\times10^4`, ``restart=30``) under a 14 GB cap, before a single
+  matvec ran.  :func:`host_gmres` drives the same iteration from Python instead, so the
+  compiled unit is one matvec; it is not differentiable, which is the price, and
+  :func:`implicit_gradient` is therefore first order only.
 * The mixer is the *solver*, not the equation.  :math:`F` is defined without it, the
   converged answer does not depend on it, and neither may the gradient — which is a
   cheap, reference-free assertion (study §8a, Phase 3 "Gradient A").
@@ -40,7 +50,8 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-__all__ = ["implicit_fixed_point", "iterate", "adjoint_residual"]
+__all__ = ["implicit_fixed_point", "iterate", "adjoint_residual",
+           "host_gmres", "implicit_gradient"]
 
 
 def iterate(step, theta, v0, *, mixing=0.5, tol=1e-12, maxiter=500, history=0,
@@ -90,6 +101,77 @@ def _anderson(iterates, residuals, mixing, ridge=1e-10):
                                jnp.ones(gram.shape[0]))
     weights = weights / jnp.sum(weights)
     return x @ weights + mixing * (r @ weights)
+
+
+def host_gmres(matvec, rhs, tol=1e-8, restart=30, maxiter=6):
+    r"""Restarted GMRES with the Krylov bookkeeping on the host.
+
+    ``matvec`` may be a compiled JAX function; it is called once per Arnoldi
+    step and nothing larger than one matvec is ever handed to the compiler.
+    That is the whole point — see the module docstring's second bullet.
+
+    Returns ``(solution, relative residual)``.  The residual is formed
+    explicitly with one extra matvec rather than taken from the Arnoldi
+    recurrence, because a restarted method's recurrence residual can be
+    optimistic and because the caller needs a number it can assert on.
+    """
+    b = np.asarray(rhs, dtype=float).reshape(-1)
+    scale = np.linalg.norm(b)
+    x = np.zeros_like(b)
+    if scale == 0.0:
+        return x, 0.0
+    apply = lambda u: np.asarray(matvec(jnp.asarray(u)), dtype=float).reshape(-1)
+    for _ in range(maxiter):
+        residual = b - apply(x)
+        beta = np.linalg.norm(residual)
+        if beta <= tol * scale:
+            break
+        basis = np.zeros((b.size, restart + 1))
+        basis[:, 0] = residual / beta
+        hessenberg = np.zeros((restart + 1, restart))
+        used = restart
+        for j in range(restart):
+            w = apply(basis[:, j])
+            for i in range(j + 1):                       # modified Gram-Schmidt
+                hessenberg[i, j] = basis[:, i] @ w
+                w = w - hessenberg[i, j] * basis[:, i]
+            hessenberg[j + 1, j] = np.linalg.norm(w)
+            if hessenberg[j + 1, j] <= 1e-14 * beta:     # invariant subspace
+                used = j + 1
+                break
+            basis[:, j + 1] = w / hessenberg[j + 1, j]
+        target = np.zeros(used + 1)
+        target[0] = beta
+        y = np.linalg.lstsq(hessenberg[:used + 1, :used], target, rcond=None)[0]
+        x = x + basis[:, :used] @ y
+    return x, float(np.linalg.norm(b - apply(x)) / scale)
+
+
+def implicit_gradient(step, theta, v, cotangent, **gmres_kwargs):
+    r"""``dL/dtheta`` at a converged fixed point, by the adjoint system.
+
+    .. math::
+
+        \Big(\mathbb 1-\frac{\partial F}{\partial v}\Big)^{\mathsf T}u
+        = \frac{\partial L}{\partial v},
+        \qquad
+        \frac{dL}{d\theta}
+        = u^{\mathsf T}\frac{\partial F}{\partial\theta} .
+
+    The same equation :func:`implicit_fixed_point` solves inside its VJP, but
+    driven from the host (:func:`host_gmres`) and returned together with the
+    adjoint residual, which is the only evidence that the transposed operator
+    was actually inverted.  Nothing about it is differentiable a second time.
+
+    ``cotangent`` is :math:`\partial L/\partial v`, i.e. the gradient of the
+    loss with respect to the *potential*, holding the fixed-point condition
+    aside; ``jax.grad`` of the observable at ``v`` is what supplies it.
+    """
+    _, vjp_v = jax.vjp(lambda vv: step(vv, theta), v)
+    matvec = jax.jit(lambda u: u - vjp_v(u)[0])
+    u, residual = host_gmres(matvec, cotangent, **gmres_kwargs)
+    _, vjp_theta = jax.vjp(lambda th: step(v, th), theta)
+    return vjp_theta(jnp.asarray(u))[0], residual
 
 
 def implicit_fixed_point(step, *, solver_kwargs=None, gmres_kwargs=None):

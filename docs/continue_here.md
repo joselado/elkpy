@@ -1,6 +1,6 @@
 # Continue here
 
-Working state as of 2026-09-07, written to be picked up cold. Last verified: fast suite **525 passed / 12 skipped**, all **23** patches apply to a fresh `vendor/elk/` with no fuzz and `./build_elk.sh` completes, and all 50 `tests/test_calculation_*.py` suites run — **two failures, both Workstream A and neither touched by this session's work**: `test_calculation_optics.py::test_get_plane_wave_wavefunctions` (a plane-wave norm of 1.000043 against a Bessel's-inequality bound of 1 + 1e-8) and `test_calculation_spectra.py::test_elnes_at_zero_momentum_transfer` (the ELNES cross-section comes back identically zero). Both were found on a **rebuilt** binary: the `build/` tree on disk at the start of this session predated patches 0013-0022 and could not answer a `DENSITYK` query at all, so whatever binary produced the "206 passed" line this replaces no longer exists. Neither failure has been diagnosed.
+Working state as of 2026-09-07, written to be picked up cold. Last verified: fast suite **525 passed / 12 skipped**, all **24** patches apply to a fresh `vendor/elk/` with no fuzz and `./build_elk.sh` completes, and all 50 `tests/test_calculation_*.py` suites run — **two failures, both Workstream A and neither touched by this session's work**: `test_calculation_optics.py::test_get_plane_wave_wavefunctions` (a plane-wave norm of 1.000043 against a Bessel's-inequality bound of 1 + 1e-8) and `test_calculation_spectra.py::test_elnes_at_zero_momentum_transfer` (the ELNES cross-section comes back identically zero). Both were found on a **rebuilt** binary: the `build/` tree on disk at the start of this session predated patches 0013-0022 and could not answer a `DENSITYK` query at all, so whatever binary produced the "206 passed" line this replaces no longer exists. Neither failure has been diagnosed.
 
 GitHub CI's `unit-tests` job had been red on every push since at least
 2026-09-07, and not for an infrastructure reason: constructing a `Calculation`
@@ -20,9 +20,13 @@ session that landed it; its open items are §2's. *Workstream B* — the JAX por
 Phase 0 closed (it did not kill the project; the only open item is 0d's timing, which
 needs a GPU), Phase 1 closed except for three named items, Phase 2 closed as a set of
 forward checks (§§2a-2k, with §2k's electrostatic functional derivative still open), and
-**Phase 3's forward criterion met**: the Kohn-Sham loop closes and converges to Elk's own
-total energy (3.0e-8 Ha) and Fermi level (1.4e-9 Ha) from a start 0.30 away in potential
-norm. Phase 3's three *gradient* criteria have not been started. The port's own premise
+**Phase 3's forward criterion met, from a cold start**: the Kohn-Sham loop closes and
+converges to Elk's own total energy (3.0e-8 Ha) and Fermi level (1.4e-9 Ha) from a start
+0.30 away in potential norm — and §3c now runs bulk Si **from its `elk.in` alone**
+(`elkjax.driver.run()`, patch 0024's task 9006), converging from `rhoinit`'s atomic
+superposition in 40 iterations to 3.6e-4 Ha and 4.3e-5 Ha, all of which is the frozen
+core: swapping Elk's converged `rhocr`/`engykncr` in gives 3.8e-8 Ha and 4.5e-9 Ha.
+Phase 3's three *gradient* criteria have not been started. The port's own premise
 is demonstrated rather than argued: §2b transcribes only PBE's *energy* densities and lets
 `jax.grad` supply the functional derivative Elk gets from Perdew's hand-derived
 expression, and the two agree.
@@ -41,15 +45,24 @@ Phase 2 items below it are ordered by cost. In short:
    residual all the way down. §2f's two imported scalars (`evalsum`, `engyts`)
    are now computed; only the CORE half of `evalsum` and `engynn` are imported.
 
-   **The next step is the one blocker to every Phase 3 gradient criterion, and
-   it is one line, not a research problem**: `rhomagk`'s `epsocc` skip is a
-   Python `continue` on the occupation value, so `density.muffin_tin_density`
-   and `interstitial_density` need concrete arrays and `scf.step` cannot be
-   traced. Writing that skip as a zeroed weight is exactly equivalent (the
-   state contributes nothing either way) and makes the step differentiable,
-   which is what `fixedpoint.implicit_fixed_point` needs. After that: Gradient
-   A (linear vs Anderson, the inter-mixer difference falling linearly with
-   `epspot`), which needs no reference value and is the sharpest available.
+   **~~The `epsocc` skip.~~ DONE**: it is a zeroed weight now
+   (`density.skip_below_epsocc`), and with `elkjax.response` replacing JAX's
+   own `eigh` rule the step is traced and its `jvp` matches a central
+   difference (6.6e-9 in the interstitial half; JAX's own rule gives 1.9e-3
+   and does not move with the step size).
+
+   **~~Starting from an `elk.in` rather than from Elk's answer.~~ DONE**
+   (§3c, patch 0024, `src/elkjax/driver.py`). Task 9006 is `gndstate`'s
+   `trdstate=.false.` branch plus the top of its first iteration, so the
+   exports describe iteration zero. It also fixed a formula, not a tolerance:
+   what may be frozen is $T_{\rm core}$ (`engykncr`), not the core eigenvalue
+   sum — worth 2.0 Ha, and invisible to every earlier test because they all
+   started at the potential `evalsumcr` was written at.
+
+   **The next step is Gradient A** (linear vs Anderson, the inter-mixer
+   difference falling linearly with `epspot`), which needs no reference value
+   and is the sharpest available. The forward blocker that stood in front of
+   it is gone. After that, `gencore` in the loop closes the last 3.6e-4 Ha.
 2. **~~`symrfmt`~~ DONE** (§2g, patch 0018) — the operator is *exported* rather than
    transcribed, so Elk's Euler-angle/Wigner-$D$ construction and its atom bookkeeping
    are not re-derived at all. Applying it takes the pointwise `vxcmt` gap from 5.3e-3

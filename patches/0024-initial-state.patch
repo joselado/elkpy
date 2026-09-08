@@ -1,0 +1,171 @@
+--- a/src/elk.f90
++++ b/src/elk.f90
+@@ -298,6 +298,10 @@
+ ! elkpy: vertical tunnelling transport through a 2D material (point tip to
+ ! elkpy: substrate plane, nonlocal Green's function)
+     call elkpy_transport
++  case(9006)
++! elkpy: initial ground state from the input file alone (no STATE.OUT), left
++! elkpy: at the top of the first self-consistent iteration
++    call elkpy_initstate
+   case default
+     write(*,*)
+     write(*,'("Error(elk): task not defined : ",I0)') task
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -225,7 +225,7 @@
+ # elkpy extension (not upstream Elk): Wilson-loop / Fukui-Hatsugai-Suzuki
+ # Berry curvature (task 9000, see elkpy_berry.f90)
+ SRC_ELKPY = elkpy_berry.f90 elkpy_eigenstates.f90 elkpy_stm.f90 \
+- elkpy_transport.f90
++ elkpy_transport.f90 elkpy_initstate.f90
+ 
+ SRC = $(SRC_modules) $(SRC_FFT) $(SRC_elk) $(SRC_main) $(SRC_LAPACK) \
+  $(SRC_phonon) $(SRC_XC) $(SRC_DFTU) $(SRC_RDMFT) $(SRC_GW) $(SRC_TDDFT) \
+--- a/src/elkpy_eigenstates.f90
++++ b/src/elkpy_eigenstates.f90
+@@ -1590,6 +1590,29 @@
+     end do
+   end do
+ end do
++! --- patch 0024: whether linengy would SEARCH these energies or not ---
++! linengy.f90 calls findband only where the species file sets apwve/lorbve
++! true; otherwise apwe/lorbe keep the apwe0/lorbe0 that init1 copied in, or
++! (with autolinengy) sit at efermi+dlefe. A loop run outside Elk freezes the
++! linearisation energies, which is EXACT in the first case and an
++! approximation in the other two -- and the difference is invisible in apwe
++! itself. Written as integers because list-directed logical output is
++! T/F, which the parser would then have to special-case.
++write(*,*) merge(1,0,autolinengy)
++do is=1,nspecies
++  do l=0,lmaxapw
++    do io=1,apword(l,is)
++      write(*,*) merge(1,0,apwve(io,l,is))
++    end do
++  end do
++end do
++do is=1,nspecies
++  do ilo=1,nlorb(is)
++    do io=1,lorbord(ilo,is)
++      write(*,*) merge(1,0,lorbve(io,ilo,is))
++    end do
++  end do
++end do
+ deallocate(apwalm,evecfv,h,o,hi,oi)
+ end subroutine
+ !EOC
+@@ -1851,6 +1874,17 @@
+   end do
+ end do
+ write(*,'(4ES25.16E3)') t1
++! --- patch 0024: energykncr, the CORE KINETIC energy at this potential ---
++! energy.f90 builds the total kinetic energy as evalsum - engyvcl - engyvxc,
++! and the core's share of that is engykncr = sum occcr*evalcr - int rho_cr v_s
++! -- BOTH halves at the current potential. A loop run outside Elk freezes the
++! core, and freezing the eigenvalue sum alone is inconsistent: the same
++! rho_cr is then integrated against a potential the eigenvalues never saw,
++! which is a first-order error in the potential change and not a small one.
++! What must be held fixed is engykncr itself. Exported so the transcription
++! of int rho_cr v_s can be pinned: it is exactly t1 - engykncr here.
++call energykncr
++write(*,'(4ES25.16E3)') engykncr
+ deallocate(apwalm,evecfv,evecsv,rhomt_,rhoir_,magmt_,magir_)
+ end subroutine
+ !EOC
+--- a/src/elkpy_initstate.f90
++++ b/src/elkpy_initstate.f90
+@@ -0,0 +1,94 @@
++
++! elkpy extension (not upstream Elk). This file is distributed under the
++! terms of the GNU General Public License, consistent with the rest of Elk.
++
++!BOP
++! !ROUTINE: elkpy_initstate
++! !INTERFACE:
++subroutine elkpy_initstate
++! !USES:
++use modmain
++! !DESCRIPTION:
++!   Sets up a ground state from the input file alone -- no {\tt STATE.OUT},
++!   no self-consistent loop -- and stops at the point where {\tt gndstate}
++!   would begin computing a new density.
++!
++!   This is {\tt gndstate.f90}'s own initialisation, taken verbatim from its
++!   {\tt trdstate=.false.} branch,
++!
++!   \begin{verbatim}
++!     init0; init1; rhoinit; maginit; potks(.true.); genvsig
++!   \end{verbatim}
++!
++!   followed by the top of its first self-consistent iteration,
++!
++!   \begin{verbatim}
++!     gencore; linengy; genapwlofr; gensocfr; genevfsv; occupy
++!   \end{verbatim}
++!
++!   and nothing after it: no {\tt rhomag}, no {\tt potks} on a new density,
++!   no {\tt mixerifc}. On exit every module array the elkpy export queries
++!   read -- {\tt vsmt}/{\tt vsir}/{\tt vsig}, {\tt rhomt}/{\tt rhoir},
++!   {\tt rhocr}, {\tt apwe}/{\tt lorbe}, {\tt apwfr}/{\tt lofr},
++!   {\tt evalsv}/{\tt occsv}/{\tt efermi} and the {\tt EVECFV.OUT} files --
++!   holds the value it has at the START of Elk's first iteration, with the
++!   density the superposition of free atomic densities that {\tt rhoinit}
++!   builds.
++!
++!   Why this exists: task 9002's session is normally preceded by task 1,
++!   which reads a converged {\tt STATE.OUT}, so every JAX-port export
++!   (patches 0013-0023) describes a converged calculation and the port can
++!   only ever be started from Elk's own answer. Running the port from an
++!   {\tt elk.in} instead needs the same arrays at iteration zero, and the
++!   only thing standing between the two is which branch of {\tt gndstate}'s
++!   {\tt trdstate} test runs. Splitting that out is cheaper, and far less
++!   fragile, than transcribing {\tt init0}/{\tt init1}/{\tt rhoinit} --
++!   which would need {\tt atom.f90}'s free-atom solver -- into Python.
++!
++!   {\tt genevfsv} is called because {\tt elkpy\_denskexport}'s
++!   {\tt DENSITYK} query reads the first-variational eigenvectors back with
++!   {\tt getevecfv}, exactly as {\tt rhomagv} does. Those go to the RAM
++!   disk or to {\tt EVECFV.OUT} depending on {\tt ramdisk}, and either way
++!   the task-9002 session that follows is the same process and reads them
++!   back. {\tt occupy} is called for the same reason: {\tt DENSITYK} writes
++!   {\tt occsv}, and patch 0023's block writes {\tt evalsv} and
++!   {\tt efermi}.
++!
++!   {\tt writestate} is called last so the run directory is a valid restart
++!   point, i.e. so a subsequent task 1 sees the state this task built rather
++!   than failing on a missing file.
++!
++!   Nothing here is new physics: every line is an upstream call in
++!   {\tt gndstate}'s own order. See {\tt docs/jax\_port\_phase3.md} \S3c.
++!
++! !REVISION HISTORY:
++!   Created 2026 (elkpy)
++!EOP
++!BOC
++implicit none
++! initialise global variables
++call init0
++call init1
++! initial density from a superposition of free atomic densities
++call rhoinit
++if (spinpol) call maginit
++! the Kohn-Sham potential of that density
++call potks(.true.)
++call genvsig
++! --- the top of gndstate's first self-consistent iteration ---
++! core wavefunctions and densities in that potential
++call gencore
++! linearisation energies in that potential
++call linengy
++! APW and local-orbital radial functions, and their integrals
++call genapwlofr
++! spin-orbit coupling radial functions
++call gensocfr
++! first- and second-variational eigenvectors and eigenvalues
++call genevfsv
++! occupation numbers and Fermi energy
++call occupy
++! leave a restartable run directory behind
++call writestate
++end subroutine
++!EOC

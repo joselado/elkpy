@@ -1915,6 +1915,42 @@ class Calculation(*ALL_MIXINS):
         nspinor = 2 if (self.spinpol or self.spinorb) else 1
         return EigenstateSession(proc, subdir, nspinor=nspinor)
 
+    def initial_state_session(self, label="initial"):
+        """The same query session, on the state Elk's INITIALISATION leaves
+        behind -- no converged ground state, and no STATE.OUT read.
+
+        `eigenstate_session()` runs task 1 first, so every array its queries
+        return describes a converged calculation: the JAX port (docs/jax_port_
+        status.md) can then only ever be started from Elk's own answer. This
+        runs task 9006 instead (elkpy Fortran extension --
+        patches/0024-initial-state.patch, src/elkpy_initstate.f90), which is
+        gndstate.f90's own `trdstate=.false.` branch --
+        init0/init1/rhoinit/potks/genvsig -- followed by the top of its first
+        self-consistent iteration -- gencore/linengy/genapwlofr/gensocfr/
+        genevfsv/occupy -- and nothing after it. No new density, no mixing.
+
+        So the density is the superposition of free atomic densities that
+        `rhoinit` builds, and the potential is that density's Kohn-Sham
+        potential. `elkjax.driver` iterates from there.
+
+        Unlike every other session here this does NOT call
+        `ensure_ground_state()`: the whole point is that no prior Elk run is
+        needed. It writes STATE.OUT into its own subdirectory on the way out,
+        so the subdirectory is a valid restart point.
+        """
+        subdir = self.workdir / label
+        shutil.rmtree(subdir, ignore_errors=True)
+        subdir.mkdir(parents=True)
+        f = InputFile()
+        f.add_block(
+            "tasks", [spec.TASKS["initial_state"], spec.TASKS["eigenstate_session"]]
+        )
+        self._add_base_blocks(f)
+        f.write(subdir / "elk.in")
+        proc = self.launcher.start_session(subdir)
+        nspinor = 2 if (self.spinpol or self.spinorb) else 1
+        return EigenstateSession(proc, subdir, nspinor=nspinor)
+
     def get_eigenstates(self, k):
         """Second-variational energies (Hartree) and eigenvectors (evecsv)
         at a single k-point (fractional lattice coordinates), via fresh
