@@ -116,11 +116,33 @@ class Calculation(*ALL_MIXINS):
         self.ngridk = tuple(ngridk)
         self.vkloff = tuple(vkloff)
         self.sppath = Path(sppath) if sppath else (structure.sppath or config.resolve_species_path())
-        self.launcher = launcher or LocalLauncher()
+        self._launcher = launcher
         self.extra_blocks = dict(extra_blocks or {})
         self.raise_on_nonconvergence = raise_on_nonconvergence
         self._manifest_path = self.workdir / MANIFEST_NAME
         self._converged = None
+
+    @property
+    def launcher(self):
+        """The launcher, built on first use rather than in ``__init__``.
+
+        `LocalLauncher()` resolves the `elk` binary in its own constructor, and
+        **building a Calculation is not running one**: an input block, a
+        validated parameter name and an up-front refusal are all things this
+        object produces without Elk ever being invoked. Constructing the
+        launcher eagerly made every one of those need a compiled binary --
+        which turned `tests/test_tasks_spectra.py` and the mixin half of
+        `tests/test_calculation_params.py` (both of which say "no Elk run" in
+        their own docstrings) into 28 errors on any machine without a build,
+        CI included.
+
+        The binary is still resolved before anything is run, and the
+        FileNotFoundError `config.resolve_elk_binary` raises is unchanged; it
+        now arrives at the first `run()` instead of at construction.
+        """
+        if self._launcher is None:
+            self._launcher = LocalLauncher()
+        return self._launcher
 
     def _xctype_code(self):
         if isinstance(self.xc, int):

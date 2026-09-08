@@ -77,11 +77,26 @@ def test_set_parameters_warns_on_calculation_owned_blocks(calc):
     assert str(calc.extra_blocks["rgkmax"][0]) == "9.0"
 
 
-def test_set_parameters_changes_the_ground_state_cache_signature(calc):
+def test_set_parameters_changes_the_ground_state_cache_signature(tmp_path):
     """extra_blocks is part of the manifest, so a parameter set after
     construction must invalidate a previously cached ground state rather
-    than silently reuse it."""
+    than silently reuse it.
+
+    This is the one test in this half that cannot use the plain `calc`
+    fixture: `_basis_signature` includes the binary's own path and mtime --
+    that is what stops `ensure_ground_state` reusing a run made by a
+    different build -- so it needs a file to stat.  An empty one does: the
+    claim here is about `extra_blocks`, and the binary is incidental to it.
+    """
     import json
+
+    from elkpy.launcher import LocalLauncher
+
+    binary = tmp_path / "fake-elk"
+    binary.touch()
+    s = Structure(SI_AVEC, SI_SPECIES)
+    calc = ParamCalculation(s, tmp_path / "si", ngridk=(2, 2, 2), rgkmax=6.0,
+                            launcher=LocalLauncher(elk_binary=binary))
 
     # snapshot, not a reference: _basis_signature hands back the live dict
     before = json.dumps(calc._basis_signature(), sort_keys=True)
