@@ -4941,6 +4941,21 @@ caution above moot. And reintegrating `chgmt` with Elk's own `wsplint` weights
 gives 0.61257620 against the printed 0.6125761996; the 9e-6 residual quoted
 below is Simpson, exactly as stated.
 
+That 4.52e-11 is a property of `h_sc`, not of the method, and the same reader on
+`sic_zb` shows why: there the 4096 points agree to 2.4e-10 relative in the median,
+7.2e-9 at worst (3.5e-7 absolute). The worst points are *not* the ones inside
+`nri`, where the coarse `lmmaxi` expansion is the natural suspect. They sit at
+$r \approx 0.36$ bohr from a nucleus — the first grid point off it — where
+$|\nabla\rho| \approx 20$ e/bohr$^4$. `plot3d.f90` writes the *coordinates* in the
+same `(7G18.10)` as the value, so a coordinate of order a few bohr carries a
+rounding of up to 5e-10 bohr; two such columns move the density by 1.5e-8 on their
+own, against 1.48e-8 observed. Tightening a pointwise comparison past this needs
+more digits in the file, not a better transcription. `h_sc` escapes it only by
+arithmetic — $a = 3$ bohr, so every grid coordinate is a multiple of $3/16 =
+0.1875$ and prints exactly in ten digits, while `sic_zb`'s $4.119225/16$ does not.
+Expect the SiC number on any real cell, and check the printed coordinates before
+suspecting the interpolation.
+
 ## `rhonorm`, and which printed charge is safe to check against
 
 Which of Elk's printed charges describes the density in `STATE.OUT` is decided by
