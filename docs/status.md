@@ -1079,12 +1079,13 @@ by 2.7644e-3, **0.71% of the interstitial charge**. The 0.38466 quoted above was
 same effect seen through a $12^3$ grid staircasing the sphere. The same reader
 reproduces `RHO3D.OUT` pointwise at all 4096 points to 4.52e-11 — that file's own
 print floor, not interpolation error — by transcribing `poly4` rather than
-substituting a spline. On `sic_zb` the same reader sits at the same
-value-print floor in the median (2.4e-10 relative) and differs only in the tails —
-7.2e-9 relative at worst, 3.5e-7 absolute at a denser point — which are set by the
-*coordinates* `plot3d.f90` prints, not by the reconstruction. `h_sc` has no such
-tail because $a = 3$ bohr makes every grid coordinate print exactly; `design.md`
-§34 has the arithmetic.
+substituting a spline. On `sic_zb` the same reader sits on the same
+value-print floor in the median (2.4e-10 relative against hydrogen's 7.3e-11) and
+has one tail hydrogen does not: 7.2e-9 relative at a point 0.36 bohr off a carbon,
+set by the *coordinates* `plot3d.f90` prints rather than by the reconstruction.
+Its largest absolute residual, 3.5e-7 at the silicon nucleus, is the value's own
+print floor at $\rho = 2094$ and not a tail at all. `design.md` §34 separates the
+three.
 
 **What the two new fixtures establish, beyond re-running the above**
 

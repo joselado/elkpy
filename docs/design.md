@@ -4942,24 +4942,36 @@ gives 0.61257620 against the printed 0.6125761996; the 9e-6 residual quoted
 below is Simpson, exactly as stated.
 
 That 4.52e-11 is a property of `h_sc`, not of the method, and the same reader on
-`sic_zb` shows why. In the *median* the two fixtures agree: over the same 4096
-points SiC lands at 2.4e-10 relative, which is again the `G18.10` floor on the
-printed *value* (ten significant digits is 5e-11 to 5e-10 of relative rounding,
-and `h_sc`'s 4.52e-11 absolute on $\rho\sim0.1$ sits in the same band). They
-differ only in the tails — 7.2e-9 relative at worst, and 3.5e-7 absolute at worst
-on a different, much denser point — and the tails are where the *coordinates*
-bite. Neither is inside `nri`, where the coarse `lmmaxi` expansion is the natural
-suspect. They sit at $r \approx 0.36$ bohr from a nucleus — the first grid point
-off it — where $|\nabla\rho| \approx 20$ e/bohr$^4$ at the carbon and far more at
-the silicon. `plot3d.f90` writes the *coordinates* in the same `(7G18.10)` as the
-value, so a coordinate of order a few bohr carries a rounding of up to 5e-10 bohr;
-two such columns move the density by 1.5e-8 on their own, against 1.48e-8
-observed. Tightening a pointwise comparison past this needs
-more digits in the file, not a better transcription. `h_sc` has no such tail at all, by
-arithmetic — $a = 3$ bohr, so every grid coordinate is a multiple of $3/16 =
-0.1875$ and prints exactly in ten digits, while `sic_zb`'s $0.2574515625$ needs
-eleven from the fifth multiple on. Expect the SiC tail on any real cell, and check
-the printed coordinates before suspecting the interpolation.
+`sic_zb` separates three different floors that are easy to run together. Over the
+same 4096 points the residuals there are 2.4e-10 relative in the median, 7.2e-9
+relative at worst, and 3.5e-7 absolute at worst — three numbers, three causes, and
+only the middle one is about the reconstruction's inputs at all.
+
+- **The median is the printed value.** Ten significant digits is 5e-11 to 5e-10 of
+  relative rounding, so 2.4e-10 is the file's own floor and nothing else. `h_sc`
+  sits on the same floor: 7.3e-11 relative in the median, 4.5e-11 absolute.
+  The two fixtures agree here, and a reader that reaches this is done.
+- **The worst relative point is the printed *coordinates*.** `plot3d.f90` writes
+  the coordinates in the same `(7G18.10)` as the value, so a coordinate of order a
+  few bohr carries up to 5e-10 bohr of rounding. The 7.2e-9 points are not the ones
+  inside `nri`, where the coarse `lmmaxi` expansion is the natural suspect; they sit
+  at $r \approx 0.36$ bohr from a carbon — the first grid point off it — where
+  $|\nabla\rho| \approx 20$ e/bohr$^4$. Two rounded columns move the density by
+  1.5e-8 there on their own, against 1.48e-8 observed. `h_sc` has no such tail at
+  all, by arithmetic: $a = 3$ bohr, so every grid coordinate is a multiple of
+  $3/16 = 0.1875$ and prints exactly in ten digits, while `sic_zb`'s
+  $4.119225/16 = 0.2574515625$ needs eleven from the fifth multiple on.
+- **The worst absolute point is the printed value again, at the silicon nucleus.**
+  It is line 1094 of the fixture, Cartesian $(2.0596125)^3$ — lattice $(1/4,1/4,1/4)$,
+  an exact grid point whose coordinates also print exactly. `rfpts` clamps $r$ there,
+  so it is not an interpolation either. $\rho = 2094.517773$ in ten digits has a
+  print floor of 5e-7 by itself, and the observed 3.5e-7 is 1.7e-10 relative — the
+  median floor, seen through a density four orders of magnitude larger.
+
+So: tightening a pointwise comparison past the median needs more digits in the
+file, not a better transcription; expect the SiC tail on any cell whose lattice
+constant is not short in decimal; and check the printed coordinates before
+suspecting the interpolation.
 
 ## `rhonorm`, and which printed charge is safe to check against
 
