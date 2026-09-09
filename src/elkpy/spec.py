@@ -6,6 +6,14 @@ file. Every entry here has been cross-checked against vendor/elk/src/ (not
 just the manual), see the comments citing the source file/subroutine.
 """
 
+# The vendored Elk release, from vendor/elk/src/modmain.f90's
+# `integer, parameter :: version(3)`.  Exposed because it is also the first
+# record of STATE.OUT (src/writestate.f90), so anything reading Elk's binary
+# output can assert it is reading a layout it has been checked against
+# instead of guessing.  tests/test_spec.py asserts this against the vendored
+# source, so an Elk version bump fails loudly here.
+ELK_VERSION = (11, 0, 2)
+
 XC_CODES = {
     "PZ": 2,       # LDA, Perdew-Zunger/Ceperley-Alder
     "PW": 3,       # LSDA, Perdew-Wang/Ceperley-Alder (Elk's default)

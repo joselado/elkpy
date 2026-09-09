@@ -978,3 +978,69 @@ binary, many are format-derived (task ordering, blocks and output layouts transc
 but never run), and a few are structurally unrunnable in this build (meta-GGA `W_xc` needs libxc,
 which `build-config/make.inc` stubs out; Wannier90's `.amn`/`.mmn` need `libwannier`). Treat a
 format-derived method as untested until its first real run.
+
+---
+
+## §34 — `STATE.OUT`: the format written down, and a fixture that pins it
+
+**Verified against a committed run, no binary needed to check it.**
+
+elkpy still does not read `STATE.OUT`; Elk's own `readstate` does, and nothing here
+changes that. What is new is that the *conventions* inside the file are written down
+in `docs/design.md` §34 with a file-and-line citation for each, and a committed
+fixture makes them executable rather than remembered. Written because a sibling
+project reads the format directly, and every convention in it has a plausible wrong
+answer that produces a smooth, believable, incorrect density.
+
+Three small additions, all cheap:
+
+- `spec.ELK_VERSION = (11, 0, 2)`. It is also `STATE.OUT`'s first record, so a binary
+  reader can assert the layout it was checked against. `tests/test_spec.py` asserts it
+  in **both** directions — against `vendor/elk/src/modmain.f90`'s
+  `version(3)` parameter, and against the fixture's first record — so an Elk bump
+  fails loudly rather than silently invalidating `spec.py`.
+- `parsers.info.parse_charges()`. The `Charges :` block of `INFO.OUT`
+  (`src/writechg.f90`), one per SCF iteration with `index=-1` the converged one.
+  Per-atom `chgmt` and core leakage come back in Elk's own `ias` order, which is
+  `STATE.OUT`'s atom order, so the two index together.
+- `tests/fixtures/h_sc/`: simple cubic hydrogen, one atom, $a = 3.0$ Bohr,
+  unpolarised, $4\times4\times4$, everything else at Elk defaults, `tshift = .false.`
+  pinned explicitly. Tasks 0 and 33 in one `elk.in`, so `STATE.OUT` and `RHO3D.OUT`
+  are one consistent set — which `get_density()` cannot give, since it runs task 33
+  in its own wiped subdirectory. Seconds on one core; `regenerate.sh` rebuilds it and
+  prunes back to the six committed files.
+
+Hydrogen because it has no core, so all-electron and valence are the same function
+and `rhocore` confounds nothing.
+
+**What the fixture actually establishes** (`tests/test_state_fixture.py`, 7 tests):
+the header record order of `writestate.f90` read back end to end; $r_{\rm MT}$ =
+1.4 recovered as the last radial mesh point, post-`autormt`; the density record
+holding **both** `rhomt` and `rhoir` in one Fortran record, asserted by its exact
+byte length; the inner region genuinely zero beyond `lmmaxi` = 4 for the first 129
+of 197 radial points, and non-zero after, so `nrmti` is recoverable from a file that
+never writes it; `efermi` present in the header; `ngvec` < `ngtot`.
+
+The sharpest one is a single number. `rfpts` clamps $r$ up to $r_{\rm sp}(1)$ at the
+nucleus, so `RHO3D.OUT` at the origin is exactly $\rho_{00}(r_1)y_{00}$ out of
+`STATE.OUT` — 0.2859303012 both ways. That one equality pins the record layout, the
+$lm$-fastest reshape, the $y_{00}$ factor, and $\rho$-not-$r^2\rho$ at once. It is
+also physics: finite at the nucleus (a cusp, not a pole), just under the free-atom
+$1/\pi$.
+
+**And the trap the fixture caught**, which was written down wrong first and then
+measured: `rhonorm` (`src/rhonorm.f90`, called from `rhomag.f90:24`, on by default)
+adds a uniform constant to `rhoir` and to the $l=0$ channel of `rhomt` so the total
+charge is right. It updates `chgmt`/`chgmttot` and sets `chgir = chgtot - chgmttot`;
+it does **not** update `chgcalc`. Therefore:
+
+- `chgmt` per atom is post-shift and does describe the `rhomt` in the file —
+  reintegrating the $l=0$ channel recovers 0.6125761996 to 9e-6, which is Simpson
+  against Elk's spline weights and nothing else. It is the clean integrated check.
+- the printed `error` of 7.4e-4 is what `rhonorm` **corrected**, not a floor under a
+  reintegration test. Read the other way round it sends someone hunting a 1e-3
+  discrepancy that is not in their code.
+- `chgir` is still not comparable to a sharp-boundary sum: before `rhonorm` it is a
+  smooth-`cfunir` integral, after it a residual defined to close the total. Measured
+  here: 0.38466 sharp against 0.38742 printed, 0.7% apart — nearly four times the
+  printed error.

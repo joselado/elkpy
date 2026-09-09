@@ -68,6 +68,7 @@ file** — this section is a routing table and grew to 940 lines once by not bei
 | 31 | Vertical tunnelling transport | 0012 | verified; **magnetic substrate has no physics test** |
 | 32 | Six task-family mixins + `params.py` input table | — | **uneven, labelled per method** — many are format-derived, i.e. untested |
 | 33 | LAPW/ground-state export for the JAX port | 0013-0024 | see `docs/jax_port_status.md` |
+| 34 | `STATE.OUT` format + conventions; `spec.ELK_VERSION`, `parse_charges()` | — | verified (`tests/fixtures/h_sc`, no binary needed) |
 
 **What is open, and must not be quietly asserted as done**
 

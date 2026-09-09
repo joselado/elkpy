@@ -4754,3 +4754,242 @@ ships every stock species file with the flags false and `autolinengy` off, so
 for those the freeze is exact and `elkjax.driver.check_linearisation_frozen()`
 passes; where it is not, that function raises rather than returning a plausible
 total energy.
+
+# 34. `STATE.OUT`: the binary layout and the conventions inside it
+
+elkpy does not read `STATE.OUT` — `ensure_ground_state()` only checks that it
+exists, and every task that needs the density hands the file back to Elk's own
+`readstate`. This section exists anyway, because the *conventions* it records are
+what a reader outside elkpy needs, and every one of them has a plausible wrong
+answer that produces a smooth, believable, incorrect density. Everything below is
+read off `vendor/elk/src/` at Elk 11.0.2, with the file and line, and the fixture
+that exercises it is `tests/fixtures/h_sc/`.
+
+Written for the sibling project reconstructing $\rho(\mathbf{r})$ from a converged
+Elk state and seeding a plane-wave SCF with it, but it is the standing reference.
+
+## The unit is a run directory, not a file
+
+`STATE.OUT` carries no lattice vectors, no atomic positions and no species names.
+It carries the radial meshes, the grid sizes and the functions. So `avec` and
+`atposl` have to come from `GEOMETRY.OUT` alongside it —
+`parsers.geometry.parse_last_geometry()` reads that file (it is `writegeom.f90`
+output, same block syntax as `elk.in`, which `inputfile.read_blocks()` handles
+generically).
+
+Not from `elk.in`. Elk's `tshift` defaults to `.true.` and moves the origin onto
+the inversion centre; `GEOMETRY.OUT` is written after that shift and `elk.in`'s
+`atoms` block is not. This is the same trap as §28 and §31 one layer down.
+
+$r_{\rm MT}$ needs neither file. `genrmesh.f90:56-59` builds the radial mesh as
+$r_i = r_{\rm min}\exp\!\big[(i-1)\log(r_{\rm MT}/r_{\rm min})/(n_r-1)\big]$, so
+$r_{\rm sp}(n_{r{\rm MT}}) = r_{\rm MT}$ up to the round-off of that exp/log round
+trip (1.4000000000000004 on the fixture) — and it is the value *after* `autormt`
+has adjusted it, which the species file's own `rmt` is not.
+
+## Header records
+
+In `writestate.f90` order: `version` (3 int32 — the same tuple as
+`spec.ELK_VERSION`), `spinpol`, `nspecies`, `lmmaxo`, `nrmtmax`, `nrcmtmax`; then
+per species `natoms`, `nrmt`, `rsp(1:nrmt)`, `nrcmt`, `rcmt(1:nrcmt)`; then
+`ngridg`, `ngvec`, `ndmag`, `nspinor`, `fsmtype`, `ftmtype`, `dftu`, `lmmaxdm`,
+`xcgrad`, `efermi`, `dlefe`.
+
+`efermi` being in there (`writestate.f90:49`) means the Fermi level needs no
+`INFO.OUT` and no `EFERMI.OUT`. `readstate.f90:126` gates it on version $\ge$ 9.6
+and falls back to `readefm` below that; `dlefe` on $\ge$ 10.7.
+
+`nrmti` and `lmmaxi` are **not** written, and are not needed — see the muffin-tin
+packing below.
+
+## The muffin-tin functions
+
+`rhomt` is the real-spherical-harmonic expansion of the density inside each
+sphere,
+
+$$\rho(\mathbf{r}) = \sum_{lm} \rho_{lm}(r)\, R_{lm}(\hat{\mathbf{r}}),$$
+
+and the array holds $\rho_{lm}(r)$ itself, **not** $r^2\rho_{lm}(r)$. The
+$r^2$ lives in the integration weight: `charge.f90:30` integrates with `wr2mt`,
+which `genrmesh.f90:66-68` builds as spline weights and *then* multiplies by
+$r^2$; `rfmtint.f90`'s own header states it returns
+$4\pi Y_{00}\int f_{00}(r)r^2\,dr$.
+
+The real spherical harmonics are Elk's `genrlmv.f90` convention,
+
+$$R_{lm} = \begin{cases}\sqrt{2}\,{\rm Re}\,Y_{lm} & m>0\\ \sqrt{2}\,{\rm Im}\,Y_{lm} & m<0\\ {\rm Re}\,Y_{l0} & m=0\end{cases}$$
+
+with Condon-Shortley inside $Y_{lm}$, packed at $j = l(l+1)+m+1$ with $m$ ascending
+from $-l$ to $+l$ and $l$ running contiguously. At the sphere centre only $l=0$
+survives, so $\rho = \rho_{00}\,y_{00}$ with $y_{00} = 1/\sqrt{4\pi}$.
+
+**The file is unpacked.** Internally Elk stores only `lmmaxi` components on the
+inner part of the muffin tin ($r$ below `fracinr`$\cdot r_{\rm MT}$) and `lmmaxo`
+outside it. `writestate.f90:58` calls `rfmtpack(.false., ...)`, whose else-branch
+zeros the $lm >$ `lmmaxi` entries for $ir \le$ `nri` (`rfmtpack.f90`), so what
+reaches the file is a plain `(lmmaxo, nrmtmax, natmtot)` block whose inner region
+is genuinely zero beyond `lmmaxi`. That is the "unpacked to maintain backward
+compatibility" comment at `writestate.f90:52`, and it is why the reader needs
+neither `nrmti` nor `lmmaxi`.
+
+Atom index `ias` runs species-outer, atom-inner (`init0.f90:78-91`) — the same
+order `parsers.info.parse_charges()` returns its per-atom charges in.
+
+The whole chain has one cheap end-to-end check, and `tests/test_state_fixture.py`
+runs it. `rfpts` clamps $r$ up to $r_{\rm sp}(1)$ at the nucleus, and its `poly4`
+window there starts at $ir_0=1$, so `RHO3D.OUT`'s value at the origin is *exactly*
+$\rho_{00}(r_1)\,y_{00}$ read out of `STATE.OUT`. On the fixture both are
+0.2859303012, which pins the record layout, the $lm$-fastest reshape, the $y_{00}$
+factor and $\rho$-not-$r^2\rho$ in one number. (That number is also physics: the
+density at a hydrogen nucleus is finite — the 1s wavefunction has a cusp, not a
+pole — and it sits just under the free-atom $1/\pi = 0.3183$, the cell being
+compressed at $a = 3$ Bohr.)
+
+## The interstitial function
+
+`rhoir` is the smooth density on the `ngridg` FFT grid, extended over the whole
+cell including the inside of the muffin tins. It is **raw**: not multiplied by the
+characteristic function, not by $\Omega$, not by anything. `charge.f90:33`
+multiplies `cfunir` in explicitly at integration time,
+$\text{chgir} = (\Omega/N_{\rm grid})\sum_i \rho_{\rm ir}(i)\,\Theta(i)$.
+
+## Magnetisation
+
+`ndmag = 1` stores $m_z$ at index **1**, not 3. `ndmag = 3` is Cartesian
+$(m_x, m_y, m_z)$. From `rhomagk.f90`'s contained `rmk1`/`rmk2`, with $\psi_\uparrow$
+and $\psi_\downarrow$ the two spinor components,
+
+$$m_x = 2\,{\rm Re}(\psi_\uparrow^*\psi_\downarrow),\quad m_y = 2\,{\rm Im}(\psi_\uparrow^*\psi_\downarrow),\quad m_z = |\psi_\uparrow|^2 - |\psi_\downarrow|^2,$$
+
+which is $\mathrm{Tr}[\rho\,\boldsymbol{\sigma}]$ in the standard convention — no
+hidden sign on the $y$ component, which was the plausible wrong answer. It is a
+spin density (up minus down), so it points along the majority spin, opposite the
+magnetic moment vector.
+
+## Reconstruction: what Elk itself does
+
+Tasks 31/32/33 all end in `plot3d.f90` $\to$ `rfpts.f90`, which is the reference
+implementation of "evaluate the density at an arbitrary point":
+
+1. `findmtpt.f90` folds the lattice point into $[0,1)$ with `r3frac`, then tests
+   all 27 periodic images against a **sharp** $r^2 < r_{\rm MT}^2$; first match
+   wins. Skip the images and a point near a cell face falls into the interstitial
+   when it should not.
+2. Inside a sphere: a 4-point Lagrange interpolation (`poly4`, contained in
+   `rfpts.f90`) on the log mesh, over a window $ir_0 = ir-2$ clamped at both ends,
+   with $r$ clamped up to $r_{\rm sp}(1)$ at the nucleus. A cubic spline instead
+   leaves an interpolation-level residual against `RHO3D.OUT` that is not a bug.
+3. Outside: FFT `rhoir` to $G$-space and sum $\sum_{\mathbf{G}}\tilde\rho(\mathbf{G})
+   e^{i\mathbf{G}\cdot\mathbf{r}}$ over the first **`ngvec`** vectors, not all
+   `ngtot` — the FFT-box corners outside the $|G| <$ `gmaxvr` sphere are dropped.
+
+`cfunir` appears nowhere in this. It is needed only to reproduce `chgir`
+(`charge.f90`) and `momir` (`moment.f90`), it is not in `STATE.OUT`, and it does
+not need to be: `gencfun.f90` gives it in closed form,
+
+$$\tilde\Theta_i(G) = \frac{4\pi R_i^3}{\Omega}\frac{j_1(GR_i)}{GR_i}\ (0<G\le G_{\max}),\qquad \tilde\Theta_i(0) = \frac{4\pi R_i^3}{3\Omega},$$
+$$\tilde\Theta(\mathbf{G}) = \delta_{\mathbf{G},0} - \sum_{ij} e^{-i\mathbf{G}\cdot\mathbf{r}_{ij}}\,\tilde\Theta_i(G),$$
+
+from $r_{\rm MT}$, $\Omega$, the atomic positions and the $G$ list — all of which
+are already to hand.
+
+The consequence is the one that costs real time if it is missed: **a sharp-step
+reconstruction must not be validated against Elk's printed `chgir`.** They are
+different quantities, and on the fixture they are 0.7% apart — 0.38466 by a sharp
+in-or-out sum against the printed 0.38742.
+
+## `rhonorm`, and which printed charge is safe to check against
+
+Which of Elk's printed charges describes the density in `STATE.OUT` is decided by
+one routine that is easy to miss. `rhomag.f90` calls `charge`, then `rhonorm`
+(`trhonorm` is on by default). `rhonorm.f90` adds a uniform constant to `rhoir`
+and to the $l=0$ channel of every `rhomt` so the total charge comes out right —
+the muffin-tin density is built on a $(\theta,\phi)$ grid and transformed to
+spherical harmonics, and that loses a little charge. It then updates `chgmt` and
+`chgmttot`, and sets $\text{chgir} = \text{chgtot} - \text{chgmttot}$. It does
+**not** update `chgcalc`.
+
+So on the fixture:
+
+- `chgmt` = 0.6125761996 is **post-shift**, and describes the `rhomt` the file
+  holds. Reintegrating the $l=0$ channel of `STATE.OUT` recovers it to 9e-6, which
+  is Simpson-on-the-log-mesh against Elk's spline weights and nothing else. This is
+  the integrated check a reader can trust.
+- `chgmt` + `chgir` = 1 exactly, by construction.
+- `total calculated charge` = 1.000739542 and `error` = 7.4e-4 are **pre-shift**.
+  That number is what `rhonorm` corrected, *not* a floor under a reintegration
+  check — an easy thing to get backwards, and it would send someone hunting a 1e-3
+  discrepancy that is not in their code.
+- `chgir` = 0.3874238004 is post-shift, hence a residual defined to close the sum,
+  and before that a smooth-`cfunir` integral. Neither is the sharp-boundary sum,
+  which measures 0.38466 here.
+
+`tests/test_state_fixture.py` asserts all four.
+
+## Traps in the binary layout
+
+- **One Fortran record holds two arrays.** `write(100) rfmt, rhoir` is a single
+  sequential record with both concatenated; likewise `(rvfmt, magir)`,
+  `(rvfmt, bxcir)`, `(rvfcmt, bsir)`. A one-array-per-record reader desyncs at the
+  first density record and it looks like a byte-order problem.
+- **`bsmt`/`bsir` use the COARSE radial mesh** — `writestate.f90` packs them with
+  `nrcmt`/`nrcmti` into `(lmmaxo, nrcmtmax, natmtot, ndmag)` while every other
+  muffin-tin array is `nrmtmax`.
+- **Padding is uninitialised, not zero.** `rfmt` is dimensioned to `nrmtmax`; for a
+  species with `nrmt` $<$ `nrmtmax` the rows past `nrmt(is)` hold leftover buffer
+  contents. Always slice `[:, :nrmt(is), ias]`. Invisible with one species,
+  silently wrong with two.
+- **Units.** Only the potentials and fields are energies: `vclmt`/`vclir`,
+  `vxc*`, `vs*`, `bxc*`, `bs*`, `efermi`, `dlefe` are Hartree. `rhomt`/`rhoir` are
+  $e/\text{Bohr}^3$ and `magmt`/`magir` are per volume — no conversion.
+- **The build sets the byte layout.** `build-config/make.inc` is gfortran, so
+  records are 4-byte length markers front and back and `spinpol` is a 4-byte
+  logical; `scipy.io.FortranFile` reads it directly. `tests/test_spec.py` asserts
+  that layout on the fixture. An Intel-built `STATE.OUT` is not generally
+  byte-compatible.
+- **The frozen core is in `rhomt` and cannot be removed.** `rhocore.f90` adds it,
+  and `STATE.OUT` holds only the sum. Hydrogen is the case where this does not
+  bite, which is why the fixture is hydrogen. Anything that needs a valence-only
+  density from a heavier element has to get the core to cancel — e.g. by
+  differencing two Elk states rather than splicing one.
+
+## How to use in code
+
+```python
+from elkpy import spec
+from elkpy.parsers import geometry, info
+
+spec.ELK_VERSION                 # (11, 0, 2) -- STATE.OUT's first record too
+
+# lattice vectors (Bohr) and atoms (lattice coordinates), from the run directory
+avec, species = geometry.parse_last_geometry("run/GEOMETRY.OUT")
+
+# the converged charges; per-atom entries are in STATE.OUT's own ias order
+charges = info.parse_charges("run/INFO.OUT")
+charges["muffin_tin"]            # chgmt per atom -- a clean integrated check
+charges["interstitial"]          # chgir -- NOT comparable to a sharp-step sum
+```
+
+The pointwise ground truth comes from Elk's own reconstruction. For an
+elkpy-managed run that is `get_density()`, which converges the ground state and
+then runs task 33 on it:
+
+```python
+from elkpy.structure import Structure
+
+structure = Structure([(3.0, 0, 0), (0, 3.0, 0), (0, 0, 3.0)],
+                      {"H": [(0.0, 0.0, 0.0)]})
+calc = structure.get_calculation(workdir, ngridk=(4, 4, 4),
+                                 extra_blocks={"tshift": [False]})
+points, density = calc.get_density(grid=(16, 16, 16))   # task 33 -> RHO3D.OUT
+```
+
+`points` is Cartesian Bohr and `density` is $e/\text{Bohr}^3$, one value per grid
+point, so a reader can be compared where it actually has to be right rather than
+only through an integral.
+
+`get_density()` runs task 33 in its own wiped subdirectory, so it does not leave
+`RHO3D.OUT` beside the `STATE.OUT` it came from. When the two are wanted as one
+consistent set — which is what a reader needs — put `tasks 0` and `33` in a single
+`elk.in` instead. That is what `tests/fixtures/h_sc/` is, already run and
+committed, and `parsers.volumetric.parse_plot3d()` reads its `RHO3D.OUT`.
