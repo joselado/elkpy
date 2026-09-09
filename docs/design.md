@@ -4762,8 +4762,18 @@ exists, and every task that needs the density hands the file back to Elk's own
 `readstate`. This section exists anyway, because the *conventions* it records are
 what a reader outside elkpy needs, and every one of them has a plausible wrong
 answer that produces a smooth, believable, incorrect density. Everything below is
-read off `vendor/elk/src/` at Elk 11.0.2, with the file and line, and the fixture
-that exercises it is `tests/fixtures/h_sc/`.
+read off `vendor/elk/src/` at Elk 11.0.2, with the file and line, and three
+committed fixtures make it executable rather than remembered:
+
+| | | closes |
+|---|---|---|
+| `tests/fixtures/h_sc` | simple cubic H, one atom | the baseline: no core at all, so all-electron $=$ valence |
+| `tests/fixtures/c_diamond` | diamond, two C | a frozen core inside `rhomt`; the **atom-inner** half of the `ias` order; `tshift` not a no-op; GGA (`xcgrad = 1`) |
+| `tests/fixtures/sic_zb` | 3C-SiC, one C + one Si | `natmtot` $\ne$ `natoms(1)`; `nrmt(is)` $\ne$ `nrmtmax`; the **species-outer** half |
+
+`c_diamond` and `sic_zb` each carry a second state file as well —
+`STATE_INIT.OUT`, the same calculation stopped at the top of Elk's first
+iteration; see below. `tests/test_state_fixture.py` asserts all of it.
 
 Written for the sibling project reconstructing $\rho(\mathbf{r})$ from a converged
 Elk state and seeding a plane-wave SCF with it, but it is the standing reference.
@@ -4780,6 +4790,14 @@ generically).
 Not from `elk.in`. Elk's `tshift` defaults to `.true.` and moves the origin onto
 the inversion centre; `GEOMETRY.OUT` is written after that shift and `elk.in`'s
 `atoms` block is not. This is the same trap as §28 and §31 one layer down.
+
+Measured, on `c_diamond`. Diamond's inversion centre is the bond midpoint at
+$(\tfrac18,\tfrac18,\tfrac18)$, so with the default the same input gives atoms
+at $\pm(\tfrac38,\tfrac38,\tfrac38)$ — not $(0,0,0)$ and
+$(\tfrac14,\tfrac14,\tfrac14)$, and both of them moved. Elk then reports
+`Crystal has inversion symmetry` and switches to the real symmetric eigensolver;
+pinning the frame costs that and is worth it. In `h_sc` the same line is a no-op,
+which is exactly why one fixture was not enough.
 
 $r_{\rm MT}$ needs neither file. `genrmesh.f90:56-59` builds the radial mesh as
 $r_i = r_{\rm min}\exp\!\big[(i-1)\log(r_{\rm MT}/r_{\rm min})/(n_r-1)\big]$, so
@@ -4834,6 +4852,15 @@ neither `nrmti` nor `lmmaxi`.
 
 Atom index `ias` runs species-outer, atom-inner (`init0.f90:78-91`) — the same
 order `parsers.info.parse_charges()` returns its per-atom charges in.
+
+Getting that order wrong is not always detectable. In `c_diamond` the two
+carbons sit at the ends of a bond whose midpoint is an inversion centre, so
+their $\rho_{lm}$ differ by $(-1)^l$ — measured on the file, $l = 0, 4, 6$
+agree to 1e-14 and $l = 3$ is exactly opposite, with $l = 1, 2, 5$ zero by the
+Td site symmetry. The $l = 0$ nucleus check therefore **cannot** see a swapped
+`ias` there; only the odd-$l$ channels can. `sic_zb`'s two columns share no
+symmetry relation at all (2095 e/Bohr³ at the Si nucleus against 130 at the C),
+so a swap is visible in $l=0$ alone.
 
 The whole chain has one cheap end-to-end check, and `tests/test_state_fixture.py`
 runs it. `rfpts` clamps $r$ up to $r_{\rm sp}(1)$ at the nucleus, and its `poly4`
@@ -4895,8 +4922,24 @@ are already to hand.
 
 The consequence is the one that costs real time if it is missed: **a sharp-step
 reconstruction must not be validated against Elk's printed `chgir`.** They are
-different quantities, and on the fixture they are 0.7% apart — 0.38466 by a sharp
-in-or-out sum against the printed 0.38742.
+different quantities.
+
+That has since been measured cleanly, by the sibling project, on `h_sc`. Building
+`cfunir` from the closed form above reproduces the printed `chgir` **exactly**
+(0.38742380044 against 0.3874238004), which isolates the remaining difference:
+the sharp in-or-out characteristic function and Elk's Fourier-truncated one
+differ by 2.7644e-3, or **0.71% of the interstitial charge**. The earlier
+0.38466 quoted here was the same effect seen through a $12^3$ grid staircasing
+the sphere; with `cfunir` in closed form the staircase is gone and what is left
+is the Gibbs difference alone.
+
+Two further numbers from the same reader, both worth having: pointwise against
+`RHO3D.OUT` at all 4096 points it agrees to 4.52e-11 absolute, which is that
+file's own `G18.10` print floor rather than interpolation error — so
+transcribing `poly4` (rather than substituting a spline) is what makes the
+caution above moot. And reintegrating `chgmt` with Elk's own `wsplint` weights
+gives 0.61257620 against the printed 0.6125761996; the 9e-6 residual quoted
+below is Simpson, exactly as stated.
 
 ## `rhonorm`, and which printed charge is safe to check against
 
@@ -4913,8 +4956,10 @@ So on the fixture:
 
 - `chgmt` = 0.6125761996 is **post-shift**, and describes the `rhomt` the file
   holds. Reintegrating the $l=0$ channel of `STATE.OUT` recovers it to 9e-6, which
-  is Simpson-on-the-log-mesh against Elk's spline weights and nothing else. This is
-  the integrated check a reader can trust.
+  is Simpson-on-the-log-mesh against Elk's spline weights and nothing else (2.3e-5
+  on `c_diamond`, 5e-5 on `sic_zb` — same quadrature, larger integrand). This is
+  the integrated check a reader can trust, and with Elk's own `wsplint` weights it
+  closes to the printed digits.
 - `chgmt` + `chgir` = 1 exactly, by construction.
 - `total calculated charge` = 1.000739542 and `error` = 7.4e-4 are **pre-shift**.
   That number is what `rhonorm` corrected, *not* a floor under a reintegration
@@ -4935,10 +4980,22 @@ So on the fixture:
 - **`bsmt`/`bsir` use the COARSE radial mesh** — `writestate.f90` packs them with
   `nrcmt`/`nrcmti` into `(lmmaxo, nrcmtmax, natmtot, ndmag)` while every other
   muffin-tin array is `nrmtmax`.
+- **`natmtot` is the sum of `natoms` over all species**, not `natoms(1)`. A reader
+  that writes the latter reads a fraction of the muffin-tin block and then desyncs
+  on `rhoir`. `sic_zb` is the only fixture that can fail this.
 - **Padding is uninitialised, not zero.** `rfmt` is dimensioned to `nrmtmax`; for a
   species with `nrmt` $<$ `nrmtmax` the rows past `nrmt(is)` hold leftover buffer
-  contents. Always slice `[:, :nrmt(is), ias]`. Invisible with one species,
-  silently wrong with two.
+  contents. Always slice `[:, :nrmt(is), ias]`.
+
+  What makes this bite is that `nrmt` is set by **periodic-table row**, not by
+  radius: the species files carry 200 for row 1, 300 for row 2, 400 for row 3, and
+  `init0.f90:363` rounds each down to `nrmt - mod(nrmt-1, lradstp)` — so 197, 297,
+  397. `checkmt`/`autormt` moves `rmt`, and never touches `nrmt`. **Two species from
+  the same row have identical `nrmt` and cannot show this at all**, which is why the
+  fixture is SiC (C 297, Si 397, `nrmtmax` 397) and not, say, BN. Measured on
+  `sic_zb`: carbon's rows 298-397 hold values of order 1e-3 — sixteen orders above
+  the 1e-19 floor of a symmetry-forbidden channel, and 2% of the real $l>0$ density
+  at the sphere boundary. Nothing about them looks like roundoff.
 - **Units.** Only the potentials and fields are energies: `vclmt`/`vclir`,
   `vxc*`, `vs*`, `bxc*`, `bs*`, `efermi`, `dlefe` are Hartree. `rhomt`/`rhoir` are
   $e/\text{Bohr}^3$ and `magmt`/`magir` are per volume — no conversion.
@@ -4952,6 +5009,54 @@ So on the fixture:
   bite, which is why the fixture is hydrogen. Anything that needs a valence-only
   density from a heavier element has to get the core to cancel — e.g. by
   differencing two Elk states rather than splicing one.
+
+## The initial state (task 9006), and which side of `mixerifc` each array sits on
+
+`patches/0024-initial-state.patch` adds task 9006, which runs `gndstate`'s own
+`trdstate = .false.` initialisation and the top of its first iteration and then
+stops:
+
+```
+init0; init1; rhoinit; maginit; potks(.true.); genvsig
+gencore; linengy; genapwlofr; gensocfr; genevfsv; occupy; writestate
+```
+
+`c_diamond` and `sic_zb` each carry the resulting file as `STATE_INIT.OUT`
+(Elk writes both states to the same name, so `regenerate.sh` runs task 9006 in
+a scratch subdirectory first and moves the file out). Two things about it must
+not be mis-stated:
+
+- **It is not "after one SCF iteration".** `rhomag` never runs. What the file
+  holds is `rhoinit`'s superposition of **free atomic densities**
+  (`rhoinit.f90:115-122` adds `rhosp` into the $l=0$ channel), and `potks` of
+  exactly that.
+- **It is therefore the one internally consistent pair Elk writes.**
+  `mixerifc` is never called, so `vsmt`/`vsir` is the Kohn-Sham potential of the
+  `rhomt`/`rhoir` in the same file.
+
+The converged `STATE.OUT` is *not* that, and this is the standing
+`mixerifc` trap one more time, now located exactly. In `gndstate.f90`:
+
+| written by | line | relative to the mix |
+|---|---|---|
+| `evalsv`, `occsv`, `efermi` | `occupy`, :166 | before |
+| `rhomt`, `rhoir`, `magmt`, `magir` | `rhomag`, :189 | **before** |
+| `vsmt`, `vsir`, `vclmt`, `vxcmt`, `bxc*` | `potks`, :209, then **mixed** at :211 | **after** |
+| the file itself | `writestate`, :279 (per `nwrite`) and :338 (after the loop) | after |
+
+`mixrho` is `.false.` by default (`readinput.f90:110`), so `vmixer => vsbs`
+(`init0.f90:699`) and it is the **potential** that is mixed, not the density.
+So in a converged `STATE.OUT` the density and the potential are one mixing step
+apart — bounded by `epspot` at convergence, but not zero, and not a
+transcription bug when it shows up.
+
+The other thing `STATE_INIT.OUT` is useful for is measuring what a frozen core
+actually costs, and here it says: **the core does not cancel in
+$\rho_{\rm SCF}-\rho_{\rm init}$.** The initial file's core is `rhosp`'s
+free-atom core; the converged file's is `gencore`'s core in the crystal
+potential. On `c_diamond` they differ by 1.67 e/Bohr³ out of 460 at the
+innermost mesh points (0.36%), and by 1.9e-3 electrons inside $r<0.2$ Bohr. A
+difference of the two states is valence change **plus** core relaxation.
 
 ## How to use in code
 
@@ -4991,5 +5096,7 @@ only through an integral.
 `get_density()` runs task 33 in its own wiped subdirectory, so it does not leave
 `RHO3D.OUT` beside the `STATE.OUT` it came from. When the two are wanted as one
 consistent set — which is what a reader needs — put `tasks 0` and `33` in a single
-`elk.in` instead. That is what `tests/fixtures/h_sc/` is, already run and
-committed, and `parsers.volumetric.parse_plot3d()` reads its `RHO3D.OUT`.
+`elk.in` instead. That is what all three fixtures are, already run and committed,
+and `parsers.volumetric.parse_plot3d()` reads their `RHO3D.OUT`. Each has a
+`regenerate.sh` that rebuilds it from the committed `elk.in` and prunes back to the
+committed file list, and a `README.md` carrying every number the run produces.

@@ -68,7 +68,7 @@ file** — this section is a routing table and grew to 940 lines once by not bei
 | 31 | Vertical tunnelling transport | 0012 | verified; **magnetic substrate has no physics test** |
 | 32 | Six task-family mixins + `params.py` input table | — | **uneven, labelled per method** — many are format-derived, i.e. untested |
 | 33 | LAPW/ground-state export for the JAX port | 0013-0024 | see `docs/jax_port_status.md` |
-| 34 | `STATE.OUT` format + conventions; `spec.ELK_VERSION`, `parse_charges()` | — | verified (`tests/fixtures/h_sc`, no binary needed) |
+| 34 | `STATE.OUT` format + conventions; `spec.ELK_VERSION`, `parse_charges()` | — | verified (`tests/fixtures/` `h_sc`, `c_diamond`, `sic_zb`; no binary needed) |
 
 **What is open, and must not be quietly asserted as done**
 
@@ -92,6 +92,10 @@ file** — this section is a routing table and grew to 940 lines once by not bei
 - Every `get_*` runs in a **wiped-clean subdirectory**; some tasks resume from stale output
   instead of erroring. Never reuse a run directory.
 - Elk's default `epsengy` (1e-4 Ha) exceeds the whole exchange-coupling signal; elkpy uses 1e-8.
+- A one-species Elk run cannot fail two `STATE.OUT` reader bugs: `natmtot` is the sum of
+  `natoms` over species, and the rows past `nrmt(is)` are uninitialised buffer. `nrmt` is
+  set by periodic-table row (197/297/397/497) and `checkmt` never changes it, so two
+  species from the SAME row are equally blind — `tests/fixtures/sic_zb` exists for this.
 - Occupied-band counts come from `EIGVAL.OUT` occupations, never from an electron count (core
   electrons are not among the `nstsv` valence bands). The `sum(occ > 0.5)` idiom reads only the
   FIRST k-point and is valid only when the filling is k-independent.

@@ -992,7 +992,7 @@ fixture makes them executable rather than remembered. Written because a sibling
 project reads the format directly, and every convention in it has a plausible wrong
 answer that produces a smooth, believable, incorrect density.
 
-Three small additions, all cheap:
+Four small additions, all cheap:
 
 - `spec.ELK_VERSION = (11, 0, 2)`. It is also `STATE.OUT`'s first record, so a binary
   reader can assert the layout it was checked against. `tests/test_spec.py` asserts it
@@ -1010,10 +1010,35 @@ Three small additions, all cheap:
   in its own wiped subdirectory. Seconds on one core; `regenerate.sh` rebuilds it and
   prunes back to the six committed files.
 
-Hydrogen because it has no core, so all-electron and valence are the same function
-and `rhocore` confounds nothing.
+  Hydrogen because it has no core, so all-electron and valence are the same function
+  and `rhocore` confounds nothing.
+- `tests/fixtures/c_diamond/` and `tests/fixtures/sic_zb/`: the same recipe on two
+  more cells, each closing something `h_sc` structurally **cannot**. Both are PBE
+  (`xctype 20`, set explicitly), both pin `tshift = .false.`, both carry a second
+  state file from task 9006. 4 s and 6 s on one core.
 
-**What the fixture actually establishes** (`tests/test_state_fixture.py`, 7 tests):
+**What each fixture is for, and what it cannot test**
+
+| | cell | closes | still blind to |
+|---|---|---|---|
+| `h_sc` | simple cubic H, 1 atom | the baseline; no core, so `rhocore` confounds nothing | everything below |
+| `c_diamond` | fcc diamond, 2 C, $a = 6.74$ Bohr | a frozen core in `rhomt`; **atom-inner** `ias` order; `tshift` genuinely load-bearing; `xcgrad = 1` | `natmtot`, `nrmt` padding — 2 atoms of 1 species has neither |
+| `sic_zb` | zincblende 3C-SiC, C + Si, $a = 8.23845$ Bohr | `natmtot` $\ne$ `natoms(1)`; `nrmt(1) = 297 \ne$ `nrmtmax` $= 397`; **species-outer** order; the average-radius `rgkmax` rule | multi-atom-per-species ordering (1 atom each) |
+
+The diamond cell is verbatim the sibling project's own Quantum ESPRESSO test input,
+so the two are comparable exactly rather than approximately. Both geometries were
+checked numerically before any DFT ran: C-C = 1.54441 Å against a literature 1.5445,
+Si-C = 1.88776 against 1.888, four neighbours each.
+
+SiC rather than BN, and this is the whole reason the third fixture exists at all:
+`nrmt` is set by **periodic-table row** in Elk's species files (200/300/400/500,
+rounded to 197/297/397/497 at `init0.f90:363`), and `checkmt` moves `rmt` but never
+`nrmt`. Boron and nitrogen are both row 2, so a BN fixture would have
+`nrmt(1) = nrmt(2) = nrmtmax` and the padding trap would stay invisible in it —
+exactly as it is invisible in `h_sc` and `c_diamond`.
+
+**What the fixtures actually establish** (`tests/test_state_fixture.py`, 38 tests,
+most parametrised over all three). On `h_sc`:
 the header record order of `writestate.f90` read back end to end; $r_{\rm MT}$ =
 1.4 recovered as the last radial mesh point, post-`autormt`; the density record
 holding **both** `rhomt` and `rhoir` in one Fortran record, asserted by its exact
@@ -1044,3 +1069,66 @@ it does **not** update `chgcalc`. Therefore:
   smooth-`cfunir` integral, after it a residual defined to close the total. Measured
   here: 0.38466 sharp against 0.38742 printed, 0.7% apart — nearly four times the
   printed error.
+
+That last bullet has since been measured cleanly by the sibling project, on the same
+fixture, and the number here should be read as the order-of-magnitude statement it
+was. Building `cfunir` from `gencfun.f90`'s closed form reproduces the printed
+`chgir` **exactly** — 0.38742380044 against 0.3874238004 — which isolates the rest:
+the sharp in-or-out characteristic function and Elk's Fourier-truncated one differ
+by 2.7644e-3, **0.71% of the interstitial charge**. The 0.38466 quoted above was the
+same effect seen through a $12^3$ grid staircasing the sphere. The same reader
+reproduces `RHO3D.OUT` pointwise at all 4096 points to 4.52e-11 — that file's own
+print floor, not interpolation error — by transcribing `poly4` rather than
+substituting a spline.
+
+**What the two new fixtures establish, beyond re-running the above**
+
+- **The frozen core is in `rhomt`, and it is most of it.** $\rho$ at a carbon
+  nucleus is 129.8314269 e/Bohr³ against hydrogen's 0.2859303012, and at the silicon
+  nucleus 2094.5177730. Two of carbon's six electrons are core and they are 45% of
+  `chgmt`. There is no valence-only density in the file.
+- **`natmtot` and the `nrmt` padding, now executable.** `sic_zb` has
+  `nspecies = 2`, `natoms = 1 1`, `nrmt = 297 397`, `nrmtmax = 397`. Carbon's rows
+  298–397 hold leftover buffer of order 1e-3 — sixteen orders above the 1e-19 floor
+  of a symmetry-forbidden channel, and 2% of the real $l>0$ density at the sphere
+  boundary. `tests/test_state_fixture.py`'s reader is written once, generically, and
+  runs on all three fixtures, so elkpy's own suite no longer has the one-species
+  blind spot either.
+- **An `ias` swap is not always visible.** `c_diamond`'s two carbons are related by
+  inversion through the bond midpoint, so their $\rho_{lm}$ differ by $(-1)^l$:
+  $l = 0, 4, 6$ agree to 1e-14, $l = 3$ is exactly opposite, $l = 1, 2, 5$ vanish by
+  the Td site symmetry. The $l = 0$ nucleus equality — the sharpest check in this
+  section — therefore **cannot** detect a swapped `ias` on that fixture. `sic_zb`
+  can, with no symmetry argument: 2095 against 130.
+- **`tshift` is load-bearing, measured rather than argued.** In `h_sc` it is a
+  no-op. Run `c_diamond` at Elk's default and the atoms come out at
+  $\pm(\tfrac38,\tfrac38,\tfrac38)$, not $(0,0,0)$ and $(\tfrac14,\tfrac14,\tfrac14)$
+  — both moved — and Elk reports `Crystal has inversion symmetry` and switches to
+  the real eigensolver. `GEOMETRY.OUT` is written after the shift, `elk.in` is not.
+- **The average-radius `rgkmax` rule.** With two species, `isgkmax = -1` converts
+  `rgkmax` using the atom-weighted average $r_{\rm MT}$: $7/1.759 = 3.980$ on
+  `sic_zb` against $7/1.434 = 4.881$ on `c_diamond`. In a one-species run "average
+  radius" and "the radius" are the same number, so the rule is only ever exercised
+  here.
+
+**`STATE_INIT.OUT`, and the `mixerifc` line located exactly**
+
+Task 9006 (`patches/0024`) stops at the top of `gndstate`'s first iteration, so the
+file holds `rhoinit`'s superposition of **free atomic densities** — **not** a density
+after one SCF iteration; `rhomag` never runs. Two consequences, both now written into
+`docs/design.md` §34:
+
+- It is the one internally consistent pair Elk writes: `mixerifc` is never called, so
+  its `vsmt`/`vsir` is `potks` of exactly the `rhomt`/`rhoir` beside it. A converged
+  `STATE.OUT` is not — density from `rhomag` at `gndstate.f90:189`, potential mixed
+  at `:211`, file written at `:279`/`:338`. One mixing step apart, bounded by
+  `epspot` and not zero. This is the fifth time that line has been the answer.
+- The core does **not** cancel in $\rho_{\rm SCF} - \rho_{\rm init}$: the initial
+  file's core is `rhosp`'s free-atom core, the converged file's is `gencore`'s core
+  in the crystal potential. On `c_diamond` they differ by 1.67 e/Bohr³ out of 460 at
+  the innermost mesh points, and by 1.9e-3 electrons inside $r < 0.2$ Bohr.
+
+**Still untested by any of the three.** More than one atom of a species that also has
+a second species — i.e. `natoms = [2, 1]` — so the interaction of the species-outer
+and atom-inner loops is inferred from `init0.f90:78-91` rather than measured. Cheap
+to add if it ever matters.

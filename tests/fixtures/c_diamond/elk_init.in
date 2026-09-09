@@ -1,0 +1,65 @@
+! Diamond: fcc, a = 6.74 Bohr (3.56665 Angstrom), two carbon atoms.
+!
+! The companion to tests/fixtures/h_sc.  Hydrogen has no core, so nothing in
+! h_sc can test what happens when rhomt holds a frozen core; carbon's 1s
+! carries two of its six electrons, so it does.  Two atoms of one species
+! also exercise the atom-inner half of STATE.OUT's ias ordering, which one
+! atom per cell cannot.
+!
+! The cell is verbatim the diamond cell in the sibling project's own
+! Quantum ESPRESSO test input, so the two are comparable exactly rather
+! than approximately.  Checked before running: the C-C distance is 2.91851
+! Bohr = 1.54441 Angstrom with four neighbours, against a literature
+! 1.5445 Angstrom.
+!
+! Everything else is left at Elk's defaults, exactly as in h_sc -- a typical
+! run is the point -- with the two exceptions stated below.
+!
+! elk.in is this same input with tasks 0 and 33 instead of 9006.
+
+tasks
+  9006
+
+! The species file is copied in beside elk.in so the fixture is portable.
+sppath
+  './'
+
+! fcc primitive vectors, a/2 (0,1,1), (1,0,1), (1,1,0).
+avec
+  0.00  3.37  3.37
+  3.37  0.00  3.37
+  3.37  3.37  0.00
+
+atoms
+  1
+  'C.in'
+  2
+  0.00  0.00  0.00    0.0  0.0  0.0
+  0.25  0.25  0.25    0.0  0.0  0.0
+
+! First exception to "Elk defaults": PBE, set explicitly rather than left at
+! the default LSDA, so the fixture can be compared against a norm-conserving
+! PBE pseudopotential calculation with no functional mismatch in the way.
+! It also makes xcgrad = 1 in STATE.OUT's header, which h_sc cannot show.
+xctype
+  20
+
+ngridk
+  4  4  4
+
+! Second exception, and here it is NOT a no-op as it was in h_sc: diamond's
+! inversion centre is the bond midpoint at (1/8,1/8,1/8), so Elk's default
+! (.true.) would move the origin there and leave STATE.OUT and GEOMETRY.OUT
+! in a different frame from this atoms block.
+tshift
+  .false.
+
+! plot3d box: the unit cell.  Origin, then the three lattice vectors as
+! absolute corner vertices.  plotpt3d.f90 steps i/np3d without an endpoint,
+! so with 16 points the second atom at 1/4 is exactly grid index (4,4,4).
+plot3d
+  0.00  0.00  0.00
+  1.00  0.00  0.00
+  0.00  1.00  0.00
+  0.00  0.00  1.00
+  16  16  16
