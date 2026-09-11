@@ -12,3 +12,5 @@ __pycache__/
 # output files and the plot next to the elk.in they came from
 examples/**/*.OUT
 examples/**/*.png
+/slides/
+/notebooks/nbrun.log

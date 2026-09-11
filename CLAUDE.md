@@ -35,9 +35,9 @@ extra functionality that Elk itself does not provide.
 
 ## Project status
 
-Roadmap Tiers 1-3 are implemented, plus a twelve-entry Fortran patch series (`patches/`) adding
+Roadmap Tiers 1-3 are implemented, plus a thirteen-entry Fortran patch series (`patches/`) adding
 physics Elk does not have. **143 of the 146 live task codes sit behind a named method (97.9%);
-`Calculation` exposes 115 `get_*` methods.** Full narrative, with the verification evidence for
+`Calculation` exposes 116 `get_*` methods.** Full narrative, with the verification evidence for
 each row: `docs/status.md`.
 
 **Adding a capability: one row in this table, the verification narrative in `docs/status.md`, the
@@ -69,6 +69,7 @@ file** — this section is a routing table and grew to 940 lines once by not bei
 | 32 | Six task-family mixins + `params.py` input table | — | **uneven, labelled per method** — many are format-derived, i.e. untested |
 | 33 | LAPW/ground-state export for the JAX port | 0013-0024 | see `docs/jax_port_status.md` |
 | 34 | `STATE.OUT` format + conventions; `spec.ELK_VERSION`, `parse_charges()` | — | verified (`tests/fixtures/` `h_sc`, `c_diamond`, `sic_zb`; no binary needed) |
+| 35 | Momentum-resolved tunnelling Fermi surface (planar tip) | 0025 | verified (**exactly** equals §31's map integrated over the tip plane) |
 
 **What is open, and must not be quietly asserted as done**
 
@@ -111,6 +112,12 @@ file** — this section is a routing table and grew to 940 lines once by not bei
   alone. It differs in sign from pyqula's, deliberately. Berry curvature is in **Bohr²**.
 - Matrices from two separate diagonalisations do not share a basis inside a degenerate multiplet;
   anything combining operators must come from ONE diagonalisation.
+- §35's vacuum weighting has a **`rgkmax` floor, and the large-|k| pocket hits it first** — the
+  very pocket whose suppression is the result. Measured on NbSe2 at `rgkmax=7`: past ~3.5 Å the
+  K weight flattens onto ~1e-6 and the *apparent* contrast then FALLS (131x at 4.5 Å, 4.6x at
+  6.5 Å). Sweep the height and check both pockets are still straight on a log plot before
+  quoting any ratio. The check that a run IS clean is two distances: the pocket weights must
+  give a κ each, and those κ must predict how the contrast grew (measured 4.17 vs 4.17).
 - `soc_scale=` requires `spinorb=True` and a binary built from the patch series.
 - `patch` exits 0 on a FUZZY apply — the CI check carries a fuzz tripwire.
 

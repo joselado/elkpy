@@ -5132,3 +5132,242 @@ consistent set — which is what a reader needs — put `tasks 0` and `33` in a 
 and `parsers.volumetric.parse_plot3d()` reads their `RHO3D.OUT`. Each has a
 `regenerate.sh` that rebuilds it from the committed `elk.in` and prunes back to the
 committed file list, and a `README.md` carrying every number the run produces.
+
+# 35. The momentum-resolved tunnelling Fermi surface: a planar tip
+
+`Calculation.get_tunnelling_fermi_surface()` (elkpy task 9007,
+`patches/0025-tunnelling-fermi-surface.patch`,
+`src/elkpy_fermitunnel.f90`) computes the Fermi surface **as a tunnel
+junction samples it**, rather than as the band structure alone defines it.
+
+§31 puts a *point* tip at $\mathbf r$ above a two-dimensional material and
+gives a real-space map $T(\mathbf r;E)$. Replace the point by an infinite
+**plane** at height $z_{\rm t}$ and the same Landauer-Büttiker trace becomes a
+double plane integral,
+
+$$
+T(E)=\int_{\rm tip}d^2r\int_{\rm exit}d^2r'\,
+      \big|G(\mathbf r,\mathbf r';E)\big|^2 .
+$$
+
+Both planes are invariant under every lateral lattice translation, so the
+lateral momentum is conserved going **in** as well as going out — the tip's
+own translational invariance is the new ingredient — and the $\mathbf
+k$-sum is incoherent from both sides. What is left is one number per
+$\mathbf k$-point,
+
+$$
+T(E)=\sum_{\mathbf k}w_{\mathbf k}\,W(\mathbf k;E),
+\qquad
+W(\mathbf k;E)=\mathrm{Tr}\big[D\,G^{\rm t}_{\mathbf k}\,D\,S_{\mathbf k}\big],
+\qquad D=\mathrm{diag}(g_n),
+$$
+
+with $g_n=\sqrt{\mathrm{occmax}\,\delta_\eta(E-\varepsilon_{n\mathbf k})}$ the
+same on-shell amplitude §31 uses, and the two Gram matrices
+
+$$
+G^{\rm t}_{\mathbf k}[n,m]=\int_{\rm tip}\psi^*_{n\mathbf k}\hat Q_{\rm t}
+  \psi_{m\mathbf k}\,d^2r,
+\qquad
+S_{\mathbf k}[n,m]=\int_{\rm exit}\psi^*_{n\mathbf k}\hat P_{\rm s}
+  \psi_{m\mathbf k}\,d^2r' .
+$$
+
+### Why it is a k-decomposition of §31, not a new object
+
+$T(\mathbf r;E)$ integrated over one tip cell **is** $\sum_{\mathbf
+k}w_{\mathbf k}W(\mathbf k;E)$, exactly:
+
+$$
+\int_{\rm cell}T(\mathbf r;E)\,d^2r
+=\sum_{\mathbf k}w_{\mathbf k}\sum_{nm}g_ng_m
+ \Big[\int_{\rm tip}\psi_{n}\psi^*_{m}\Big]S_{\mathbf k}[n,m]
+=\sum_{\mathbf k}w_{\mathbf k}\,
+ \mathrm{Tr}\big[D\,G^{\rm t}_{\mathbf k}\,D\,S_{\mathbf k}\big].
+$$
+
+That is the derivation *and* a test on real data: nothing here is a new
+approximation on top of §31, only a different way of resolving the same
+transmission.
+
+### The contraction is a trace of a product, not an elementwise sum
+
+The Fortran exports **both** planes in the same convention, conjugate on the
+first index. The tip integral that appears in $|G|^2$ is therefore
+$\int_{\rm tip}\psi_n\psi^*_m=G^{\rm t}[m,n]$ by hermiticity, and
+
+$$
+W=\sum_{nm}g_ng_m\,G^{\rm t}[m,n]\,S[n,m]
+ =\mathrm{Tr}[D\,G^{\rm t}D\,S].
+$$
+
+The tempting elementwise form $\sum_{nm}g_ng_m G^{\rm t}[n,m]S[n,m]$ is
+$\mathrm{Tr}[D\,G^{\rm t}D\,S^{\mathsf T}]$. It is real, non-negative, blind
+to a degenerate rotation, and exactly right whenever $S$ is diagonal — so it
+is wrong only where the interference this exists for lives. This is the same
+transpose trap §31 documents one level down, on the exit variable, and it is
+pinned the same way: `parsers.fermitunnel.quadrature_weight()` evaluates the
+double integral literally, and
+`tests/test_parsers_fermitunnel.py::test_contraction_is_the_double_integral`
+samples **two distinct planes** (with one plane the two forms coincide and
+the test would prove nothing) and asserts the wrong form disagrees.
+
+### Two limits, free from the same export
+
+- $G^{\rm t}=S=\mathbb 1$ gives $W=\mathrm{occmax}\sum_n\delta_\eta(E-
+  \varepsilon_{n\mathbf k})$ — the **plain Fermi surface**, the same quantity
+  Elk's own task 103 writes through a completely separate code path.
+- $S=\mathbb 1$ alone gives $W=\sum_n g_n^2\,G^{\rm t}[n,n]$ — the Fermi
+  surface weighted by how much of each state survives out at the tip plane: a
+  planar Tersoff-Hamann image, in momentum space.
+
+`compute_fermi_weight()` returns the plain surface as `"bare"` on **every**
+call, on the same mesh, so the ratio — which pocket the junction actually
+sees — costs nothing and needs no second run.
+
+### What it is for
+
+A Bloch state's vacuum tail decays as $e^{-\kappa z}$ with
+$\kappa=\sqrt{2(V_0-E)+|\mathbf k+\mathbf G|^2}$, so a Fermi-surface sheet at
+large in-plane momentum is exponentially invisible to a tunnel junction while
+one at the zone centre is not. The plain Fermi surface and the one a junction
+sees can therefore look nothing alike. Monolayer 1H-NbSe2 is the worked case
+(`notebooks/21_tunnelling_fermi_surface.ipynb`): its $\Gamma$ and K pockets
+carry nearly the same density of states, and the junction sees essentially
+only $\Gamma$.
+
+### Implementation
+
+Both planes are specified as an **axis plus a fractional height**, never as a
+general parallelogram, because that is what makes each Gram matrix exact. In
+the interstitial $\psi=\Omega^{-1/2}\sum_{\mathbf G}c_{\mathbf
+G}e^{i(\mathbf k+\mathbf G)\cdot\mathbf r}$, and on a plane spanned by two
+lattice vectors the $\mathbf k$-dependent phases cancel between the two
+wavefunctions, leaving an orthogonality relation between the in-plane
+$\mathbf G$ indices:
+
+$$
+S[n,m]=\frac{A}{\Omega}\sum_{\mathbf G_\parallel}
+  b^*_n(\mathbf G_\parallel)\,\hat P\,b_m(\mathbf G_\parallel),
+\qquad
+b_n(\mathbf G_\parallel)=\sum_{G_3}c_n(\mathbf G_\parallel,G_3)
+  e^{2\pi iG_3 s}.
+$$
+
+Nothing is sampled and nothing converges. `elkpy_plane_gram` in
+`src/elkpy_fermitunnel.f90` does this; it is a deliberate **copy** of the
+block `elkpy_transport.f90` runs inline for its exit plane, rather than a
+shared routine, so that the already-verified task 9005 is not edited — and
+`tests/` pins the two against each other on a real run so the duplicate
+cannot drift.
+
+The $k$-points are generated and diagonalised fresh by the task (via
+`elkpy_transport_wf`, patch 0012), so the mesh is independent of `ngridk` and
+of `reducek`. That independence is not a convenience here: a symmetry-reduced
+mesh does not cover the Brillouin zone, so it cannot draw a Fermi surface.
+Measured cost on monolayer NbSe2 (3 atoms, 18 Å cell, `rgkmax=7`): ~70 s of
+`init0`/`init1`/`linengy`/`genapwlofr` setup, then **0.17 s per k-point**, so
+a $54\times54$ mesh is under ten minutes.
+
+Same requirements as §31, same reasons: `tshift=False` (Elk otherwise
+relocates the origin while both plane heights stay in your frame), both planes
+in the interstitial, and the material between them. All three are checked in
+the Fortran, which refuses rather than returning a plausible number.
+
+### Three observables, one export: DOS, Tersoff-Hamann, and the real dI/dV
+
+The same export answers a question that has nothing to do with $\mathbf k$
+resolution: **how far is a measured dI/dV from the density of states?** Three
+contractions, all returned on every call:
+
+| returned as | formula | bands add as |
+|---|---|---|
+| `"bare"` | $N(E)=\sum_{n\mathbf k}w_{\mathbf k}\delta_\eta(E-\varepsilon_{n\mathbf k})$ | — |
+| `"tersoff_hamann"` | $n(E;z_{\rm t})=\sum_{n\mathbf k}w_{\mathbf k}\delta_\eta\int_{\rm tip}\!|\psi_{n\mathbf k}|^2$ | probabilities |
+| `"weight"` | $\mathrm{Tr}[D\,G^{\rm t}_{\mathbf k}\,D\,S_{\mathbf k}]$ | amplitudes |
+
+with `"total_bare"`, `"total_tersoff_hamann"` and `"total"` their
+$\mathbf k$-integrals. `"bare"` and `"tersoff_hamann"` are fixed references:
+they ignore `tip_region`/`exit_region`, so asking for `weight` without the tip
+weighting cannot silently redefine the curve it is being compared against.
+
+Sweeping `energies` turns the three into three **spectra** at essentially no
+cost — neither the wavefunctions nor the Gram matrices depend on the energy,
+only $D$ does. The middle row is what makes the comparison honest: without it,
+"dI/dV differs from the DOS" conflates two separate effects, the vacuum
+weighting (row 1 → row 2) and the interference (row 2 → row 3).
+
+`"total"` and `"total_tersoff_hamann"` are both checked against §31's
+independently implemented point-tip map integrated over the tip plane —
+a real-space grid contracted pixel by pixel, versus a closed-form G-sphere
+collapse contracted as one trace per $\mathbf k$. On NbSe2 they agree to
+**1e-14**.
+
+**Measured on monolayer NbSe2** ($36\times36$ mesh, $\eta=0.004$ Ha, both
+planes 3.5 Å out, 101 energies over $\pm1.36$ eV): the DOS has exactly one
+peak in that range, at $-0.08$ eV. The dI/dV has a *dip* near there
+($-0.22$ eV) and two large peaks, at $-0.76$ and $+0.52$ eV, where the DOS has
+no structure at all. At $+0.52$ eV the dI/dV is $12.8\times$ its value at
+$E_F$ while the DOS is $0.36\times$ — the junction does not merely attenuate
+the DOS, it inverts the trend. The transfer function rises by $5.3\times$
+across the window through one vacuum gap and $22\times$ through two, because
+$\kappa=\sqrt{2(V_0-E)+|\mathbf k_\parallel|^2}$ falls as $E$ rises, so no
+constant divisor recovers $N(E)$ from a measured spectrum.
+
+This is the same conclusion the STM-theory literature reaches for graphene
+(Wehling *et al.*, PRL **101**, 216803 (2008), who write the middle row as
+$dI/dU\sim|\Psi_\Gamma|^2N_\Gamma+|\Psi_K|^2N_K$ and measure
+$|\Psi_\Gamma/\Psi_K|^2\propto e^{1.7\,\text{\AA}^{-1}z}$), and for planar
+2D-2D junctions (Li, Nie, Cho & Feenstra, J. Electron. Mater. **46**, 1378
+(2017), whose geometry is exactly this task's). **Caveat worth carrying:**
+everything here is the *elastic* channel. Wehling's point is that in graphene
+the elastic K channel is so suppressed that an inelastic, phonon-mediated one
+takes over — so a small computed dI/dV at some energy is a lower bound on what
+is measured, not a prediction of invisibility.
+
+### The one thing that will silently mislead you: the plane-wave floor
+
+`rgkmax` sets how far into the vacuum the interstitial plane-wave sum stays
+meaningful, and the **large-$\mathbf k$ pocket is what falls below that floor
+first** — precisely the pocket whose suppression is the result. Measured on
+NbSe2 at `rgkmax=7`, tip-only weighting, $12\times12$ mesh:
+
+| tip distance from the outer Se | $W(\Gamma)$ | $W(\mathrm K)$ | $\Gamma/\mathrm K$ |
+|---|---|---|---|
+| 1.5 Å | 6.19e-2 | 7.30e-3 | 8.5 |
+| 2.5 Å | 1.03e-2 | 3.60e-4 | 28.7 |
+| 3.5 Å | 1.40e-3 | 1.54e-5 | 91.2 |
+| 4.5 Å | 1.92e-4 | 1.47e-6 | 131 |
+| 5.5 Å | 3.12e-5 | 1.15e-6 | 27.1 |
+| 6.5 Å | 4.66e-6 | 1.01e-6 | 4.6 |
+
+$\Gamma$ decays as a clean exponential across the whole range
+($\kappa_\Gamma\approx0.95$ Å$^{-1}$). K decays as a clean, *steeper*
+exponential ($\kappa_{\rm K}\approx1.54$ Å$^{-1}$) only out to ~3.5 Å and
+then **flattens onto ~1e-6**, after which the apparent contrast *falls*. The
+flattening is height-**independent** — the last three rows differ by 15% over
+2 Å, which would need $\kappa\approx0.07$ Å$^{-1}$, i.e. a state within
+0.01 eV of the vacuum level — so it is the basis running out, not a state.
+The physical answer is the 3.5 Å row; the 6.5 Å row is numerical noise dressed
+as a result. **Sweep the tip height and check both pockets are still straight
+lines on a log plot before quoting a ratio.** Raising `rgkmax` pushes the floor
+down and the usable range out.
+
+The positive form of the same test — showing a run *is* clean — is to do it at
+two distances and check the physics closes on itself. With both planes at 2.5
+and then 3.5 Å, the $\Gamma$ and K pocket sums give
+$\kappa_\Gamma=1.14$ Å$^{-1}$ and $\kappa_{\rm K}=1.50$ Å$^{-1}$; those two
+numbers alone then predict how much the $\Gamma$/K contrast should grow
+between the runs, $e^{2\Delta\kappa\Delta z}=4.17$, against a measured
+$25.32/6.08=4.17$. A floor on either pocket would break that.
+
+One trap in the diagnostic itself, which looks exactly like a floor and is
+not: dividing $W(\mathbf k)$ by the plain surface gives a ratio that stops
+falling above $|\mathbf k|\approx0.66$ Å$^{-1}$ — at **both** distances, and
+with the two curves separated by exactly the expected exponential in $z$. A
+basis floor would move with distance. What saturates is the ratio, because a
+band several $\eta$ off the sampled energy contributes almost nothing to the
+denominator and can still dominate the numerator through a far better vacuum
+tail. Take pocket sums of $W$ itself, not ratios, when the question is how
+much current a sheet carries.

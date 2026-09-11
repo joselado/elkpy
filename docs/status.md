@@ -947,7 +947,7 @@ Elk *already has* reachable by name (`docs/design.md` §32, no `physics.tex` par
 per `CLAUDE.md`'s routine-wrapping rule): six task-family mixins under `src/elkpy/tasks/`, composed in
 `tasks/__init__.py`'s `ALL_MIXINS` and unpacked by `class Calculation(*ALL_MIXINS)`. **143 of the
 146 live task codes `vendor/elk/src/elk.f90` dispatches on now sit behind a named method (97.9%)**,
-up from about twenty; `Calculation` exposes 115 `get_*` methods. Coverage is measured against the
+up from about twenty; `Calculation` exposes 116 `get_*` methods. Coverage is measured against the
 dispatch, not claimed — a code counts only when a named method actually puts it in a task list,
 since `run_tasks()` could always reach all of them, which is exactly what this improves on. The
 three exceptions: task 2 (`geomopt` from atomic densities — the capability is wrapped, `get_relaxed()`
@@ -1138,3 +1138,109 @@ after one SCF iteration; `rhomag` never runs. Two consequences, both now written
 a second species — i.e. `natoms = [2, 1]` — so the interaction of the species-outer
 and atom-inner loops is inferred from `init0.f90:78-91` rather than measured. Cheap
 to add if it ever matters.
+
+## §35 — The momentum-resolved tunnelling Fermi surface (planar tip)
+
+**Verified: it equals §31's own map integrated over the tip plane, to 1e-9, through
+code paths sharing nothing.**
+
+`Calculation.get_tunnelling_fermi_surface()` (task 9007,
+`patches/0025-tunnelling-fermi-surface.patch`) answers a question §31 cannot: not
+*where* the current goes, but *which Bloch states* carry it. Replace §31's point tip
+by an infinite plane and the lateral momentum is conserved on the way in as well as
+out, so the transmission becomes one number per k-point,
+$W(\mathbf k;E)=\mathrm{Tr}[D\,G^{\rm t}_{\mathbf k}\,D\,S_{\mathbf k}]$. Design
+reasoning in `docs/design.md` §35, physics in `docs/physics.tex`, Part "The momentum-resolved
+tunnelling Fermi surface: a planar tip".
+
+### Why the verification is unusually strong for a quantity nothing else computes
+
+$\int_{\rm cell}T(\mathbf r;E)\,d^2r=\sum_{\mathbf k}w_{\mathbf k}W(\mathbf k;E)$ is
+an identity, not an approximation. The left side is §31's real-space map, sampled at
+576 plot2d points and contracted point by point; the right is the new task's two Gram
+matrices, built by a closed-form G-sphere collapse and contracted as one trace per
+k-point. They agree to `rel=1e-9`
+(`tests/test_calculation_fermitunnel.py::test_the_planar_weight_is_the_plane_integral_of_the_point_tip_map`).
+A wrong normalisation, k-weight, spinor sum or transposed contraction on either side
+breaks it. Everything §31 established therefore transfers.
+
+The rest of the ladder, all against a real binary on monolayer graphene:
+
+- the two tasks' **exit** Gram matrices agree to 1e-12. `elkpy_plane_gram` is a
+  deliberate copy of the block `elkpy_transport.f90` runs inline, so that the verified
+  task 9005 is not edited; this test is what stops the copy drifting;
+- the **tip** Gram matrix, in closed form, against a real-space rectangle rule over
+  task 9005's own samples of the same states on the same plane: 1e-10;
+- **both regions "cell"** reproduces $\mathrm{occmax}\sum_n\delta_\eta(E-\varepsilon)$
+  exactly, which pins occmax, Elk's smearing type and the k-weights together;
+- the **factorisation**, measured rather than argued: moving the tip while the exit
+  plane is held still changes $W$ by orders of magnitude but changes the two-plane /
+  tip-only ratio by nothing — 0.05242 at all four heights, to nine digits;
+- and 13 unit tests with no binary, of which the load-bearing one is
+  `test_contraction_is_the_double_integral`: $\mathrm{Tr}[D G^{\rm t} D S]$ against a
+  literal double quadrature on **two distinct planes**, asserting the elementwise
+  form $\mathrm{Tr}[D G^{\rm t} D S^{\mathsf T}]$ actually disagrees. With one plane
+  the two coincide and the test would prove nothing.
+
+**Not used as a reference, deliberately.** Elk's own task 103 writes a smeared-delta
+Fermi surface, and the plan had it as a rung. It was dropped: task 103 reaches its
+eigenvalues by the same `eveqnfv`/`eveqnsv` route this task does, so it would test the
+$\delta$ assembly and nothing more — which the occmax$\sum_n\delta_\eta$ check above
+already does exactly, and the identity against §31 already covers the eigenvalues.
+
+### The physics, on monolayer 1H-NbSe2
+
+Structure from COD 1539310 read through ASE, not hand-derived; the resulting
+Nb-Se = 2.602 Å and Se-Se thickness 3.361 Å were checked against the literature
+*before* any DFT ran on it. PBE, `spinpol=False` (DFT sits on a Stoner instability
+here — Divilov 2021 reports 1.09 $\mu_B$/Nb where Wickramaratne 2020 reports none;
+a moment would destroy the Fermi surface being studied), 18 Å cell, `rgkmax=7`,
+$54\times54\times1$ transport mesh, $\eta=0.003$ Ha.
+
+Cost, measured: ~70 s of `init0`/`init1`/`linengy`/`genapwlofr`, then **0.17 s per
+k-point**. The 2916-point mesh is ~12 minutes.
+
+### Three observables from one export, and what they measure
+
+Added after the k-resolved work: `"tersoff_hamann"` alongside `"bare"` and
+`"weight"`, so one call returns the plain DOS, the local DOS at the tip plane,
+and the full nonlocal-Green's-function dI/dV — same k-points, same
+eigenvalues. Pure Python, no Fortran change. Both `"total"` and
+`"total_tersoff_hamann"` agree with §31's independently implemented point-tip
+map integrated over the plane to **1e-14** on NbSe2, which is what makes the
+new column trustworthy rather than merely plausible.
+
+Measured (36x36, eta = 0.004 Ha, planes 3.5 A out, +/-1.36 eV): the DOS has
+one peak, at -0.08 eV; the dI/dV has a *dip* near there and two peaks at -0.76
+and +0.52 eV where the DOS is featureless. At +0.52 eV dI/dV is 12.8x its E_F
+value while the DOS is 0.36x. The transfer function is not constant — 5.3x
+across the window through one vacuum gap, 22x through two.
+
+**Carried as a limitation, not buried:** this is the elastic channel only.
+Wehling *et al.* (PRL 101, 216803 (2008)) show that in graphene the elastic
+K-point channel is so suppressed that an inelastic phonon-mediated channel
+dominates the measured spectrum instead. A small computed dI/dV is therefore a
+lower bound on what an experiment sees, not a prediction of invisibility.
+
+### The one that will mislead you: the plane-wave floor
+
+Documented at length in `docs/design.md` §35 because it was hit, not anticipated. The
+vacuum Gram matrix is built from the interstitial plane-wave sum, whose reach is set
+by `rgkmax`, and **the large-|k| pocket falls below that floor first** — the very
+pocket whose suppression is the result. Past ~3.5 Å the NbSe2 K weight flattens onto
+~1e-6 and the *apparent* $\Gamma$/K contrast then falls: 131 at 4.5 Å, 27 at 5.5 Å,
+4.6 at 6.5 Å. The flattening is height-INDEPENDENT, which no real state can be, so it
+is basis and not physics.
+
+A contrast quoted at one height cannot be told apart from this artefact. The way to
+show a run is clean is two distances: the $\Gamma$ and K pocket weights at 2.5 and
+3.5 Å give $\kappa_\Gamma=1.14$ and $\kappa_{\rm K}=1.50$ Å$^{-1}$ separately, and
+those two numbers then predict how much the contrast grew between the runs --
+$e^{2\Delta\kappa\,\Delta z}=4.17$ against a measured 4.17. Note the trap that cost
+an hour here: dividing $W$ by the plain surface makes a ratio that saturates above
+$|\mathbf k|\approx0.66$ Å$^{-1}$ at BOTH distances, which looks exactly like a floor
+and is not one -- it is band mixing, a band 8$\eta$ off the sampled energy carrying a
+far better vacuum tail than the one at $E_F$. The pocket sums do not have that
+problem. The height
+sweep is the diagnostic and it is cheap; `notebooks/21_tunnelling_fermi_surface.ipynb`
+runs it before it plots anything.

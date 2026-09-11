@@ -75,6 +75,11 @@ node's own. Override with `ELKPY_F90_LIB`, `ELKPY_MARCH` or `ELKPY_MODULES`
 - The interference no local picture contains: a substrate invariant under every lateral translation conserves $\mathbf k_\parallel$, leaving one Gram matrix per k-point, $S_{\mathbf k}[n,n']=\int_{\rm plane}\psi^*_{n\mathbf k}\psi_{n'\mathbf k}$, whose off-diagonal is the whole departure from a Tersoff-Hamann image [[notebook]](notebooks/20_vertical_transport.ipynb)
 - A magnetic substrate, which accepts $1+P_{\rm s}\hat{\mathbf n}\cdot\boldsymbol\sigma$ inside that overlap — the spin-space sibling of a magnetic tip, but selecting which states leave rather than which are seen [[docs]](docs/design.md)
 
+## The Fermi surface a tunnel junction sees ##
+- The Fermi surface weighted by the *nonlocal* Green's function of a junction whose tip is an infinite plane, $W(\mathbf k;E)=\mathrm{Tr}[D\,G^{\rm t}_{\mathbf k}\,D\,S_{\mathbf k}]$ with $D=\mathrm{diag}\sqrt{\delta_\eta(E-\varepsilon_{n\mathbf k})}$ and $G^{\rm t},S$ the bands' Gram matrices on the tip and substrate planes — the $\mathbf k$-decomposition of the transport above, since $\int_{\rm cell}T(\mathbf r;E)\,d^2r=\sum_{\mathbf k}w_{\mathbf k}W(\mathbf k;E)$ exactly [[notebook]](notebooks/21_tunnelling_fermi_surface.ipynb)
+- Why it is not the Fermi surface: a Bloch state's vacuum tail falls as $e^{-\kappa z}$ with $\kappa=\sqrt{2(V_0-E)+|\mathbf k_\parallel+\mathbf G|^2}$, so a sheet at large in-plane momentum is exponentially invisible to a junction. In monolayer NbSe$_2$ the K pockets carry most of the Fermi-level density of states and almost none of the tunnelling signal [[notebook]](notebooks/21_tunnelling_fermi_surface.ipynb)
+- The plain Fermi surface $\sum_n\delta_\eta(E-\varepsilon_{n\mathbf k})$ comes back on the same mesh from the same run (both Gram matrices set to the identity), so the ratio is the junction's own transfer function, taken on identical k-points [[notebook]](notebooks/21_tunnelling_fermi_surface.ipynb)
+
 ## Quantum geometry ##
 - The full quantum geometric tensor $Q_{ab}=g_{ab}-\tfrac i2F_{ab}$ at an arbitrary k-point: Berry curvature $F_{ab}$ *and* the quantum metric $g_{ab}$ (Fubini-Study distance between neighbouring Bloch states), from the same wavefunction-overlap queries used for eigenstates below [[notebook]](notebooks/07_quantum_geometry.ipynb)
 - The same tensor in its Kubo (sum-over-states) form $T_{ab}=\sum_{n\in W,\,m\notin W}\langle n|v_a|m\rangle\langle m|v_b|n\rangle/(\varepsilon_n-\varepsilon_m)^2$, needing no k-derivative at all — an independent route to $g_{ab}=\mathrm{Re}\,T_{ab}$ and $F_{ab}=-2\,\mathrm{Im}\,T_{ab}$ [[notebook]](notebooks/14_optical_matrix_elements.ipynb)
@@ -339,6 +344,7 @@ is the place to actually start:
 | [`18_exchange_constants.ipynb`](notebooks/18_exchange_constants.ipynb) | Anisotropic exchange tensor by four-state energy mapping (Heisenberg, DM, Kitaev) | yes |
 | [`19_spin_polarized_stm.ipynb`](notebooks/19_spin_polarized_stm.ipynb) | Spin-polarized STM image of a non-collinear 120-degree Néel Cr monolayer | yes |
 | [`20_vertical_transport.ipynb`](notebooks/20_vertical_transport.ipynb) | Vertical tunnelling transport: monolayer vs AB-bilayer graphene, and where the local picture fails | yes |
+| [`21_tunnelling_fermi_surface.ipynb`](notebooks/21_tunnelling_fermi_surface.ipynb) | The Fermi surface a tunnel junction sees: monolayer NbSe$_2$, where the K pockets all but vanish | yes |
 | [`01_getting_started.ipynb`](notebooks/01_getting_started.ipynb) | Ground state, band structure, density of states | -- |
 | [`02_relaxation_forces_and_properties.ipynb`](notebooks/02_relaxation_forces_and_properties.ipynb) | Forces, relaxation, effective mass, density, `run_tasks()` | -- |
 | [`03_phonon_dispersion_and_dos.ipynb`](notebooks/03_phonon_dispersion_and_dos.ipynb) | Phonon dispersion/DOS via DFPT | -- |

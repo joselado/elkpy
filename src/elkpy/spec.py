@@ -74,6 +74,13 @@ TASKS = {
                            # src/elkpy_transport.f90 --
                            # patches/0012-vertical-transport.patch
 
+    "fermitunnel": 9007,   # elkpy extension: momentum-resolved tunnelling Fermi
+                           # surface -- the tip- and exit-plane Gram matrices on
+                           # a k-grid, for a junction whose tip is an infinite
+                           # PLANE rather than task 9005's point,
+                           # src/elkpy_fermitunnel.f90 --
+                           # patches/0025-tunnelling-fermi-surface.patch
+
     "initial_state": 9006,  # elkpy extension: the ground state as init0/init1/
                            # rhoinit/potks leave it, i.e. at the TOP of Elk's
                            # first SCF iteration, with no STATE.OUT read and no
@@ -322,6 +329,8 @@ OUTPUT_FILES = {
                                            # cell integrals of the plotted fields
     "transport": "ELKPY_TRANSPORT.OUT",    # elkpy extension,
                                            # src/elkpy_transport.f90
+    "fermitunnel": "ELKPY_FERMITUNNEL.OUT",  # elkpy extension,
+                                           # src/elkpy_fermitunnel.f90
     "fermidos": "FERMIDOS.OUT",            # src/occupy.f90, DOS at the Fermi
                                            # energy per s.c. iteration
 

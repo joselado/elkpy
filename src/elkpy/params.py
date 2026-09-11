@@ -1325,6 +1325,55 @@ _EXTENSIONS = [
        source="elkpy",
        desc="the substrate's effective spin polarisation, in [-1, 1]",
        note="patches/0012-vertical-transport.patch"),
+    _b("elkpy_fermitunnel_planes", shape="vector", type=("int", "real", "real"),
+       n=3, var="elkpy_ft_axis/elkpy_ft_tip/elkpy_ft_exit", module="modmain",
+       cat="response", src=0, source="elkpy",
+       desc="the two planes of the tunnelling Fermi surface task (task 9007): "
+            "'axis tip exit' -- the lattice vector both planes are normal to, "
+            "then the tip plane's fractional coordinate along it (above the "
+            "material) and the exit/substrate plane's (below it)",
+       note="patches/0025-tunnelling-fermi-surface.patch"),
+    _b("elkpy_fermitunnel_window", "real", shape="vector", n=2,
+       var="elkpy_ft_window", module="modmain", cat="response", src=0,
+       source="elkpy",
+       desc="energy window in Hartree, relative to the Fermi energy, within "
+            "which states are exported by the tunnelling Fermi surface task",
+       note="patches/0025-tunnelling-fermi-surface.patch"),
+    _b("elkpy_fermitunnel_kgrid", "int", shape="vector", n=3,
+       var="elkpy_ft_ngrid", module="modmain", cat="response", src=0,
+       source="elkpy",
+       desc="the k-grid of the tunnelling Fermi surface task, diagonalised "
+            "fresh by the task itself and so independent of ngridk and "
+            "reducek -- which a Fermi surface needs, since a reduced mesh "
+            "does not cover the Brillouin zone",
+       note="patches/0025-tunnelling-fermi-surface.patch"),
+    _b("elkpy_fermitunnel_koffset", "real", shape="vector", n=3,
+       var="elkpy_ft_koff", module="modmain", cat="response", src=0,
+       source="elkpy",
+       desc="offset of that k-grid, in units of one grid spacing",
+       note="patches/0025-tunnelling-fermi-surface.patch"),
+    _b("elkpy_fermitunnel_tdir", "real", shape="vector", n=3,
+       default=(0.0, 0.0, 1.0), var="elkpy_ft_tdir", module="modmain",
+       cat="response", src=0, source="elkpy",
+       desc="tip magnetisation direction, in Cartesian coordinates "
+            "(normalised internally)",
+       note="patches/0025-tunnelling-fermi-surface.patch"),
+    _b("elkpy_fermitunnel_tpol", "real", default=0.0, lo=-1.0, hi=1.0,
+       var="elkpy_ft_tpol", module="modmain", cat="response", src=0,
+       source="elkpy",
+       desc="the tip's effective spin polarisation, in [-1, 1]",
+       note="patches/0025-tunnelling-fermi-surface.patch"),
+    _b("elkpy_fermitunnel_sdir", "real", shape="vector", n=3,
+       default=(0.0, 0.0, 1.0), var="elkpy_ft_sdir", module="modmain",
+       cat="response", src=0, source="elkpy",
+       desc="substrate magnetisation direction, in Cartesian coordinates "
+            "(normalised internally)",
+       note="patches/0025-tunnelling-fermi-surface.patch"),
+    _b("elkpy_fermitunnel_spol", "real", default=0.0, lo=-1.0, hi=1.0,
+       var="elkpy_ft_spol", module="modmain", cat="response", src=0,
+       source="elkpy",
+       desc="the substrate's effective spin polarisation, in [-1, 1]",
+       note="patches/0025-tunnelling-fermi-surface.patch"),
 ]
 
 

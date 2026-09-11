@@ -24,6 +24,7 @@ from .parsers import (
     effmass,
     eigval,
     exchange as parsers_exchange,
+    fermitunnel as parsers_fermitunnel,
     forces,
     geometry,
     info,
@@ -1106,6 +1107,210 @@ class Calculation(*ALL_MIXINS):
             field = result[name]
             result[name + "_grid"] = (
                 None if field is None else field.reshape(-1, n2, n1)
+            )
+        return result
+
+    def get_tunnelling_fermi_surface(
+        self,
+        tip_height,
+        exit_height,
+        kgrid=(24, 24, 1),
+        koffset=(0.0, 0.0, 0.0),
+        axis=3,
+        energies=None,
+        broadening=0.005,
+        window=None,
+        nsigma=8.0,
+        tip_direction=(0, 0, 1),
+        tip_polarization=0.0,
+        substrate_direction=(0, 0, 1),
+        substrate_polarization=0.0,
+        tip_region="plane",
+        exit_region="plane",
+        incoherent=True,
+    ):
+        """The momentum-resolved tunnelling Fermi surface (elkpy task 9007,
+        src/elkpy_fermitunnel.f90 -- docs/design.md #35).
+
+        The Fermi surface as a tunnel junction actually samples it, rather
+        than as the band structure alone defines it. get_vertical_transport()
+        puts a POINT tip above the sheet and gives a real-space map; replace
+        the point by an infinite PLANE at `tip_height` and the same
+        Landauer-Buettiker trace becomes a double plane integral,
+
+            T(E) = int_tip d^2r int_exit d^2r' |G(r, r'; E)|^2,
+
+        whose k-decomposition is one number per k-point,
+
+            T(E) = sum_k w_k W(k; E),   W(k; E) = Tr[D G_t D S],
+
+        with D = diag(g_n) the on-shell amplitudes and G_t, S the bands' Gram
+        matrices on the tip and exit planes. That is exactly the plane
+        integral of get_vertical_transport()'s own map,
+        int_cell T(r; E) d^2r = sum_k w_k W(k; E) -- the new quantity is a
+        k-decomposition of the verified one, and tests/ pins the two together.
+
+        What it is FOR: a Bloch state's vacuum tail decays as
+        exp(-kappa z) with kappa = sqrt(2(V0 - E) + |k + G|^2), so a pocket at
+        large in-plane momentum is exponentially invisible to a tunnel
+        junction while a pocket at the zone centre is not. Two Fermi surfaces
+        of the same material -- the plain one and the one a junction sees --
+        can therefore look nothing alike. The plain one is returned as "bare"
+        on every call, on the same mesh, so the ratio costs nothing.
+
+        Requires `tshift=False` (via `extra_blocks`), for the same reason
+        get_vertical_transport() does: Elk otherwise relocates the origin
+        while both plane heights stay in YOUR frame.
+
+        Both planes must lie in the vacuum, outside every muffin-tin sphere,
+        and the material must lie between them; the Fortran task checks both
+        and refuses rather than returning a plausible number. `rgkmax` sets
+        how far into the vacuum the interstitial plane-wave representation
+        stays meaningful, and the K-pocket weight is the first thing to fall
+        below that floor -- sweep `tip_height` and check the decay is still
+        exponential before trusting a contrast at one height.
+
+        Arguments:
+
+        - `tip_height`/`exit_height`: the two planes' fractional coordinates
+          along `axis`. The tip sits ABOVE the material, the exit (substrate)
+          plane below it.
+        - `kgrid`/`koffset`: the k-mesh, generated and diagonalised fresh by
+          the task, so independent of the ground state's `ngridk` and of
+          `reducek` -- which a Fermi surface needs, since a reduced mesh does
+          not cover the Brillouin zone. Note a mesh whose divisions are not a
+          multiple of three does not contain K.
+        - `energies`: the sample bias, in Hartree RELATIVE to the Fermi
+          energy (default: 0), scalar or sequence. Note
+          parsers.fermitunnel.compute_fermi_weight()'s identically named
+          argument is ABSOLUTE -- this method does the shift.
+        - `broadening`: eta in Hartree, the leads' own energy window. It has
+          to be at least as wide as the k-mesh spacing carries a band across,
+          or the Fermi surface breaks into dots: roughly eta >~ v_F |dk|.
+        - `window`: the (emin, emax) band-export window in Hartree relative
+          to E_F; by default `nsigma` broadenings either side.
+        - `tip_direction`/`tip_polarization`,
+          `substrate_direction`/`substrate_polarization`: magnetic leads,
+          each accepting 1 + P n.sigma inside its own overlap integral.
+          Needs nspinor=2.
+        - `tip_region`/`exit_region`: "cell" replaces that plane's Gram
+          matrix by the identity. Both "cell" is the plain Fermi surface;
+          `exit_region="cell"` alone is a planar Tersoff-Hamann image in
+          momentum space (the tip weighting only).
+        - `incoherent`: also build the weight with every substrate channel
+          tunnelling on its own, so the interference can be read off.
+
+        **Three levels of the same measurement come back on every call**, on
+        the same k-points and eigenvalues, because they are three contractions
+        of one export -- which is what makes them comparable at all:
+
+        - `"bare"`: the plain density of states, sum_n delta_eta(E - eps_kn).
+          No junction in it; this is what a band structure reports.
+        - `"tersoff_hamann"`: the local density of states at the tip plane,
+          sum_n g_n^2 int_tip |psi_n|^2. The Tersoff-Hamann model of dI/dV --
+          bands add as PROBABILITIES.
+        - `"weight"`: the full Tr[D G_t D S]. Bands add as AMPLITUDES and both
+          Gram matrices' off-diagonals contribute.
+
+        Sweeping `energies` turns those three into three spectra, and the
+        sweep is nearly free: neither the wavefunctions nor the Gram matrices
+        depend on the energy, only the on-shell weights do.
+
+        Returns a dict: "kpoints" (nk, 3) in lattice coordinates and
+        "kpoints_cartesian" (nk, 3) in 1/Bohr; "bias" (nE,) as passed and
+        "energies" (nE,) the absolute energies it became; "weight", "bare"
+        and "tersoff_hamann" (nE, nk) in arbitrary units (the lead couplings
+        are unfixed prefactors, so what this carries is the shape and the
+        contrast); "incoherent" and "interference" the same shape; "*_grid"
+        versions folded onto the k-mesh; "total", "total_bare" and
+        "total_tersoff_hamann" (nE,) their k-integrals, of which "total" is
+        the plane integral of get_vertical_transport()'s map; "channels",
+        "offdiagonal_weight", "least_eigenvalue", "hermiticity", "efermi"
+        and "raw" (the parsed export).
+        """
+        for name, region in (("tip_region", tip_region),
+                             ("exit_region", exit_region)):
+            if region not in ("plane", "cell"):
+                raise ValueError(
+                    f"unknown {name} {region!r}: use 'plane' (the real Gram "
+                    "matrix) or 'cell' (the identity)"
+                )
+        if axis not in (1, 2, 3):
+            raise ValueError(f"`axis` must be 1, 2 or 3, got {axis}")
+        for name, pol in (("tip_polarization", tip_polarization),
+                          ("substrate_polarization", substrate_polarization)):
+            if abs(pol) > 1.0:
+                raise ValueError(f"`{name}` must lie in [-1, 1], got {pol}")
+            if pol != 0.0 and not (self.spinpol or self.spinorb):
+                raise ValueError(
+                    f"a spin-polarized lead ({name}) needs nspinor=2 "
+                    "(spinpol=True and/or spinorb=True): without it Elk's "
+                    "wavefunctions carry no spin index for the projector to "
+                    "act on"
+                )
+        tshift = self.extra_blocks.get("tshift")
+        if tshift is None or bool(tshift[0]) is not False:
+            raise ValueError(
+                "get_tunnelling_fermi_surface() needs tshift=False -- pass "
+                "extra_blocks={'tshift': [False]} to Calculation(). Elk "
+                "otherwise relocates the origin (onto the inversion centre "
+                "when the crystal has one) while both plane heights stay in "
+                "your own frame, so the two planes would silently sit on the "
+                "wrong side of the material. Same requirement as "
+                "get_vertical_transport(), docs/design.md #31"
+            )
+        energies = [0.0] if energies is None else np.atleast_1d(energies).tolist()
+        if window is None:
+            pad = nsigma * broadening
+            window = (min(energies) - pad, max(energies) + pad)
+        blocks = {
+            "elkpy_fermitunnel_planes": [
+                (int(axis), float(tip_height), float(exit_height))
+            ],
+            "elkpy_fermitunnel_window": [(float(window[0]), float(window[1]))],
+            "elkpy_fermitunnel_kgrid": [tuple(int(n) for n in kgrid)],
+            "elkpy_fermitunnel_koffset": [tuple(float(x) for x in koffset)],
+            "elkpy_fermitunnel_tdir": [tuple(float(x) for x in tip_direction)],
+            "elkpy_fermitunnel_tpol": [float(tip_polarization)],
+            "elkpy_fermitunnel_sdir": [
+                tuple(float(x) for x in substrate_direction)
+            ],
+            "elkpy_fermitunnel_spol": [float(substrate_polarization)],
+        }
+        subdir = self._run_resumed(
+            "fermitunnel", [spec.TASKS["fermitunnel"]], blocks
+        )
+        out = subdir / spec.OUTPUT_FILES["fermitunnel"]
+        if not out.exists():
+            # the task refuses a geometry it cannot compute (a plane cutting a
+            # muffin-tin sphere, or planes on the wrong side of the material)
+            # with a message and a bare Fortran `stop`, which exits 0 -- so the
+            # launcher sees nothing wrong and the missing file is the signal
+            log = (subdir / "elk.out").read_text().strip().splitlines()
+            raise RuntimeError(
+                "the tunnelling Fermi surface task wrote no output; elk "
+                "said:\n  " + "\n  ".join(log[-12:])
+            )
+        data = parsers_fermitunnel.parse_fermitunnel(out)
+        absolute = [data["efermi"] + float(e) for e in energies]
+        result = parsers_fermitunnel.compute_fermi_weight(
+            data,
+            energies=absolute,
+            broadening=broadening,
+            stype=self._smearing_type(),
+            tip_region=tip_region,
+            exit_region=exit_region,
+            incoherent=incoherent,
+        )
+        result["bias"] = np.asarray(energies, dtype=float)
+        result["efermi"] = data["efermi"]
+        result["raw"] = data
+        for name in ("weight", "bare", "tersoff_hamann", "incoherent",
+                     "interference"):
+            field = result[name]
+            result[name + "_grid"] = (
+                None if field is None
+                else parsers_fermitunnel.reshape_grid(field, data["grid"])
             )
         return result
 

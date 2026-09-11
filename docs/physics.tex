@@ -3789,4 +3789,265 @@ contraction is deliberately not in Fortran --- keeping it in Python
 synthetic data and what makes an energy sweep free.
 
 
+\part{The momentum-resolved tunnelling Fermi surface: a planar tip}
+\label{part:fermitunnel}
+
+\section{Two Fermi surfaces of the same material}
+
+The Fermi surface is a property of the band structure alone: the set of
+$\mathbf k$ at which a band crosses $E_{\rm F}$, weighted by nothing. A
+tunnel junction does not see that surface. It sees each state through the
+amplitude that state has in the vacuum gap, and that amplitude is
+exponentially small in the state's own in-plane momentum. A Bloch state at
+lateral momentum $\mathbf k_\parallel$ decays into the vacuum as
+\begin{equation}
+  \psi \sim e^{-\kappa z},
+  \qquad
+  \kappa = \sqrt{2(V_0-E) + |\mathbf k_\parallel + \mathbf G_\parallel|^2},
+  \label{eq:kappa}
+\end{equation}
+with $V_0$ the vacuum level, so a Fermi-surface sheet far from the zone
+centre is suppressed relative to one at $\Gamma$ by $e^{-2\Delta\kappa z}$ ---
+orders of magnitude at a few {\AA}ngstr\"om. The plain Fermi surface and the
+one a junction actually samples can therefore look nothing alike, and this
+part computes the second one.
+
+The construction is Part~\ref{part:transport} with one change: the tip is an
+infinite \emph{plane} rather than a point. That change is what turns a
+real-space map into a momentum-space one.
+
+\section{From a point tip to a planar tip}
+
+Part~\ref{part:transport} takes the Landauer-B\"uttiker trace
+Eq.~\eqref{eq:landauer} with a rank-one $\Gamma_{\rm t}$ and gets the map
+$T(\mathbf r;E)=\int_{\rm exit}|G(\mathbf r,\mathbf r';E)|^2 d^2r'$. Let
+$\Gamma_{\rm t}$ instead be the projector onto a plane at height $z_{\rm t}$,
+uniform across it. The same trace becomes a \emph{double} plane integral,
+\begin{equation}
+  T(E) = \int_{\rm tip} d^2r \int_{\rm exit} d^2r'\;
+         \big|G(\mathbf r,\mathbf r';E)\big|^2 .
+  \label{eq:planetrans}
+\end{equation}
+Physically: the tip is now a featureless electrode parallel to the sample, the
+same idealisation Part~\ref{part:transport} already makes for the substrate,
+applied to both sides of the junction. What it describes is a planar tunnel
+junction --- and, for the pocket-selectivity question, it is also the right
+model of what an STM \emph{spectrum} averages over, since a real tip couples
+to a patch of the surface many lattice constants across.
+
+Both electrodes are now invariant under every lateral lattice translation, so
+the lateral crystal momentum is conserved going \emph{in} as well as going
+out. States at different $\mathbf k$ cannot interfere with one another
+anywhere in the junction, and Eq.~\eqref{eq:planetrans} decomposes into one
+number per $\mathbf k$-point:
+\begin{equation}
+  T(E)=\sum_{\mathbf k} w_{\mathbf k}\,W(\mathbf k;E),
+  \qquad
+  W(\mathbf k;E)=\mathrm{Tr}\big[D\,G^{\rm t}_{\mathbf k}\,D\,S_{\mathbf k}\big],
+  \qquad
+  D=\mathrm{diag}(g_n),
+  \label{eq:Wk}
+\end{equation}
+where $w_{\mathbf k}$ is the $k$-point weight,
+\begin{equation}
+  g_n=\sqrt{\mathrm{occmax}\;\delta_\eta\!\left(E-\varepsilon_{n\mathbf k}\right)}
+  \label{eq:onshell}
+\end{equation}
+is the on-shell amplitude of Part~\ref{part:transport} (Bardeen's golden
+rule: the modulus of the resolvent with its phase held fixed, $\eta$ the
+leads' energy width, $\mathrm{occmax}$ Elk's spin-degeneracy factor), and
+\begin{equation}
+  G^{\rm t}_{\mathbf k}[n,m]=\int_{\rm tip}\psi^*_{n\mathbf k}\,\hat Q_{\rm t}\,
+    \psi_{m\mathbf k}\,d^2r,
+  \qquad
+  S_{\mathbf k}[n,m]=\int_{\rm exit}\psi^*_{n\mathbf k}\,\hat P_{\rm s}\,
+    \psi_{m\mathbf k}\,d^2r'
+  \label{eq:grams}
+\end{equation}
+are the bands' Gram matrices restricted to the two planes, with $\hat Q_{\rm
+t}=1+P_{\rm t}\hat{\mathbf n}_{\rm t}\!\cdot\!\boldsymbol\sigma$ and $\hat
+P_{\rm s}=1+P_{\rm s}\hat{\mathbf n}_{\rm s}\!\cdot\!\boldsymbol\sigma$ the
+two electrodes' spin acceptance. Each integral runs over one surface unit
+cell; the $\mathbf k$-dependent phases cancel between the two wavefunctions,
+which is why the result is $\mathbf k$-diagonal.
+
+Every symbol in Eq.~\eqref{eq:Wk} has a physical reading. $g_n^2$ is how close
+band $n$ is to the sampled energy. $G^{\rm t}[n,n]$ is how much of that band
+survives out at the tip plane --- Eq.~\eqref{eq:kappa}'s exponential.
+$S[n,n]$ is the same for the substrate side. The off-diagonals are
+interference between bands degenerate at the junction energy: the part of
+tunnelling that no local density of states can represent.
+
+\section{The exact relation to the point-tip map}
+
+Eq.~\eqref{eq:Wk} is not a new approximation on top of
+Part~\ref{part:transport}. It is the same transmission resolved differently.
+Integrating the point-tip map over one tip cell,
+\begin{equation}
+  \int_{\rm cell} T(\mathbf r;E)\,d^2r
+  = \sum_{\mathbf k}w_{\mathbf k}\sum_{nm} g_n g_m
+    \left[\int_{\rm tip}\psi_{n\mathbf k}\psi^*_{m\mathbf k}\right]
+    S_{\mathbf k}[n,m]
+  = \sum_{\mathbf k}w_{\mathbf k}\,W(\mathbf k;E),
+  \label{eq:identity}
+\end{equation}
+exactly. Everything Part~\ref{part:transport} verified therefore carries over,
+and Eq.~\eqref{eq:identity} is itself a numerical test on a real run rather
+than an argument.
+
+\subsection{A trace of a product, not an elementwise sum}
+
+Eq.~\eqref{eq:identity} also fixes the contraction, and the wrong choice is
+almost invisible. Both Gram matrices Eq.~\eqref{eq:grams} carry the conjugate
+on the \emph{first} index, so the tip integral appearing inside $|G|^2$ is
+$\int_{\rm tip}\psi_n\psi^*_m = G^{\rm t}[m,n]$ by hermiticity, giving
+Eq.~\eqref{eq:Wk}. The tempting elementwise alternative
+\begin{equation}
+  \widetilde W = \sum_{nm} g_n g_m\,G^{\rm t}[n,m]\,S[n,m]
+  = \mathrm{Tr}\big[D\,G^{\rm t}D\,S^{\mathsf T}\big]
+  \label{eq:wrongform}
+\end{equation}
+is real, non-negative, invariant under a rotation inside a degenerate
+multiplet, and \emph{exactly equal} to $W$ whenever $S$ is diagonal --- so it
+is wrong only where the interference this exists for lives. It is the same
+transpose trap Part~\ref{part:transport} documents one level down, on the exit
+variable. Only a literal evaluation of the double integral
+Eq.~\eqref{eq:planetrans}, on two \emph{distinct} planes, separates them.
+
+\section{Two limits, and why they matter}
+
+Replacing a Gram matrix by the identity removes that electrode's spatial
+selectivity, and gives two reference quantities from the same data.
+
+\begin{itemize}
+\item $G^{\rm t}=S=\mathbb 1$:
+  \begin{equation}
+    W(\mathbf k;E)=\mathrm{occmax}\sum_n\delta_\eta(E-\varepsilon_{n\mathbf k}),
+  \end{equation}
+  the \textbf{plain Fermi surface} --- the smeared-delta quantity Elk's own
+  task 103 writes, through an entirely separate code path.
+\item $S=\mathbb 1$ alone:
+  \begin{equation}
+    W(\mathbf k;E)=\sum_n g_n^2\,G^{\rm t}[n,n],
+  \end{equation}
+  the Fermi surface weighted only by what reaches the tip plane. This is a
+  \textbf{planar Tersoff-Hamann image in momentum space}: the momentum-resolved
+  version of Part~\ref{part:spinstm}, with the interference dropped.
+\end{itemize}
+
+The plain surface is returned alongside the tunnelling one on every call, on
+the same mesh, so the ratio is available without a second calculation. That
+ratio is the physical content: it is the pocket selectivity of the junction,
+separated cleanly from the density of states.
+
+\section{Worked case: monolayer 1H-NbSe$_2$}
+
+Monolayer 1H-NbSe$_2$ (space group $P\bar6m2$, no inversion) has a single
+half-filled Nb $4d$ band crossing $E_{\rm F}$, giving one hole pocket at
+$\Gamma$ and one at each of K and K$'$ \cite{SilvaGuillen2016,Nakata2018}.
+The two are almost equally weighted in the density of states, but they are
+built from different orbitals: $\Gamma$ is Nb $d_{z^2}$ with a Se $p_z$
+admixture, while the K contours are ``composed entirely of Nb
+$[d_{x^2-y^2},d_{xy}]$ states'' \cite{Wickramaratne2020}. Both effects ---
+the in-plane momentum in Eq.~\eqref{eq:kappa} and the out-of-plane orbital
+character --- push the same way, and Eq.~\eqref{eq:Wk} should see $\Gamma$ and
+essentially not K.
+
+That is what is measured. With both planes 3.5\,\AA{} from the outer Se and
+$\eta=0.003$\,Ha on a $54\times54$ mesh: the K pockets carry $69.8\%$ of the
+Fermi-level density of states and $8.4\%$ of the tunnelling signal, while
+$\Gamma$ goes from $30.2\%$ to $91.6\%$ --- the junction reweights the two by
+a factor $25$. At a single $\mathbf k$-point the effect is larger still,
+because there the density of states divides out: $W(\Gamma)/W(\mathrm K)$ is
+$9\times10^3$ where the plain surface gives $0.85$.
+
+The mechanism is checkable on its own, and closes quantitatively. Sweeping the
+tip height gives $\kappa_\Gamma\approx0.95$\,\AA$^{-1}$ and
+$\kappa_{\rm K}\approx1.54$\,\AA$^{-1}$ from the tip plane alone, and the
+two-plane pocket sums at 2.5 and 3.5\,\AA{} give $1.14$ and
+$1.50$\,\AA$^{-1}$. Those two numbers alone then predict how much the
+contrast must grow between the two runs, $e^{2\Delta\kappa\Delta z}=4.17$,
+against a measured $25.32/6.08=4.17$: the reweighting is
+Eq.~\eqref{eq:kappa} and nothing else. The conclusion agrees with scanning
+tunnelling spectroscopy on monolayer NbSe$_2$, where fitting the measured
+spectrum needs a $\Gamma$ coupling many orders of magnitude larger than the K
+one \cite{Siegl2025}.
+
+\subsection{The numerical floor, and why the height must be swept}
+
+The Gram matrices are built from Elk's interstitial plane-wave
+representation, whose accuracy in the vacuum is set by \texttt{rgkmax}. Far
+enough out, the true tail falls below what that basis can represent and what
+is left is basis noise. \textbf{The large-$\mathbf k$ pocket hits that floor
+first} --- which is exactly the pocket whose suppression is the result. On
+NbSe$_2$ at \texttt{rgkmax}\,$=7$, $W(\Gamma)$ is a straight line on a log
+plot from 1.5 to 6.5\,\AA, while $W(\mathrm K)$ is straight only to
+$\sim$3.5\,\AA{} and then flattens onto a floor of $\sim10^{-6}$; past that
+the \emph{apparent} contrast falls again, from $131$ at 4.5\,\AA{} to $4.6$
+at 6.5\,\AA. The flattening is height-\emph{independent}, which no bound
+state can be, so it is basis rather than physics. A contrast quoted at a
+single height cannot be distinguished from this artefact. Sweep the height,
+confirm both pockets are still exponential, and --- the positive form of the
+same test --- check that the $\kappa$ measured for each pocket predicts how
+the contrast grows between two distances. Raising \texttt{rgkmax} pushes the
+floor down.
+
+\section{How to use it in code}
+
+\begin{verbatim}
+from elkpy import Calculation, Structure
+
+# tshift=False is mandatory: Elk otherwise moves the origin while both
+# plane heights stay in your own frame
+calc = Calculation(structure, workdir="nbse2", xc="PBE",
+                   ngridk=(12, 12, 1), rgkmax=7.0,
+                   extra_blocks={"tshift": [False], "swidth": [0.001]})
+
+# both planes 3.5 A from the outer Se of an 18 A cell
+r = calc.get_tunnelling_fermi_surface(
+    tip_height=0.7877, exit_height=0.2123,   # fractional, along axis 3
+    kgrid=(54, 54, 1), broadening=0.003)
+
+r["weight"][0]        # (nk,) the tunnelling Fermi surface, Eq. (Wk)
+r["bare"][0]          # (nk,) the plain one, same mesh, free
+r["weight_grid"][0]   # the same folded onto the k-mesh, ready to imshow
+r["kpoints_cartesian"]        # (nk, 3) in 1/Bohr, for a BZ plot
+r["interference"][0]  # coherent minus incoherent
+
+# the tip plane only: a planar Tersoff-Hamann image in momentum space
+tip_only = calc.get_tunnelling_fermi_surface(
+    tip_height=0.7877, exit_height=0.2123, kgrid=(54, 54, 1),
+    broadening=0.003, exit_region="cell")
+
+# the height sweep that separates physics from the plane-wave floor
+for d in (1.5, 2.5, 3.5, 4.5, 5.5, 6.5):
+    calc.get_tunnelling_fermi_surface(
+        tip_height=0.5933 + d / 18.0, exit_height=0.2123,
+        kgrid=(12, 12, 1), broadening=0.004, exit_region="cell")
+\end{verbatim}
+
+The Elk run is drivable from a plain \texttt{elk.in}: task \texttt{9007} with
+the \texttt{elkpy\_fermitunnel\_planes},
+\texttt{elkpy\_fermitunnel\_window}, \texttt{elkpy\_fermitunnel\_kgrid},
+\texttt{elkpy\_fermitunnel\_koffset}, \texttt{elkpy\_fermitunnel\_tdir},
+\texttt{elkpy\_fermitunnel\_tpol}, \texttt{elkpy\_fermitunnel\_sdir} and
+\texttt{elkpy\_fermitunnel\_spol} blocks. As in
+Part~\ref{part:transport}, the contraction is deliberately not in Fortran:
+keeping it in Python (\texttt{elkpy.parsers.fermitunnel}) is what makes it
+unit-testable against synthetic Gram matrices and what makes an energy sweep
+free --- neither the wavefunctions nor the Gram matrices depend on the energy,
+only $D$ does.
+
+\begin{thebibliography}{9}
+\bibitem{SilvaGuillen2016} J.~\'A. Silva-Guill\'en \emph{et al.},
+  2D Mater. \textbf{3}, 035028 (2016).
+\bibitem{Nakata2018} Y. Nakata \emph{et al.},
+  npj 2D Mater. Appl. \textbf{2}, 12 (2018).
+\bibitem{Wickramaratne2020} D. Wickramaratne, S. Khmelevskyi, D.~F. Agterberg
+  and I.~I. Mazin, Phys. Rev. X \textbf{10}, 041003 (2020).
+\bibitem{Siegl2025} Siegl \emph{et al.}, Nat. Commun. \textbf{16}, 8228
+  (2025).
+\end{thebibliography}
+
+
 \end{document}
