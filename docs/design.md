@@ -4360,6 +4360,83 @@ because the `_TD.OUT` eigenvectors and APPEND-mode observables must survive).
 Three mechanisms for one idea is a known non-uniformity, recorded here rather
 than refactored now.
 
+**And the collision between the wipe and a restart was not hypothetical.** Two
+methods offered a restart flag and then dispatched it through `_run_resumed`
+anyway: `get_gw_self_energy(reuse_epsinv=True)` (task 601, which skips
+`epsinv` in order to read the existing `EPSINV.OUT`) and
+`get_ulr_ground_state(from_state=True)` (task 701, whose whole difference from
+700 is `readstulr` in place of `potuinit`). The `rmtree` deleted the file
+before `elk.in` was written, so neither flag worked under **any** label — a
+fresh label gives an empty directory and the identical Fortran abort — and
+under the label it was given each also destroyed hours of prior work.
+`magnetism_manybody._run_reusing()` is now the one non-wiping dispatch for
+both: it asserts the file the task exists to read is present, so the failure is
+a Python `ValueError` naming it rather than an end-of-file abort inside
+`getcfgq`/`readstulr`; it checks the blocks that file was built with against
+the producing run's sidecar; and it then goes through the existing
+`_run_dependent()`. Neither task needs the prefixed task 1, because `gwsefm`
+and `gndstulr` both call `readstate` themselves.
+
+Which blocks a reused file pins is a physics question, and answering it
+refuted the docstring that motivated one of the flags. `genwgw.f90` builds the
+Matsubara count from `wmaxgw` **and** `tempk` ($n_{\rm wgw}=2\,{\rm
+nint}[w_{\max}/(\pi k_BT)]$, then `nwrf = nwbs+1`), and `init3.f90` builds
+`ngrf` from `gmaxrf`; all three are record dimensions of `EPSINV.OUT` that
+`getcfgq.f90:54-71` stops on. So task 601 cannot be used to "re-run the
+self-energy at a different `wmaxgw`/`tempk` with the same screening", which is
+exactly what the method's own docstring advertised. What it is for is
+re-entering the k-loop with the screening already built. `nempty` is pinned for
+the opposite reason — it changes the states `epsinv` is built from without
+changing a dimension, so it is the one case Elk cannot catch. For
+`STATE_ULR.OUT` only `avecu`/`scaleu` are pinned, `readstulr` checking nothing
+but unit-cell shapes; `ngridq` deliberately is not, because
+`readstulr.f90:114-127` maps the file's own Q-vectors onto the new grid and
+zeroes the rest, which makes a restart on a finer Q-grid a supported use rather
+than a mismatch.
+
+### Two wrappers that returned a number nobody could use
+
+Both were found by running the tests that had never been run, and in both the
+Fortran is right and the wrapper's own description was wrong.
+
+**`get_plane_wave_wavefunctions`'s cut-off is `gmaxvr`, not `hkmax`.**
+`init4.f90:24` is `if (task == 135) hkmax = 0.5d0*gmaxvr - epslat`, executed
+before `findngkmax` and unconditionally, so for this task the `hkmax` block is
+overwritten and inert: `hkmax=3.0` and `hkmax=5.0` give the same 982
+H-vectors and bit-identical coefficients on bulk Si. The argument now raises
+rather than silently returning the default cut-off, and `gmaxvr` is exposed
+(982, 2346 and 4573 vectors at 12, 16 and 20). The test that caught it was
+checking Bessel's inequality, $\sum_{\bf H}|c_{\bf H}|^2\le1$, and it was
+failing for a second and more interesting reason: `genwfpw` Fourier-transforms
+the muffin-tin part on the **coarse** radial mesh (every `lradstp`-th point,
+default 4), which cannot resolve $j_\ell(|{\bf H+k}|r)$ against $u_\ell(r)$
+at large $|\bf H+k|$. The quadrature error pushes the sum *above* 1 and
+**grows with the cut-off**, so refining the basis alone makes the bound worse:
+
+| `gmaxvr` | `lradstp=4` | `lradstp=1` |
+|---|---|---|
+| 12 | $1+7.7\times10^{-5}$ | $1-9.9\times10^{-5}$ |
+| 16 | $1+3.2\times10^{-4}$ | $1-1.9\times10^{-5}$ |
+| 20 | $1+1.7\times10^{-3}$ | $1-8.8\times10^{-6}$ |
+
+At `lradstp=1` the norm converges to 1 from below, as the physics says. The
+method documents the coupling and takes `lradstp`; the test now asserts both
+halves, so the mechanism cannot be mistaken for a transcription bug again.
+
+**ELNES at $\bf q=0$ is empty, not the optical limit.** Elk does drop the
+$1/q^4$ Rutherford factor there, which is what the docstring credited the
+special case to, but the matrix element collapses first: `genexpmat.f90:30-38`
+tests the global `vecql` and returns the identity, i.e.
+$\langle i{\bf k}|j{\bf k}\rangle=\delta_{ij}$. `elnes.f90` then forms
+$f_{ij}=|M_{ij}|^2f_j(f_{\max}-f_i)$, which for $i=j$ is
+$f_i(f_{\max}-f_i)$ — zero for every fully occupied and every empty state —
+while the energy transfer is zero for whatever is left. Measured on fcc Al:
+exactly 0.0 at all 100 grid points with the default `emaxelnes`, and, once
+`emax` is raised past $E_F$ so the metal's partially occupied states are
+admitted, a spike at zero energy loss and nothing else. `q` is now required and
+$\bf q=0$ refused, with $\bf q=(1/4,0,0)$ on the 4×4×4 fixture giving a real
+core-loss edge.
+
 Of the 148 codes `elk.f90` dispatches on, **2 are upstream no-ops** — 670 and
 680 dispatch to commented-out calls — leaving 146 live, of which **143 are
 emitted by a named method (97.9%)**. The three that are not:
@@ -4370,9 +4447,11 @@ emitted by a named method (97.9%)**. The three that are not:
   unreachable, and it would be wrong there.
 - **task 201** (`phononsc` resume) and **task 271** (`gndsteph` resume). Both
   resume from files a *previous* run of the same task left in the directory,
-  which the wiped-subdirectory invariant cannot supply. Supporting them
-  honestly needs a non-wiping run mode; tasks 200 and 270 are wrapped, so only
-  the restarts are missing.
+  which the wiped-subdirectory invariant cannot supply. The non-wiping run
+  mode they were waiting for now exists (`_run_reusing`, above), so what is
+  missing is no longer a mechanism but the reading: which files each resume
+  actually needs, and which blocks they pin. Tasks 200 and 270 are wrapped, so
+  only the restarts are missing.
 
 Coverage is measured against the dispatch, not claimed: a code counts only
 when a named method actually places it in a task list it runs. `run_tasks()`

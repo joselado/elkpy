@@ -46,6 +46,8 @@ verifier corrected the original reviewer, the corrected version is what is recor
 | 15 | Low | `src/elkpy/params.py:542` | maxrows off by one: Elk stops at exactly maxrows rows |
 | 16 | Low | `tests/test_params.py:62` | Completeness test checks names only, never a default/type/arity |
 | 17 | Low | `src/elkpy/parsers/sfac.py:60` | sfac vhmat returned transposed relative to the input block |
+| 18 | High | `src/elkpy/tasks/optics.py:268` | **FIXED, found 2026-09-12** -- get_plane_wave_wavefunctions(hkmax=) is inert; init4.f90:24 overwrites it |
+| 19 | Medium | `src/elkpy/tasks/spectra.py:1234` | **FIXED, found 2026-09-12** -- get_elnes defaulted to q=0, the one q whose cross-section is identically zero |
 
 The three high-severity findings are the **same bug**: a method offers a reuse or
 restart flag that selects an Elk task whose whole purpose is to read a file, then
@@ -347,6 +349,57 @@ launcher records which directory each task ran in and which task numbers reached
 **Verification.** Opened sfacrho.f90 and readinput.f90 myself: the column-print/row-read asymmetry is real exactly as cited, and groundstate.py:525 writes rows, so the input matrix is what Elk applies and the returned matrix is its transpose. I considered refuting on the grounds that sfac.py:49-53 documents the as-printed layout deliberately, and downgraded severity accordingly, but every factual claim holds, the public get_structure_factors docstring gives no hint, and the parser docstring's own rationale contradicts itself -- so this is a real (if low-impact) API defect, not a reviewer misreading. Verified the blast radius is limited: grep shows no consumer of result["vhmat"] anywhere in src/ or tests/, and raw ivh is never exposed.
 
 **Suggested fix.** Transpose in `parse_structure_factors` so the returned `vhmat` matches the matrix the caller passed, or document the difference on `get_structure_factors` itself, not only on the parser.
+
+
+---
+
+# Found while fixing the three high findings (2026-09-12)
+
+Neither is in the table above. Both are in this review's *unreached* list
+(bottom of this file: items (3) and (5) of "Not reached in the time box"), and
+both were found by running a test that had never been run rather than by
+reading more Fortran.
+
+## 18. `src/elkpy/tasks/optics.py` -- `get_plane_wave_wavefunctions(hkmax=)` is inert
+
+*wrong-parameter / verdict CONFIRMED, FIXED*
+
+`init4.f90:24` is `if (task == 135) hkmax=0.5d0*gmaxvr-epslat`, executed before
+`findngkmax` and unconditionally, so for task 135 the `hkmax` block is
+overwritten and has no effect. Measured on bulk Si (rgkmax 6, 2x2x2):
+`hkmax=3.0` and `hkmax=5.0` both give 982 H-vectors and bit-identical
+coefficients. The real knob is `gmaxvr` (982, 2346, 4573 vectors at 12, 16,
+20). The argument now raises rather than silently returning the default
+cut-off, and `gmaxvr`/`lradstp` are exposed.
+
+The same measurement explains the failing Bessel's-inequality assertion in
+`test_get_plane_wave_wavefunctions`, and it is not a transcription bug:
+`genwfpw` Fourier-transforms the muffin-tin part on the COARSE radial mesh
+(every `lradstp`-th point, default 4), which cannot resolve
+`j_l(|H+k| r)` against `u_l(r)` at large `|H+k|`. The quadrature error pushes
+`sum_H |c_H|^2` above 1 and GROWS with the cut-off -- +7.7e-5, +3.2e-4,
++1.7e-3 at gmaxvr 12, 16, 20 -- while at `lradstp=1` the sum converges to 1
+from below (-9.9e-5, -1.9e-5, -8.8e-6), which is the inequality the test meant
+to check. Refining the basis alone makes the bound worse.
+
+## 19. `src/elkpy/tasks/spectra.py` -- `get_elnes` defaulted to the one q that returns nothing
+
+*wrong-default / verdict CONFIRMED, FIXED*
+
+`get_elnes`'s default was `q=(0,0,0)`, and at q=0 the cross-section is
+identically zero -- which is correct physics, not a bug in `elnes.f90`.
+`genexpmat.f90:30-38` tests the global `vecql` and returns the IDENTITY, so
+`elnes.f90`'s weight `|M_ij|^2 f_j (f_max - f_i)` reduces to
+`f_i (f_max - f_i)`, zero for every fully occupied and every empty state, and
+the energy transfer `e_i(k) - e_i(k)` is zero for whatever is left. Measured on
+fcc Al, 4x4x4, window (0, 6) Ha, 100 points: **exactly 0.0 everywhere** at the
+default `emaxelnes = -1.2 Ha`; with `emax=1.0`, which admits the metal's
+partially occupied states, a spike at zero energy loss (max 3.8e-2) and nothing
+else; at `q=(1/4,0,0)` a real core-loss edge (max 1.4e-2, and 2.6 with valence
+states included). The docstring credited the special case to the 1/q^4
+Rutherford factor, which Elk does drop there, but the matrix element collapses
+first. `q` is now required and q=0 refused, naming the reason.
+
 
 ---
 

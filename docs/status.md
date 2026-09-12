@@ -979,6 +979,28 @@ but never run), and a few are structurally unrunnable in this build (meta-GGA `W
 which `build-config/make.inc` stubs out; Wannier90's `.amn`/`.mmn` need `libwannier`). Treat a
 format-derived method as untested until its first real run.
 
+**Five defects fixed 2026-09-12, and every one of them was in the wrapper rather than in
+Elk.** The three high-severity entries of `docs/review_findings.md` were one bug: a method
+offered a restart flag (`get_gw_self_energy(reuse_epsinv=True)`, task 601;
+`get_ulr_ground_state(from_state=True)`, task 701) and then dispatched it through
+`_run_resumed`, whose unconditional `rmtree` deleted the very file the task exists to read —
+dead under *any* label, and destructive under the one it was given. They now go through
+`magnetism_manybody._run_reusing()`, which asserts the file is present and checks the blocks
+it was built with against the producing run's sidecar; that check had to be derived from the
+Fortran, and doing so refuted the flag's own advertised purpose (task 601 cannot run "at a
+different `wmaxgw`/`tempk` with the same screening" — both set the Matsubara count, a record
+dimension `getcfgq` stops on). `get_anomalous_entropy` ran task 240, which writes no
+`EPHMAT.OUT` for task 270 to read (`ephcouple.f90:131` is the only `putephmat` call site in
+the tree), and omitted the `lmaxi>=2` that task 205 hard-stops without; it now runs
+`(205, 241, 270)` on the phonon family's own blocks. The remaining two are the two
+integration failures that had stood undiagnosed since 2026-09-07: the plane-wave
+re-expansion's norm exceeded 1 because `genwfpw` transforms the muffin-tin part on the
+COARSE radial mesh, an error that *grows* with the cut-off, and `hkmax=` was inert for task
+135 (`init4.f90:24` overwrites it, so `gmaxvr` is the cut-off); and ELNES at `q=0` is
+identically zero because `genexpmat` returns the identity there, which is correct physics, so
+`q` is now required. Findings 18 and 19 of `docs/review_findings.md`; the measurements are in
+`docs/design.md` §32.
+
 ---
 
 ## §34 — `STATE.OUT`: the format written down, and a fixture that pins it

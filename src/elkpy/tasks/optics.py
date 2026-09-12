@@ -265,33 +265,74 @@ class OpticsTasks:
     # task 135 -- plane-wave wavefunctions
     # ------------------------------------------------------------------
 
-    def get_plane_wave_wavefunctions(self, hkmax=None, label="wfpw"):
+    def get_plane_wave_wavefunctions(
+        self, gmaxvr=None, lradstp=None, hkmax=None, label="wfpw",
+    ):
         """Second-variational wavefunctions re-expanded in a pure plane-wave
         basis (task 135, src/writewfpw.f90, WFPW.OUT).
 
         genwfpw projects the full LAPW state -- muffin-tin spherical-
         harmonic expansion included -- onto plane waves e^{i(H+k).r} with
-        |H+k| < `hkmax`, so the result is the same wavefunction an
+        |H+k| < hkmax, so the result is the same wavefunction an
         (ultra-hard) pseudopotential code would produce. Useful for
         computing the electron momentum density, for comparing against a
         plane-wave code, or for feeding an external post-processor.
 
-        Convergence is visible in the data itself: sum_H |c_H|^2 for a
-        state approaches 1 from below as `hkmax` grows (the muffin-tin
-        cusps are what a plane-wave basis struggles with).
+        **The cut-off is `gmaxvr`, not Elk's `hkmax` block.** init4.f90:24
+        is `if (task == 135) hkmax = 0.5d0*gmaxvr - epslat`, executed before
+        findngkmax and unconditionally, so for this task alone the `hkmax`
+        block is overwritten and has no effect whatever: measured on bulk Si,
+        `hkmax=3.0` and `hkmax=5.0` give the same 982 H-vectors and
+        bit-identical coefficients. Passing `hkmax` here therefore raises
+        rather than silently returning the default cut-off. With
+        gmaxvr = 12 (Elk's own default), 16 and 20 the H-set is 982, 2346 and
+        4573 vectors; nhkmax grows as gmaxvr^3, so raising it is expensive in
+        both time and disk.
 
-        - `hkmax`: the plane-wave cut-off in atomic units, Elk's `hkmax`
-          block (default 12.0, readinput.f90:280). The array is
-          (nhkmax, nspinor, nstsv) complex per k-point, and nhkmax grows
-          as hkmax^3, so raising it is expensive in BOTH time and disk.
+        Convergence is visible in the data itself -- sum_H |c_H|^2 for a
+        state approaches 1 from BELOW as the cut-off grows, Bessel's
+        inequality in an orthonormal plane-wave basis -- **but only if
+        `lradstp` is refined with it**. genwfpw Fourier-transforms the
+        muffin-tin part on the COARSE radial mesh (rcmt, every `lradstp`-th
+        point; Elk's default is 4), and a coarse mesh cannot resolve
+        j_l(|H+k| r) against u_l(r) once |H+k| is large. The quadrature error
+        then pushes the sum ABOVE 1, and refining only the cut-off makes it
+        worse rather than better. Measured on bulk Si (rgkmax 6, 2x2x2), the
+        largest sum_H |c_H|^2 over all states:
+
+            gmaxvr    lradstp=4      lradstp=1
+              12     1 + 7.7e-05    1 - 9.9e-05
+              16     1 + 3.2e-04    1 - 1.9e-05
+              20     1 + 1.7e-03    1 - 8.8e-06
+
+        i.e. the default mesh's error GROWS with the cut-off while the fine
+        mesh converges to 1 from below, as the physics says it must. Pass
+        `lradstp=1` whenever the norm itself is the quantity of interest.
+
+        - `gmaxvr`: the plane-wave cut-off, in atomic units of |G| (Elk's
+          `gmaxvr` block, default 12.0, readinput.f90:78). The H+k cut-off
+          is half of it.
+        - `lradstp`: radial-mesh step for the muffin-tin transform (Elk's
+          `lradstp`, default 4). 1 is every point.
 
         Returns {"kpoints": (nkpt, 3) lattice coordinates,
                  "wfpw": (nkpt, nhkmax, nspinor, nstsv) complex,
                  "workdir": Path}. Note the k-points are Elk's REDUCED set.
         """
-        blocks = {}
         if hkmax is not None:
-            blocks["hkmax"] = [float(hkmax)]
+            raise ValueError(
+                "hkmax cannot be set for task 135: init4.f90:24 overwrites it "
+                "with 0.5*gmaxvr - epslat before the H+k set is built, so the "
+                "block is inert and two different hkmax values give "
+                "bit-identical coefficients. Pass gmaxvr instead -- the H+k "
+                f"cut-off is half of it, so gmaxvr={2 * float(hkmax):g} is the "
+                f"nearest equivalent of hkmax={float(hkmax):g}."
+            )
+        blocks = {}
+        if gmaxvr is not None:
+            blocks["gmaxvr"] = [float(gmaxvr)]
+        if lradstp is not None:
+            blocks["lradstp"] = [int(lradstp)]
         subdir = self._run_resumed(label, [spec.TASKS["wfpw"]], blocks)
         result = parsers_expmat.read_wfpw(subdir / spec.OUTPUT_FILES["wfpw"])
         result["workdir"] = subdir

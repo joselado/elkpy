@@ -117,19 +117,58 @@ def test_get_expiqr_rejects_incommensurate_q(si_optics):
 # --------------------------------------------------------------------------
 
 def test_get_plane_wave_wavefunctions(si_optics):
-    result = si_optics.get_plane_wave_wavefunctions(hkmax=3.0)
+    """sum_H |c_H|^2 is the norm of the state in the plane-wave
+    representation: Bessel's inequality in an orthonormal basis, so bounded
+    by 1 and approaching it as the cut-off grows.
+
+    It holds only on a radial mesh fine enough to do the muffin-tin
+    transform. genwfpw integrates j_l(|H+k| r) against u_l(r) on the COARSE
+    mesh (every ``lradstp``-th point, Elk's default 4), which at Si's default
+    cut-off overshoots 1 by 7.7e-5 -- and, because the error is the
+    quadrature's and not the basis's, overshoots by MORE as the cut-off grows
+    (3.2e-4 at gmaxvr 16, 1.7e-3 at 20). lradstp=1 is what makes the
+    inequality a statement about the basis again.
+
+    Getting the Fortran-order reshape wrong would scramble the
+    (H, spinor, state) axes and break the bound for every state at once.
+    """
+    result = si_optics.get_plane_wave_wavefunctions(lradstp=1)
     nkpt, nhkmax, nspinor, nstsv = result["wfpw"].shape
     assert result["kpoints"].shape == (nkpt, 3)
     assert nspinor == 1                      # no spinpol, no spinorb
 
-    # sum_H |c_H|^2 is the norm of the state in the plane-wave
-    # representation: bounded by 1 (Bessel's inequality) and approaching
-    # it as hkmax grows. Getting the Fortran-order reshape wrong would
-    # scramble the (H, spinor, state) axes and break this for every state
-    # at once.
     norms = (np.abs(result["wfpw"]) ** 2).sum(axis=(1, 2))
     assert np.all(norms <= 1.0 + 1e-8)
     assert np.all(norms[:, :4] > 0.9)
+
+
+def test_plane_wave_cutoff_is_gmaxvr_not_hkmax(si_optics):
+    """init4.f90:24 overwrites hkmax with 0.5*gmaxvr for task 135, so the
+    hkmax block is inert here and the method refuses it rather than
+    returning the default cut-off. gmaxvr is the knob that works: 12 -> 16
+    took the H-set from 982 to 2346 vectors when this was measured."""
+    with pytest.raises(ValueError, match="init4"):
+        si_optics.get_plane_wave_wavefunctions(hkmax=3.0)
+
+    small = si_optics.get_plane_wave_wavefunctions(label="wfpw_g12")
+    large = si_optics.get_plane_wave_wavefunctions(gmaxvr=16.0, label="wfpw_g16")
+    assert large["wfpw"].shape[1] > small["wfpw"].shape[1]
+
+
+def test_plane_wave_norm_overshoots_on_the_coarse_radial_mesh(si_optics):
+    """The other half of the same measurement, asserted so the mechanism
+    cannot be quietly mistaken for a transcription bug again: on Elk's
+    default lradstp the sum EXCEEDS 1, and refining the radial mesh alone --
+    same states, same cut-off, same H-set -- brings it back under."""
+    coarse = si_optics.get_plane_wave_wavefunctions(label="wfpw_l4")
+    fine = si_optics.get_plane_wave_wavefunctions(lradstp=1, label="wfpw_l1")
+    assert coarse["wfpw"].shape == fine["wfpw"].shape
+
+    def norm(result):
+        return (np.abs(result["wfpw"]) ** 2).sum(axis=(1, 2)).max()
+
+    assert norm(coarse) > 1.0 + 1e-5
+    assert norm(fine) <= 1.0
 
 
 # --------------------------------------------------------------------------

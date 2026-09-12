@@ -389,14 +389,23 @@ def test_smearing_functions(al):
     assert (np.diff(result["theta"]) >= -1e-12).all()
 
 
-def test_elnes_at_zero_momentum_transfer(al):
+def test_elnes_refuses_zero_momentum_transfer(al):
+    """q = 0 is not the optical limit of this quantity, it is an empty one.
+    genexpmat.f90:30-38 returns the identity for a zero vecql, so elnes.f90's
+    weight f_j (f_max - f_i) vanishes for every fully occupied and every empty
+    state, and the energy transfer vanishes for whatever is left. Measured
+    before the refusal went in: exactly 0.0 at all 100 grid points."""
+    with pytest.raises(ValueError, match="identically zero"):
+        al.get_elnes(q=(0.0, 0.0, 0.0), wplot=(0.0, 6.0), nwplot=100)
+
+
+def test_elnes_at_finite_momentum_transfer(al):
     """Al's shallow core levels sit at about -2.6 Ha (2p) and -4.0 Ha (2s)
     -- see test_atomic_eigenvalues_show_the_free_atom_spin_orbit_pair -- so
     the loss window has to reach several Hartree to contain an edge at all.
-    A window around zero returns a spectrum that is identically zero and
-    makes the non-negativity assertion vacuous."""
+    q = (1/4, 0, 0) is commensurate with this fixture's 4x4x4 mesh."""
     energies, cross_section = al.get_elnes(
-        q=(0.0, 0.0, 0.0), wplot=(0.0, 6.0), nwplot=100
+        q=(0.25, 0.0, 0.0), wplot=(0.0, 6.0), nwplot=100
     )
     assert energies.shape == (100,)
     assert cross_section.shape == (100,)

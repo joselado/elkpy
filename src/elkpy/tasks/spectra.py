@@ -1231,7 +1231,7 @@ class SpectraTasks:
         subdir = self._run_resumed(label, [_task("atomic_eigenvalues", 150)])
         return atomicstates.parse_evalsp(subdir / _file("evalsp", "EVALSP.OUT"))
 
-    def get_elnes(self, q=(0.0, 0.0, 0.0), wplot=(-0.5, 0.5), nwplot=500,
+    def get_elnes(self, q, wplot=(-0.5, 0.5), nwplot=500,
                   emax=None, swidth=None, ngridk=None, label="elnes"):
         """Electron energy loss near-edge structure (task 140,
         src/elnes.f90 -> ELNES.OUT).
@@ -1247,14 +1247,32 @@ class SpectraTasks:
         Brillouin-zone integrated by ``brzint``. Elk builds the matrix
         elements with ``genexpmat``, the full ``e^{iq.r}`` operator rather
         than its dipole limit, so this is valid at finite q where the
-        dipole selection rules break down. The 1/q^4 Rutherford factor is
-        dropped for q = 0 (the optical limit); use get_dielectric_function()
-        for a proper optical spectrum.
+        dipole selection rules break down.
+
+        **q = 0 is refused, and not because of the 1/q^4 factor.** Elk does
+        drop the Rutherford factor there (``elnes.f90``: ``if (q > epslat)``),
+        but the matrix element collapses first:
+        ``genexpmat.f90:30-38`` tests the global ``vecql`` and returns the
+        IDENTITY outright, which is just the statement that
+        :math:`\\langle i,{\\bf k}|j,{\\bf k}\\rangle=\\delta_{ij}`.
+        ``elnes.f90`` then builds
+        :math:`f_{ij}=|M_{ij}|^2 f_j(f_{\\max}-f_i)`, which for
+        :math:`i=j` is :math:`f_i(f_{\\max}-f_i)` -- zero for every fully
+        occupied and every empty state -- while the energy transfer
+        :math:`\\varepsilon_i({\\bf k})-\\varepsilon_i({\\bf k})` is zero
+        as well. So the cross-section is identically zero at q = 0, and no
+        window contains an edge. Measured on fcc Al: exactly 0.0 at every one
+        of 100 grid points with the default ``emaxelnes``, and, once `emax`
+        is raised past :math:`E_F` so that the metal's PARTIALLY occupied
+        states are admitted, a spike at zero energy loss and nothing else.
+        Use get_dielectric_function() for an optical spectrum; q -> 0 here is
+        not its limit, it is a different (and empty) quantity.
 
         - `q`: the momentum transfer in LATTICE (fractional reciprocal)
-          coordinates. It must be COMMENSURATE with the k-mesh --
-          ``elnes.f90`` checks ``ngridk * q`` is integral and stops
-          otherwise -- because the k+q state has to be another mesh point.
+          coordinates, required and nonzero. It must be COMMENSURATE with
+          the k-mesh -- ``elnes.f90`` checks ``ngridk * q`` is integral and
+          stops otherwise -- because the k+q state has to be another mesh
+          point.
         - `emax`: only initial states below this energy contribute
           (Elk's ``emaxelnes``, default -1.2 Ha), which is how the CORE-loss
           edge is selected: raise it towards E_F to include valence
@@ -1273,6 +1291,16 @@ class SpectraTasks:
             blocks["emaxelnes"] = [float(emax)]
         if swidth is not None:
             blocks["swidth"] = [float(swidth)]
+        if all(abs(float(qi)) < 1e-8 for qi in q):
+            raise ValueError(
+                "q=0 gives an identically zero ELNES cross-section, not an "
+                "optical limit: genexpmat.f90:30-38 returns the identity for a "
+                "zero vecql, so elnes.f90's occupation factor f_j (f_max - f_i) "
+                "vanishes for every fully occupied and every empty state and "
+                "the energy transfer is zero for the rest. Pass a nonzero q "
+                "commensurate with the k-mesh, or use "
+                "get_dielectric_function() for an optical spectrum."
+            )
         mesh = tuple(ngridk) if ngridk else self.ngridk
         for i, qi in enumerate(q):
             if abs(mesh[i] * qi - round(mesh[i] * qi)) > 1e-6:
