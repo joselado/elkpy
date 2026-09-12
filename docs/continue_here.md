@@ -1,6 +1,6 @@
 # Continue here
 
-Working state as of 2026-09-07, written to be picked up cold. Last verified: fast suite **525 passed / 12 skipped**, all **24** patches apply to a fresh `vendor/elk/` with no fuzz and `./build_elk.sh` completes, and all 50 `tests/test_calculation_*.py` suites run — **two failures, both Workstream A and neither touched by this session's work**: `test_calculation_optics.py::test_get_plane_wave_wavefunctions` (a plane-wave norm of 1.000043 against a Bessel's-inequality bound of 1 + 1e-8) and `test_calculation_spectra.py::test_elnes_at_zero_momentum_transfer` (the ELNES cross-section comes back identically zero). Both were found on a **rebuilt** binary: the `build/` tree on disk at the start of this session predated patches 0013-0022 and could not answer a `DENSITYK` query at all, so whatever binary produced the "206 passed" line this replaces no longer exists. Neither failure has been diagnosed.
+Working state as of 2026-09-12, written to be picked up cold. **Re-checked on 2026-09-12 without a rebuild**: all **25** patches (0025 is new since this header was last written) apply to a fresh copy of `vendor/elk/` in order with `patch -p1` exiting 0 and **zero** `fuzz` lines, and the binary-free suite is **622 passed / 451 skipped / 0 failed** (`ELKPY_ELK_BIN=/nonexistent/elk PYTHONPATH=src python3 -m pytest tests/ -q`). Neither `./build_elk.sh` nor any `tests/test_calculation_*.py` suite was re-run that day, so the line below is the last word on those. Last verified with a build (2026-09-07): fast suite **525 passed / 12 skipped**, `./build_elk.sh` completes, and all 50 `tests/test_calculation_*.py` suites run — **two failures, both Workstream A and neither touched by this session's work**: `test_calculation_optics.py::test_get_plane_wave_wavefunctions` (a plane-wave norm of 1.000043 against a Bessel's-inequality bound of 1 + 1e-8) and `test_calculation_spectra.py::test_elnes_at_zero_momentum_transfer` (the ELNES cross-section comes back identically zero). Both were found on a **rebuilt** binary: the `build/` tree on disk at the start of this session predated patches 0013-0022 and could not answer a `DENSITYK` query at all, so whatever binary produced the "206 passed" line this replaces no longer exists. Neither failure has been diagnosed.
 
 (Historical, and the reason the command below is worth keeping now that GitHub CI
 has been removed from the repository.) CI's `unit-tests` job had been red on every push since at least
@@ -10,8 +10,8 @@ resolved the `elk` binary eagerly, so the 28 deliberately binary-free tests in
 `tests/test_calculation_params.py` — both of which say "no Elk run" in their own
 docstrings — errored on any machine without a build. `Calculation.launcher` is
 now a lazy property. Run the binary-free suite locally with
-`ELKPY_ELK_BIN=/nonexistent/elk python3 -m pytest tests/ -q`: **558 passed, 437
-skipped, 0 failed**.
+`ELKPY_ELK_BIN=/nonexistent/elk python3 -m pytest tests/ -q`: **622 passed, 451
+skipped, 0 failed** (2026-09-12).
 
 Run the integration suites **one file per `pytest` process**. In a single process the whole set eventually dies inside `jaxlib`: `elkpy` launches Elk with `os.fork()` and JAX is multithreaded, which the interpreter warns about on every call.
 

@@ -35,7 +35,7 @@ extra functionality that Elk itself does not provide.
 
 ## Project status
 
-Roadmap Tiers 1-3 are implemented, plus a thirteen-entry Fortran patch series (`patches/`) adding
+Roadmap Tiers 1-3 are implemented, plus a twenty-five-entry Fortran patch series (`patches/`) adding
 physics Elk does not have. **143 of the 146 live task codes sit behind a named method (97.9%);
 `Calculation` exposes 116 `get_*` methods.** Full narrative, with the verification evidence for
 each row: `docs/status.md`.
