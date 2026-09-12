@@ -35,7 +35,7 @@ extra functionality that Elk itself does not provide.
 
 ## Project status
 
-Roadmap Tiers 1-3 are implemented, plus a twenty-five-entry Fortran patch series (`patches/`) adding
+Roadmap Tiers 1-3 are implemented, plus a twenty-six-entry Fortran patch series (`patches/`) adding
 physics Elk does not have. **143 of the 146 live task codes sit behind a named method (97.9%);
 `Calculation` exposes 116 `get_*` methods.** Full narrative, with the verification evidence for
 each row: `docs/status.md`.
@@ -121,6 +121,20 @@ file** — this section is a routing table and grew to 940 lines once by not bei
 - `soc_scale=` requires `spinorb=True` and a binary built from the patch series.
 - `patch` exits 0 on a FUZZY apply — so "it applied" is not "it applied cleanly". There is
   no CI; grep the `patch` output for `fuzz` by hand after any `vendor/elk/` bump.
+- **Upstream Elk has bugs, and a test that has never been run has found none of them.**
+  `bandstr.f90:40` declared `elm` `real(4)` on the same line as `bc` while `genlmirep` and
+  `writeelmirep` both declare it `real(8)`, so task 22 overran the heap by 2x and aborted in
+  malloc under `lmirep`'s own default; `dos.f90:58-60` splits the same two declarations
+  correctly, which is what makes it a bug rather than a convention. Patch 0026 fixes it and is
+  the ONLY patch in the series that fixes upstream rather than adding to it — check on an
+  upstream bump whether it can be dropped. A heap overrun is invisible until the allocator
+  happens to notice, so reading the Fortran would not have found this: running it did.
+- **A quantity odd under TIME REVERSAL cannot be summed on Elk's reduced k-set.** Time
+  reversal is not in `nsymcrys`, so `symrvf` cannot restore it: `get_paramagnetic_current`
+  forces `reducek=0` because on a reduced mesh $\mathbf j_p$ comes back 3e-2 to 6e-2 for a
+  ground state whose true answer is zero, and **does not shrink with the mesh** (3.2e-2 at
+  4³, 5.6e-2 at 6³, 5.2e-2 at 8³, against 2e-14 at `reducek=0`). Suspect this for any other
+  odd-under-T quantity before trusting a reduced-mesh number.
 
 ## Architecture
 

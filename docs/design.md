@@ -4394,7 +4394,7 @@ but unit-cell shapes; `ngridq` deliberately is not, because
 zeroes the rest, which makes a restart on a finer Q-grid a supported use rather
 than a mismatch.
 
-### Two wrappers that returned a number nobody could use
+### Four things the never-run tests found
 
 Both were found by running the tests that had never been run, and in both the
 Fortran is right and the wrapper's own description was wrong.
@@ -4422,6 +4422,43 @@ at large $|\bf H+k|$. The quadrature error pushes the sum *above* 1 and
 At `lradstp=1` the norm converges to 1 from below, as the physics says. The
 method documents the coupling and takes `lradstp`; the test now asserts both
 halves, so the mechanism cannot be mistaken for a transcription bug again.
+
+**`get_paramagnetic_current` cannot use Elk's reduced k-set.** $\mathbf j_p$ vanishes
+for a time-reversal-symmetric ground state with no applied field, and the cancellation
+is time reversal's own: $\psi_{-\mathbf k}=\psi^*_{\mathbf k}$ gives
+$\mathbf j_{-\mathbf k}(\mathbf r)=-\mathbf j_{\mathbf k}(\mathbf r)$ pointwise, so
+the two halves of the zone cancel. Time reversal is not a spatial operation and is
+therefore not in `nsymcrys` — while `genjpr.f90` sums the REDUCED set with `wkpt`
+weights and symmetrises the result with `symrvf`, which knows only the crystal
+symmetries. The cancellation never happens, and the residue is not a sampling error:
+measured on fcc Al along $\Gamma$-L, max $|\mathbf j_p|$ is $3.2\times10^{-2}$ on a
+reduced 4×4×4 mesh, $5.6\times10^{-2}$ on 6×6×6 and $5.2\times10^{-2}$ on 8×8×8 — it
+**grows** — against $3.7\times10^{-14}$ and $1.8\times10^{-14}$ at `reducek=0` on the
+4×4×4 and 8×8×8 meshes. The wrapper now forces `reducek=0` unconditionally, because the
+argument applies just as well with a field on, where the current is genuinely nonzero
+and a wrong answer looks like a result rather than like a bug. It costs a factor of the
+star size in k-points (64 against about 8 on that fixture), and `extra_blocks` can
+defeat it deliberately. Anything else odd under time reversal deserves the same
+suspicion before a reduced-mesh number is believed.
+
+**And one bug that is Elk's, not elkpy's: task 22 overran the heap.**
+`bandstr.f90:40` declares `elm` on the same line as `bc`, under the comment that
+explains the low precision — `real(4), allocatable :: bc(:,:,:,:),elm(:,:)` — but `elm`
+goes to `genlmirep` and `writeelmirep`, which both declare it `real(8)`
+(`genlmirep.f90:38`, `writeelmirep.f90:10`). `genlmirep` therefore writes 8 bytes per
+element into a 4-byte-per-element allocation, exactly twice the allocated size, and with
+`lmirep` at its own default of `.true.` the process dies with glibc's `corrupted size vs.
+prev_size` the moment it returns. `lmirep=.false.` and task 21 are unaffected, because
+`elm` is allocated only inside that branch. `dos.f90:58-60` is the proof of intent rather
+than a guess: the same two calls, the same shapes, and the declarations split — `real(4)`
+for `bc`/`sc`, `real(8)` for `elm`. **Patch 0026** makes `bandstr.f90` match, and is the
+only entry in the series that fixes upstream rather than adding to it. The check that it
+moved only `elm` is an identity, not an exit code: `lmirep` rotates the density matrix
+into the irreducible-representation basis, which mixes $m$ within each $\ell$ and so
+leaves every $\ell$ sum alone, and task 22's channels summed over each $\ell$ reproduce
+task 21's per-$\ell$ characters to $10^{-6}$ — the F12.6 both are written at, i.e.
+exactly. A heap overrun is invisible until the allocator happens to notice, so reading
+the Fortran would not have found this; running the test did.
 
 **ELNES at $\bf q=0$ is empty, not the optical limit.** Elk does drop the
 $1/q^4$ Rutherford factor there, which is what the docstring credited the

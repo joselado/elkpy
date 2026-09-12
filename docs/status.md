@@ -979,8 +979,7 @@ but never run), and a few are structurally unrunnable in this build (meta-GGA `W
 which `build-config/make.inc` stubs out; Wannier90's `.amn`/`.mmn` need `libwannier`). Treat a
 format-derived method as untested until its first real run.
 
-**Five defects fixed 2026-09-12, and every one of them was in the wrapper rather than in
-Elk.** The three high-severity entries of `docs/review_findings.md` were one bug: a method
+**Seven defects fixed 2026-09-12. Six were in the wrapper; one is in Elk itself.** The three high-severity entries of `docs/review_findings.md` were one bug: a method
 offered a restart flag (`get_gw_self_energy(reuse_epsinv=True)`, task 601;
 `get_ulr_ground_state(from_state=True)`, task 701) and then dispatched it through
 `_run_resumed`, whose unconditional `rmtree` deleted the very file the task exists to read —
@@ -998,8 +997,22 @@ re-expansion's norm exceeded 1 because `genwfpw` transforms the muffin-tin part 
 COARSE radial mesh, an error that *grows* with the cut-off, and `hkmax=` was inert for task
 135 (`init4.f90:24` overwrites it, so `gmaxvr` is the cut-off); and ELNES at `q=0` is
 identically zero because `genexpmat` returns the identity there, which is correct physics, so
-`q` is now required. Findings 18 and 19 of `docs/review_findings.md`; the measurements are in
-`docs/design.md` §32.
+`q` is now required.
+
+Running the rest of that suite then found two more, and one of them is not elkpy's.
+`vendor/elk/src/bandstr.f90:40` declares `elm` `real(4)` on the same line as `bc`, while
+`genlmirep` and `writeelmirep` both declare it `real(8)` — so task 22 ((l,m)-resolved band
+character) writes twice its allocation and **aborts in malloc** under `lmirep`'s own default.
+`dos.f90:58-60` splits the same two declarations correctly, which is what makes it a bug rather
+than a convention; **patch 0026** fixes it and is the only entry in the series that fixes upstream
+rather than adding to it. The check that it moved only `elm` is an identity, not an exit code:
+`lmirep` mixes $m$ within each $\ell$ and so preserves every $\ell$ sum, and task 22's channels
+summed over each $\ell$ reproduce task 21's per-$\ell$ characters to 1e-6, the F12.6 both are
+written at. And $\mathbf j_p$, which must vanish for a time-reversal-symmetric ground state, came
+back at 3e-2 to 6e-2 **without shrinking as the mesh was refined** — because the cancellation is
+time reversal's, and time reversal is not in `nsymcrys`, so `genjpr`'s reduced-k sum plus `symrvf`
+cannot produce it. `get_paramagnetic_current` now forces `reducek=0`, where the same quantity is
+2e-14. Findings 18-21 of `docs/review_findings.md`; the measurements are in `docs/design.md` §32.
 
 ---
 

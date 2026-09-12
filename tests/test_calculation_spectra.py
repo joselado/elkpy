@@ -168,16 +168,29 @@ def test_electric_field_is_a_three_component_field(al):
 
 def test_paramagnetic_current_vanishes_without_a_field(al):
     """j_p is odd under time reversal, so a time-reversal-symmetric ground
-    state with no applied vector potential carries none.
+    state with no applied vector potential carries none -- and it is MACHINE
+    zero, not merely small, once the whole zone is summed.
 
-    CAVEAT: src/genjpr.f90 also returns exactly zero when ``iscl < 1``
-    (no wavefunctions yet), so this assertion can pass for the wrong
-    reason. It is here for the shape and for a gross-regression bound, not
-    as a sharp physics check."""
+    The cancellation is time reversal's, not a crystal symmetry's, which is
+    why get_paramagnetic_current() forces reducek=0: genjpr.f90 sums the
+    reduced k-set and symmetrises with symrvf, which knows only nsymcrys, so
+    on a reduced mesh the residue is 3e-2 to 6e-2 here and does NOT shrink
+    with the mesh. That is asserted below as well, because a silent return to
+    the reduced set would otherwise look like a small number rather than a
+    wrong one.
+
+    CAVEAT unchanged: src/genjpr.f90 also returns exactly zero when
+    ``iscl < 1`` (no wavefunctions yet)."""
     result = al.get_paramagnetic_current(dim=1, line=LINE, npoints=20)
     assert result["values"].shape == (20, 3)
     assert np.isfinite(result["values"]).all()
-    assert np.abs(result["values"]).max() < 1e-3
+    assert np.abs(result["values"]).max() < 1e-10
+
+    reduced = al.get_paramagnetic_current(
+        dim=1, line=LINE, npoints=20, extra_blocks={"reducek": [1]},
+        label="jpr_reduced",
+    )
+    assert np.abs(reduced["values"]).max() > 1e-3
 
 
 def test_core_wavefunctions_are_normalised(al):
@@ -219,10 +232,34 @@ def test_band_character_energies_match_the_plain_band_structure(al):
 
 
 def test_band_character_lm_channel_count(al):
+    """Task 22 needs patch 0026 to run at all: bandstr.f90 declared `elm`
+    real(4) on the same line as `bc` while genlmirep writes real(8) into it,
+    so with lmirep at its own default of .true. the task overran the heap by a
+    factor of two and aborted in malloc."""
     result = al.get_band_character(kind="lm", vertices=LINE, npoints=10)
     atom = result[("Al", 1)]
     assert atom["characters"].shape[2] == 16  # (lmaxdb + 1)^2 with lmaxdb = 3
     assert atom["lmaxdb"] == 3
+
+
+def test_band_character_lm_sums_over_m_to_the_l_character(al):
+    """The identity that says patch 0026 moved `elm` and nothing else: lmirep
+    rotates the density matrix into the irreducible representation basis,
+    which mixes m WITHIN each l and therefore leaves every l sum alone. So
+    task 22's channels summed over each l must reproduce task 21's per-l
+    characters -- exactly, to the F12.6 both are written at."""
+    per_l = al.get_band_character(kind="l", vertices=LINE, npoints=10)[("Al", 1)]
+    per_lm = al.get_band_character(kind="lm", vertices=LINE, npoints=10)[("Al", 1)]
+    lmax = per_lm["lmaxdb"]
+
+    # task 21 writes the total first, then one column per l (bandstr.f90:216)
+    characters = per_l["characters"][..., 1:]
+    summed = np.stack(
+        [per_lm["characters"][..., l**2:(l + 1) ** 2].sum(axis=-1)
+         for l in range(lmax + 1)],
+        axis=-1,
+    )
+    np.testing.assert_allclose(summed, characters, atol=2e-6)
 
 
 def test_partial_dos_sums_to_the_total(al):

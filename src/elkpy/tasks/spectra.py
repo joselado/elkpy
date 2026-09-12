@@ -677,7 +677,8 @@ class SpectraTasks:
         )
 
     def get_paramagnetic_current(self, dim=3, line=None, npoints=200, plane=None,
-                                 box=None, grid=None, label=None):
+                                 box=None, grid=None, extra_blocks=None,
+                                 label=None):
         """Paramagnetic current density j_p(r) (tasks 371/372/373,
         src/jprplot.f90 -> JPR1D/JPR2D/JPR3D.OUT).
 
@@ -698,6 +699,25 @@ class SpectraTasks:
         costs a pass over the ground-state k-mesh rather than just reading
         STATE.OUT. Same `dim`/return convention as get_magnetisation(),
         including the dim=2 plane projection.
+
+        **This runs at ``reducek=0``, and that is not a performance choice.**
+        :math:`{\bf j}_p` vanishes by TIME REVERSAL:
+        :math:`\\psi_{-{\bf k}}=\\psi^*_{\bf k}` gives
+        :math:`{\bf j}_{-{\bf k}}({\bf r})=-{\bf j}_{\bf k}({\bf r})`
+        pointwise, so the two halves of the Brillouin zone cancel. Time
+        reversal is not a spatial operation, so it is not in ``nsymcrys`` --
+        and ``genjpr.f90`` sums the REDUCED k-set with ``wkpt`` weights and
+        then symmetrises with ``symrvf``, which knows only the crystal
+        symmetries. The cancellation therefore never happens, and the
+        residue does not shrink with the mesh because it is not a sampling
+        error. Measured on fcc Al with no applied field, where the answer is
+        exactly zero: max :math:`|{\bf j}_p|` = 3.2e-2 on a reduced 4x4x4
+        mesh, 5.6e-2 on 6x6x6 and 5.2e-2 on 8x8x8, against **3.7e-14 and
+        1.8e-14** at ``reducek=0`` on the 4x4x4 and 8x8x8 meshes. The same
+        argument applies with a field on, where the current is genuinely
+        nonzero and a wrong answer is not obvious, so the override is
+        unconditional. Pass ``reducek`` in `extra_blocks` to defeat it
+        deliberately.
         """
         return self._vector_plot(
             label,
@@ -710,6 +730,7 @@ class SpectraTasks:
              3: _file("paramagnetic_current_3d", "JPR3D.OUT"),
              "lines": _file("paramagnetic_current_lines", "JPRLINES.OUT")},
             dim, line=line, npoints=npoints, plane=plane, box=box, grid=grid,
+            extra_blocks={"reducek": [0], **(extra_blocks or {})},
         )
 
     def get_wxc(self, dim=3, line=None, npoints=200, plane=None, box=None,

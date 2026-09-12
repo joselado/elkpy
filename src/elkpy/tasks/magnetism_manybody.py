@@ -270,6 +270,18 @@ class MagnetismManyBodyTasks:
                 f"{required}."
             )
         stage = self._read_stage_manifest(subdir)
+        if not stage:
+            # The likely case on a scratch directory from before this
+            # machinery existed. Without the sidecar every pinned check would
+            # compare against None and raise anyway, but saying "was built
+            # with wmaxgw=None" invites the wrong fix.
+            raise ValueError(
+                f"{subdir} holds {required} but no {_STAGE_MANIFEST}, so there "
+                "is no record of the blocks that file was built with and "
+                "nothing to check this call against. Re-run the producing task "
+                "(which writes the sidecar) rather than reusing a directory "
+                "from before it existed."
+            )
         old = stage.get("blocks", {})
         for name in pinned:
             was, now = old.get(name), (blocks or {}).get(name)

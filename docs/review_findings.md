@@ -48,6 +48,8 @@ verifier corrected the original reviewer, the corrected version is what is recor
 | 17 | Low | `src/elkpy/parsers/sfac.py:60` | sfac vhmat returned transposed relative to the input block |
 | 18 | High | `src/elkpy/tasks/optics.py:268` | **FIXED, found 2026-09-12** -- get_plane_wave_wavefunctions(hkmax=) is inert; init4.f90:24 overwrites it |
 | 19 | Medium | `src/elkpy/tasks/spectra.py:1234` | **FIXED, found 2026-09-12** -- get_elnes defaulted to q=0, the one q whose cross-section is identically zero |
+| 20 | High | `vendor/elk/src/bandstr.f90:40` | **UPSTREAM Elk bug, FIXED by patch 0026, found 2026-09-12** -- elm declared real(4) where genlmirep writes real(8): task 22 overruns the heap and aborts |
+| 21 | High | `src/elkpy/tasks/spectra.py:679` | **FIXED, found 2026-09-12** -- j_p summed on the reduced k-set keeps a mesh-independent residue that time reversal, not being a spatial symmetry, cannot cancel |
 
 The three high-severity findings are the **same bug**: a method offers a reuse or
 restart flag that selects an Elk task whose whole purpose is to read a file, then
@@ -399,6 +401,77 @@ else; at `q=(1/4,0,0)` a real core-loss edge (max 1.4e-2, and 2.6 with valence
 states included). The docstring credited the special case to the 1/q^4
 Rutherford factor, which Elk does drop there, but the matrix element collapses
 first. `q` is now required and q=0 refused, naming the reason.
+
+
+## 20. `vendor/elk/src/bandstr.f90:40` -- task 22 overruns the heap and aborts (UPSTREAM Elk bug)
+
+*memory-safety / verdict CONFIRMED, FIXED by patch 0026*
+
+**What is wrong.** `bandstr.f90:40` declares `elm` on the same line as `bc`, under the
+comment that explains the low precision:
+
+    ! low precision for band character array saves memory
+    real(4), allocatable :: bc(:,:,:,:),elm(:,:)
+
+The low precision belongs to `bc`. `elm` goes to `genlmirep` and `writeelmirep`, which
+both declare it `real(8)` (`genlmirep.f90:38`, `writeelmirep.f90:10`), so `genlmirep`
+writes 8 bytes per element into a 4-byte-per-element allocation -- exactly twice the
+allocated size.
+
+**How it fails.** `get_band_character(kind="lm")` (task 22) with `lmirep` at its own
+default of `.true.`: `bandstr.f90:59` allocates `elm(lmmaxdb,natmtot)`, `:60` calls
+`genlmirep`, and the process dies with glibc's `corrupted size vs. prev_size` and
+`SIGABRT` (exit -6) as soon as it returns. Measured both ways on fcc Al, 4x4x4,
+`lmaxdb=3`: `lmirep=.true.` aborts, `lmirep=.false.` completes, which localises it to the
+one branch that allocates `elm`. Task 21 is unaffected -- it never allocates it.
+
+**Evidence.** `vendor/elk/src/bandstr.f90:40` (the declaration), `:58-66` (the
+`if (lmirep)` branch that allocates and uses it), `genlmirep.f90:38`, `writeelmirep.f90:10`
+(both `real(8)`), and `vendor/elk/src/dos.f90:58-60`, which makes the same two calls with
+the same shapes and splits the declarations correctly -- `real(4)` for `bc`/`sc`, `real(8)`
+for `elm`. That is what makes this a bug rather than a convention.
+
+**Verification.** Patch 0026 (the only patch in the series that fixes upstream rather than
+adding to it) splits the declaration. After a rebuild, task 22 runs, and the check that the
+patch moved only `elm` is an identity rather than a bare exit code: `lmirep` rotates the
+density matrix into the irreducible-representation basis, which mixes m WITHIN each l and
+so leaves every l sum alone, therefore task 22's channels summed over each l must reproduce
+task 21's per-l characters. Measured: agreement to 1e-6, which is the F12.6 both are
+written at, i.e. exact. `tests/test_calculation_spectra.py::test_band_character_lm_sums_over_m_to_the_l_character`.
+
+Worth stating plainly: a heap overrun is invisible until the allocator happens to notice,
+so no amount of reading the Fortran would have produced this. Running the test did.
+
+## 21. `src/elkpy/tasks/spectra.py` -- j_p on the reduced k-set keeps a residue time reversal should have killed
+
+*wrong-k-set / verdict CONFIRMED, FIXED*
+
+**What is wrong.** `get_paramagnetic_current` ran on Elk's default reduced k-set.
+:math:`{\bf j}_p` vanishes for a time-reversal-symmetric ground state with no applied
+field, but the cancellation is TIME REVERSAL's: :math:`\psi_{-\bf k}=\psi^*_{\bf k}`
+gives :math:`{\bf j}_{-\bf k}({\bf r})=-{\bf j}_{\bf k}({\bf r})` pointwise. Time
+reversal is not a spatial operation and so is not in `nsymcrys`; `genjpr.f90` sums the
+reduced set with `wkpt` weights and symmetrises with `symrvf`, which knows only the crystal
+symmetries. The cancellation therefore never happens.
+
+**How it fails.** fcc Al, no applied field, where the answer is exactly zero. max
+:math:`|{\bf j}_p|` along Gamma-L:
+
+| k-mesh | reduced | `reducek=0` |
+|---|---|---|
+| 4x4x4 | 3.2e-2 | 3.7e-14 |
+| 6x6x6 | 5.6e-2 | -- |
+| 8x8x8 | 5.2e-2 | 1.8e-14 |
+
+The residue does NOT shrink with the mesh, which is what rules out a sampling error; at
+`reducek=0` it is machine zero. The same argument applies with a field on, where the
+current is genuinely nonzero and a wrong answer looks like a result, so the wrapper now
+forces `reducek=0` unconditionally (defeatable through `extra_blocks`). It costs a factor
+of the star size in k-points -- 64 against about 8 on the 4x4x4 Al fixture.
+
+**Verification.** The test now asserts BOTH halves: `< 1e-10` on the default path and
+`> 1e-3` with `reducek=1` passed back in, so a silent return to the reduced set shows up as
+a wrong number rather than a small one.
 
 
 ---

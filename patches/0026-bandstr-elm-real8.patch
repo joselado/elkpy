@@ -1,0 +1,16 @@
+diff --git a/src/bandstr.f90 b/src/bandstr.f90
+--- a/src/bandstr.f90
++++ b/src/bandstr.f90
+@@ -37,7 +37,11 @@
+ ! allocatable arrays
+ real(8), allocatable :: evalfv(:,:)
+ ! low precision for band character array saves memory
+-real(4), allocatable :: bc(:,:,:,:),elm(:,:)
++real(4), allocatable :: bc(:,:,:,:)
++! elkpy: elm must be real(8) -- genlmirep and writeelmirep both declare it
++! elkpy: real(8), so a real(4) allocation is overrun by a factor of two and
++! elkpy: task 22 aborts in malloc. dos.f90:58-60 declares them the same way.
++real(8), allocatable :: elm(:,:)
+ complex(8), allocatable :: ulm(:,:,:),dmat(:,:,:,:,:)
+ complex(8), allocatable :: apwalm(:,:,:,:,:),evecfv(:,:,:),evecsv(:,:)
+ ! initialise universal variables
