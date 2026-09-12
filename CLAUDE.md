@@ -119,7 +119,8 @@ file** — this section is a routing table and grew to 940 lines once by not bei
   quoting any ratio. The check that a run IS clean is two distances: the pocket weights must
   give a κ each, and those κ must predict how the contrast grew (measured 4.17 vs 4.17).
 - `soc_scale=` requires `spinorb=True` and a binary built from the patch series.
-- `patch` exits 0 on a FUZZY apply — the CI check carries a fuzz tripwire.
+- `patch` exits 0 on a FUZZY apply — so "it applied" is not "it applied cleanly". There is
+  no CI; grep the `patch` output for `fuzz` by hand after any `vendor/elk/` bump.
 
 ## Architecture
 

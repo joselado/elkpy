@@ -656,9 +656,9 @@ path rather than against itself — §§24-27, with `docs/physics.tex` Parts XII
   against the analytic Dirac-exchange formula; the Kerr angle verified odd under
   magnetization reversal on two independent ground states.
 
-Infrastructure from the same batch: `.github/workflows/ci.yml` (roadmap Tier 6 — unit
-tests, the patch-series check §8 asks for, a build job; note `patch` exits 0 on a FUZZY
-apply, so a fuzz tripwire is included, which earlier "applies cleanly" checks lacked);
+Infrastructure from the same batch: a GitHub Actions workflow (roadmap Tier 6 — unit
+tests, the patch-series check §8 asks for, a build job), **since removed**, so the fuzz
+tripwire it carried is now a manual step (`patch` exits 0 on a FUZZY apply);
 a flock-based semaphore in `launcher.py` bounding concurrent `elk` processes machine-wide
 (`ELKPY_MAX_CONCURRENT`, default 4) plus OpenBLAS/MKL thread pinning, since Elk links
 `-lopenblas` whose threading is NOT governed by `OMP_NUM_THREADS` when built against

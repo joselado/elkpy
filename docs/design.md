@@ -236,10 +236,12 @@ tree, so upgrading `vendor/elk/` to a new upstream release stays cheap. Concrete
   Fortran additions (e.g. task numbers in a clearly-unused high range, block
   names with an `elkpy` or similar prefix) to minimize collision risk if a future
   upstream version happens to reuse the same numbers/names for something else.
-- A CI check that the patch series still applies cleanly against the pinned
+- Checking that the patch series still applies cleanly against the pinned
   vendored version gives early warning when a version bump breaks a patch,
   instead of a silent divergence — this is the actual cost center of this whole
-  approach, and it's cheap to catch automatically.
+  approach. It used to run in CI; with CI removed it is a manual step (apply
+  `patches/*.patch` in order to a scratch copy, and grep the output for `fuzz`,
+  since `patch` exits 0 on a fuzzy apply).
 - Prefer Elk's existing **export tasks** first when they're sufficient — task 120
   (momentum matrix elements), 130 (`⟨Ψ_{ik+q}|e^{iq·r}|Ψ_jk⟩`), 135 (plane-wave
   wavefunctions), 550 (Wannier90 export), 640 (density matrix/natural orbitals),

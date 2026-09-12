@@ -17,9 +17,9 @@ invariant cannot preserve. `spec.py` grew from 23 to 152 task codes, from 27 to
 branches as a validated, searchable table. Coverage is measured against the
 dispatch rather than claimed: a code counts only when a named method actually
 puts it in a task list, since `run_tasks()` could always reach all of them.
-Tier 5 (MPI, schedulers, sweep helpers) remains planning only. Tier 6: CI has
-landed (`.github/workflows/ci.yml`, including the patch-series check §8 asks
-for); the README quickstart exists; packaging polish does not. Builds on the v0 slice (`Structure`,
+Tier 5 (MPI, schedulers, sweep helpers) remains planning only. Tier 6: the README
+quickstart exists; packaging polish does not; CI was landed and then removed — the
+checks it ran are now local-only. Builds on the v0 slice (`Structure`,
 `Calculation.get_energy/get_bands/get_dos`, `run_tasks` escape hatch — see
 `docs/design.md` §10) and on `docs/design.md`'s object model. "Additional
 implementations" here means broader coverage of Elk's own standard
@@ -232,13 +232,18 @@ DFT -> irvsp/vasp2trace -> Bilbao tables.
 ## Tier 6 — Housekeeping
 
 1. `README.md` quickstart -- DONE.
-2. **CI -- DONE** (`.github/workflows/ci.yml`): four staged jobs, cheapest
-   first. `unit-tests` runs the whole suite with `ELKPY_ELK_BIN` pointed at a
-   nonexistent path, so the binary-free tests select themselves (a `-k`
-   expression drifts and under-selects: it misses the three binary-free tests
-   living inside `test_calculation_soc.py`), with a minimum-test-count guard
-   because pytest exits 0 if everything skips. `patch-series` is §8's check.
-   Two findings shaped it:
+2. **CI -- REMOVED.** A four-job GitHub Actions workflow
+   (`.github/workflows/ci.yml`) was landed and later deleted at the user's
+   request; nothing runs automatically on push any more. What it checked is
+   still worth doing by hand, and the two findings that shaped it still hold:
+
+   - The binary-free tests select themselves under
+     `ELKPY_ELK_BIN=/nonexistent/elk python3 -m pytest tests/ -q` -- do not use
+     a `-k` expression, it drifts and under-selects (it misses the three
+     binary-free tests living inside `test_calculation_soc.py`). Note pytest
+     exits 0 if everything skips, so check the passed count, not the status.
+   - `patch-series` was §8's check; run it by applying `patches/*.patch`
+     sequentially to a scratch copy of `vendor/elk/`.
 
    - **A per-patch `--dry-run` against pristine `vendor/elk/` cannot work.**
      The series is cumulative -- 0004-0009 all edit a file 0003 *creates* --
@@ -248,11 +253,9 @@ DFT -> irvsp/vasp2trace -> Bilbao tables.
      gives `fuzz 1` and success, so an exit-code check alone would pass a
      silently mis-applied series. The job greps for fuzz explicitly.
 
-   `build-elk` runs `build_elk.sh` (measured 3m15s locally for 410
-   objects, so viable on a public runner). The binary is deliberately never
-   cached or shared between jobs: `build-config/make.inc` uses `-march=native`
-   and CI runner fleets are heterogeneous, so a cached binary risks `SIGILL`.
-   `integration` is manual/scheduled only.
+   One more reason not to resurrect this as-is: `build-config/make.inc` uses
+   `-march=native`, and hosted-runner fleets are heterogeneous, so a binary
+   built in one job can `SIGILL` in the next.
 3. Packaging polish (dependency version pins, a changelog) once the API
    surface is less likely to change week to week. One real bug found and
    fixed meanwhile: a non-editable `pip install .` put the package in

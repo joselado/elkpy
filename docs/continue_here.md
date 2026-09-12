@@ -2,13 +2,14 @@
 
 Working state as of 2026-09-07, written to be picked up cold. Last verified: fast suite **525 passed / 12 skipped**, all **24** patches apply to a fresh `vendor/elk/` with no fuzz and `./build_elk.sh` completes, and all 50 `tests/test_calculation_*.py` suites run — **two failures, both Workstream A and neither touched by this session's work**: `test_calculation_optics.py::test_get_plane_wave_wavefunctions` (a plane-wave norm of 1.000043 against a Bessel's-inequality bound of 1 + 1e-8) and `test_calculation_spectra.py::test_elnes_at_zero_momentum_transfer` (the ELNES cross-section comes back identically zero). Both were found on a **rebuilt** binary: the `build/` tree on disk at the start of this session predated patches 0013-0022 and could not answer a `DENSITYK` query at all, so whatever binary produced the "206 passed" line this replaces no longer exists. Neither failure has been diagnosed.
 
-GitHub CI's `unit-tests` job had been red on every push since at least
+(Historical, and the reason the command below is worth keeping now that GitHub CI
+has been removed from the repository.) CI's `unit-tests` job had been red on every push since at least
 2026-09-07, and not for an infrastructure reason: constructing a `Calculation`
 resolved the `elk` binary eagerly, so the 28 deliberately binary-free tests in
 `tests/test_tasks_spectra.py` and the mixin half of
 `tests/test_calculation_params.py` — both of which say "no Elk run" in their own
 docstrings — errored on any machine without a build. `Calculation.launcher` is
-now a lazy property. Reproduce a CI run locally with
+now a lazy property. Run the binary-free suite locally with
 `ELKPY_ELK_BIN=/nonexistent/elk python3 -m pytest tests/ -q`: **558 passed, 437
 skipped, 0 failed**.
 
