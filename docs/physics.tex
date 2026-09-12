@@ -3961,6 +3961,21 @@ a factor $25$. At a single $\mathbf k$-point the effect is larger still,
 because there the density of states divides out: $W(\Gamma)/W(\mathrm K)$ is
 $9\times10^3$ where the plain surface gives $0.85$.
 
+Read the two shares asymmetrically. A $\mathbf k$-point is assigned to K when
+it is closer to a zone corner than to $\Gamma$, and those six bisectors bound a
+hexagon of inradius $|\mathbf K|/2$ around $\Gamma$, i.e. exactly $1/3$ of the
+zone by area --- so a \emph{featureless} weight would already give K $66.7\%$.
+The $69.8\%$ is therefore not the interesting number: it says the Fermi-level
+density of states is close to uniform per unit area, which is the premise, not
+the result. The result is the $8.4\%$, and the reweighting factor
+\begin{equation}
+  R=\frac{W_\Gamma/W_{\rm K}}{D_\Gamma/D_{\rm K}}
+  \label{eq:reweight}
+\end{equation}
+in which the partition, and with it the area bias, cancels between numerator
+and denominator. $R=25.3$ at $3.5$\,\AA{} and $6.08$ at $2.5$\,\AA{}; those are
+the two numbers the height test below uses.
+
 The mechanism is checkable on its own, and closes quantitatively. Sweeping the
 tip height gives $\kappa_\Gamma\approx0.95$\,\AA$^{-1}$ and
 $\kappa_{\rm K}\approx1.54$\,\AA$^{-1}$ from the tip plane alone, and the
@@ -3968,7 +3983,35 @@ two-plane pocket sums at 2.5 and 3.5\,\AA{} give $1.14$ and
 $1.50$\,\AA$^{-1}$. Those two numbers alone then predict how much the
 contrast must grow between the two runs, $e^{2\Delta\kappa\Delta z}=4.17$,
 against a measured $25.32/6.08=4.17$: the reweighting is
-Eq.~\eqref{eq:kappa} and nothing else. The conclusion agrees with scanning
+Eq.~\eqref{eq:kappa} and nothing else. Here $\Delta z=2$\,\AA{} is the
+\emph{total} displacement of the two planes, 1\,\AA{} each: $W$ is quadratic in
+$\psi$ on each plane, so $d\ln W/dz$ is $-2\kappa$ when only the tip moves and
+$-4\kappa$ when both do, with $\kappa$ throughout the decay constant of the
+\emph{amplitude}.
+
+A third check follows from Eq.~\eqref{eq:kappa} alone and touches neither the
+Gram matrices nor the contraction: the two pockets differ only in
+$|\mathbf k_\parallel|$, so
+\begin{equation}
+  \kappa_{\rm K}^2-\kappa_\Gamma^2=|\mathbf K|^2,
+  \qquad |\mathbf K|=\frac{4\pi}{3a},
+  \label{eq:kappaid}
+\end{equation}
+with nothing in it but the fitted slopes and the lattice constant. The
+tip-only sweep gives $\kappa_\Gamma=0.9551$ and $\kappa_{\rm K}=1.5403$
+\AA$^{-1}$ ($\Gamma$ over all six heights, K only over 1.5--3.5\,\AA{}, past
+which it is on the basis floor), hence $1.460$ against
+$|\mathbf K|^2=1.481$\,\AA$^{-2}$ at $a=3.442$\,\AA{} --- $1.4\%$.
+
+That is a percent-level check on the exponent and nothing finer. The
+per-interval $\kappa_\Gamma$ scatters by $\pm5\%$ across the sweep and the
+shortest distance is not yet asymptotic, so dropping it moves the difference to
+$1.492$, now $0.8\%$ on the other side of $|\mathbf K|^2$. In particular the
+residual is \emph{not} resolved well enough to read the finite radius
+$k_\Gamma$ of the $\Gamma$ hole pocket out of
+$\kappa_\Gamma^2=2(V_0-E)+k_\Gamma^2$, tempting as that is.
+
+The conclusion agrees with scanning
 tunnelling spectroscopy on monolayer NbSe$_2$, where fitting the measured
 spectrum needs a $\Gamma$ coupling many orders of magnitude larger than the K
 one \cite{Siegl2025}.

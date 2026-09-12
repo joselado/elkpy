@@ -5362,7 +5362,36 @@ and then 3.5 Å, the $\Gamma$ and K pocket sums give
 $\kappa_\Gamma=1.14$ Å$^{-1}$ and $\kappa_{\rm K}=1.50$ Å$^{-1}$; those two
 numbers alone then predict how much the $\Gamma$/K contrast should grow
 between the runs, $e^{2\Delta\kappa\Delta z}=4.17$, against a measured
-$25.32/6.08=4.17$. A floor on either pocket would break that.
+$25.32/6.08=4.17$. A floor on either pocket would break that. $\Delta z=2$ Å
+there is the **total** displacement of the two planes, 1 Å each — $W$ is
+quadratic in $\psi$ on *each* plane, so $d\ln W/dz=-2\kappa$ when only the tip
+moves and $-4\kappa$ when both do. $\kappa$ is throughout the decay constant of
+the *amplitude*, Eq. (kappa); fitting $\ln W$ and reading the slope as $\kappa$
+gives twice the right answer, and every identity below then comes out four
+times too large.
+
+**A check that shares no machinery with either the Gram matrices or the
+contraction.** Eq. (kappa) says $\kappa^2=2(V_0-E)+|\mathbf k_\parallel|^2$, so
+the two pockets' decay constants must satisfy
+$\kappa_{\rm K}^2-\kappa_\Gamma^2=|\mathbf K|^2$ with nothing else in it — no
+wavefunctions, no plane integrals, only the fitted slopes and the lattice
+constant. Fitting the tip-only sweep above ($\Gamma$ over all six heights, K
+over 1.5–3.5 Å only, since past that it is on the floor) gives
+$\kappa_\Gamma=0.9551$ and $\kappa_{\rm K}=1.5403$ Å$^{-1}$, so
+$\kappa_{\rm K}^2-\kappa_\Gamma^2=1.460$ against
+$|\mathbf K|^2=(4\pi/3a)^2=1.481$ Å$^{-2}$ at $a=3.442$ Å — 1.4%.
+
+**Do not read a physical residual out of that 1.4%.** The identity holds at the
+percent level and no better, and *which side* it lands on is set by the fit
+range, not by physics. Per-interval $\kappa_\Gamma$ over the five gaps is
+0.897, 0.998, 0.993, 0.909, 0.951 Å$^{-1}$ — the first is not yet asymptotic
+and the rest scatter by $\pm5\%$, i.e. $\pm10\%$ in $\kappa_\Gamma^2$. Dropping
+the first interval on both pockets gives $\kappa_\Gamma=0.996$,
+$\kappa_{\rm K}=1.576$ and a difference of 1.492, now 0.8% **high**. The
+tempting reading — that the deficit is the finite radius $k_\Gamma$ of the
+$\Gamma$ hole pocket, since $\kappa_\Gamma^2=2(V_0-E)+k_\Gamma^2$ — would need
+a residual resolved well below the fit scatter, and it is not. Quote the
+identity as a 1% check that the exponent is Eq. (kappa)'s, and nothing finer.
 
 One trap in the diagnostic itself, which looks exactly like a floor and is
 not: dividing $W(\mathbf k)$ by the plain surface gives a ratio that stops

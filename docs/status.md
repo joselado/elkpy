@@ -1222,6 +1222,17 @@ K-point channel is so suppressed that an inelastic phonon-mediated channel
 dominates the measured spectrum instead. A small computed dI/dV is therefore a
 lower bound on what an experiment sees, not a prediction of invisibility.
 
+### The pocket partition gives K two thirds of the zone before any physics
+
+A k-point is assigned to K when it is closer to a zone corner than to $\Gamma$.
+The six bisectors bound a hexagon of inradius $|\mathbf K|/2$ around $\Gamma$ —
+exactly **1/3 of the zone by area**, so a featureless weight already puts
+66.7% at K. The measured 69.8% bare share is therefore near-uniform density per
+unit area, i.e. the premise rather than the result; the result is the 8.4%
+tunnelling share, and the quantity to quote is the reweighting factor
+$R=(W_\Gamma/W_{\rm K})/(D_\Gamma/D_{\rm K})$, in which the partition cancels.
+Caught by an independent reimplementation (defumat), not by us.
+
 ### The one that will mislead you: the plane-wave floor
 
 Documented at length in `docs/design.md` §35 because it was hit, not anticipated. The
@@ -1236,7 +1247,14 @@ A contrast quoted at one height cannot be told apart from this artefact. The way
 show a run is clean is two distances: the $\Gamma$ and K pocket weights at 2.5 and
 3.5 Å give $\kappa_\Gamma=1.14$ and $\kappa_{\rm K}=1.50$ Å$^{-1}$ separately, and
 those two numbers then predict how much the contrast grew between the runs --
-$e^{2\Delta\kappa\,\Delta z}=4.17$ against a measured 4.17. Note the trap that cost
+$e^{2\Delta\kappa\,\Delta z}=4.17$ against a measured 4.17 ($\Delta z=2$ Å is
+both planes moving 1 Å each; $\kappa$ is the *amplitude* decay, so $W$ falls as
+$e^{-2\kappa z}$ per plane). A third check shares no machinery with either the
+Gram matrices or the contraction: the tip-only slopes give
+$\kappa_{\rm K}^2-\kappa_\Gamma^2=1.460$ against $|\mathbf K|^2=1.481$ Å$^{-2}$,
+1.4%. It is a percent-level check and no finer: dropping the (non-asymptotic)
+first sweep interval moves it to 1.492, 0.8% the *other* way, so no physical
+residual can be read out of it. Note the trap that cost
 an hour here: dividing $W$ by the plain surface makes a ratio that saturates above
 $|\mathbf k|\approx0.66$ Å$^{-1}$ at BOTH distances, which looks exactly like a floor
 and is not one -- it is band mixing, a band 8$\eta$ off the sampled energy carrying a
