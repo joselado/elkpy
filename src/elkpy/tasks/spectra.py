@@ -486,12 +486,27 @@ class SpectraTasks:
         radial function is ``u/r`` and the normalisation is
         ``int |u|^2 dr = 1`` with no extra r^2 Jacobian. Only states flagged
         ``spcore`` in the species file appear, in species-file order.
+
+        **A species with no core state at all is absent from the result, not
+        an error.** ``wfcrplot.f90:21`` opens the file unconditionally but
+        writes only inside ``if (spcore(ist,is))``, so an element whose
+        species file flags nothing as core leaves a 0-byte file behind. In
+        Elk's own species directory that is exactly H, He and Li -- so any
+        hydride, any H-passivated surface, LiF -- and the heavy atoms of the
+        same cell are computed correctly alongside it. Returning those and
+        skipping the empty files is the only reading under which
+        ``get_core_wavefunctions()`` works on a hydride at all.
         """
         subdir = self._run_resumed(label, [_task("core_wavefunctions", 65)])
         template = _template("core_wavefunction", "WFCORE_S{species:02d}_A{atom:04d}.OUT")
         result = {}
         for key, name in self._atom_filenames(template).items():
-            result[key] = atomicstates.parse_wfcore(subdir / name)
+            path = subdir / name
+            # An empty file is a species with no spcore state, not a failure;
+            # anything non-empty that will not parse still raises.
+            if path.is_file() and path.stat().st_size == 0:
+                continue
+            result[key] = atomicstates.parse_wfcore(path)
         return result
 
     # ------------------------------------------------------------------

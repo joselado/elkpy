@@ -1014,6 +1014,24 @@ time reversal's, and time reversal is not in `nsymcrys`, so `genjpr`'s reduced-k
 cannot produce it. `get_paramagnetic_current` now forces `reducek=0`, where the same quantity is
 2e-14. Findings 18-21 of `docs/review_findings.md`; the measurements are in `docs/design.md` §32.
 
+**All six MEDIUM findings (4-9) are fixed too**, and two of them changed a number rather than a
+docstring. `get_stress()`'s pressure ignored `Structure.scale`, which `readinput.f90:2275` applies
+before any physics — measured **105.3×** wrong for silicon written the conventional way, exactly
+$10.26^2$, and invisible to the method's own isotropy check because $\mathbf A/\lVert\mathbf
+A\rVert$ is scale-invariant. And `get_electron_phonon_coupling`'s `couplings` were half the
+`lambda` returned in the same dict: `writelambda.f90` divides by the total density of states where
+Allen's formula and `alpha2f.f90` use the per-spin one, so the file's column is exactly half the
+standard mode coupling — enough to move $T_c$ by an order of magnitude while looking plausible.
+`couplings` is now the Allen coupling and `couplings_as_written` keeps the raw column. The other
+four: `get_core_wavefunctions()` crashed on any cell containing H, He or Li (their species files
+flag no core state, so Elk leaves a 0-byte file) and now skips it and returns the heavy atoms;
+`get_molecular_dynamics(restart=True)` checked the wrong file and could hand back the *previous*
+run's trajectory, because Elk reports most internal failures as a print and a bare `stop` that
+exits 0; `get_expiqr`'s docstring claimed an $\Omega$ scaling that reaches only the muffin-tin
+half, and its default `q=0` spent a whole run returning $\delta_{ij}$; and `_check_bse_states`
+refused 2-atom silicon at Elk's own defaults, having read the `nempty` block as a state count when
+`init1.f90:316` scales it per atom.
+
 ---
 
 ## §34 — `STATE.OUT`: the format written down, and a fixture that pins it

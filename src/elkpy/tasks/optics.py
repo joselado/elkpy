@@ -199,7 +199,7 @@ class OpticsTasks:
     # task 130 -- plane-wave (density) matrix elements
     # ------------------------------------------------------------------
 
-    def get_expiqr(self, vecql=(0.0, 0.0, 0.0), kpoint_indices=None, label="expiqr"):
+    def get_expiqr(self, vecql, kpoint_indices=None, label="expiqr"):
         """Matrix elements < i, k+q | e^{iq.r} | j, k > (task 130,
         src/writeexpmat.f90, EXPIQR.OUT).
 
@@ -219,17 +219,44 @@ class OpticsTasks:
           get several. Passing indices at all is much cheaper than the
           whole mesh: the file holds nstsv^2 complex numbers per k-point.
 
-        Note src/writeexpmat.f90 scales the muffin-tin phase factor by the
-        cell volume (`expmt(:,:)=omega*expmt(:,:)`), so every returned
-        matrix element carries a factor of Omega; the completeness bound is
-        therefore sum_j |M_ij|^2 <= Omega^2, approached from below as the
-        state count grows.
+        **The Omega scaling reaches only half of each matrix element, and
+        there is no Omega^2 completeness bound.** src/writeexpmat.f90:35 does
+        `expmt(:,:)=omega*expmt(:,:)`, but `expmt` is consumed at exactly one
+        place -- genexpmat.f90:92, inside the MUFFIN-TIN loop. The
+        interstitial block (genexpmat.f90:107-131) never sees it: it builds
+        zfir from the raw eigenvector coefficients, multiplies by the
+        characteristic function, back-transforms (which divides by N) and
+        zdotc's, and the wavefunctions' own 1/sqrt(Omega) from match.f90:71
+        cancels the Omega of the cell integral. So what Elk exports is
+
+            Omega * (muffin-tin part)  +  1 * (interstitial part),
+
+        not Omega times the matrix element. Dividing the whole thing by Omega
+        -- which an Omega^2 bound invites, e.g. to build chi0 from |M_cv|^2 --
+        leaves the interstitial contribution too small by Omega, i.e. wrong by
+        a q- and state-dependent amount rather than by a removable constant.
+        That the factor is anomalous rather than a convention is visible
+        inside Elk: elnes.f90:53 calls the same genexpmt for the same
+        genexpmat with no Omega at all.
+
+        `vecql` is required and must be nonzero. genexpmat.f90:30-38 tests the
+        global `vecql` and returns the IDENTITY before `expmt` is ever
+        touched, so q=0 costs a full Elk run to compute delta_ij -- with no
+        Omega on it either, which is the one case where the old docstring was
+        not merely imprecise but inverted.
 
         Returns {"vecql": (3,), "vecqc": (3,) Cartesian a.u.,
                  "kpoints": [{"vkl", "vkc", "matrix"}], "workdir": Path}
         with matrix[i, j] = < i, k+q | e^{iq.r} | j, k >.
         """
         vecql = tuple(float(x) for x in vecql)
+        if all(abs(q) < 1e-8 for q in vecql):
+            raise ValueError(
+                "vecql=0 makes genexpmat.f90:30-38 return the identity before "
+                "it looks at a wavefunction, so this would be a full Elk run "
+                "to obtain delta_ij. Pass a nonzero q commensurate with the "
+                "k-mesh."
+            )
         self._check_commensurate_q(vecql)
         if kpoint_indices is None:
             kstlist = [(1, 1)]
@@ -567,19 +594,40 @@ class OpticsTasks:
         }
 
     def _check_bse_states(self, ncbse):
-        nempty = self.extra_blocks.get("nempty")
-        if nempty is None:
+        """Refuse a `ncbse` that genidxbse.f90 will hard-stop on -- and only
+        that one.
+
+        The `nempty` block does NOT set the number of empty states; it sets
+        ``nempty0``, and init1.f90:316 scales it PER ATOM,
+        ``nempty = nint(nempty0*max(natmtot,1))``, before
+        ``nstfv = nint(chgval/2) + nempty + 1`` at :319. genidxbse.f90:82
+        then stops when ``ntop + ncbse0 > nstsv``. With ``ntop`` the topmost
+        occupied state, that is ``ncbse <= nempty + 1`` for a scalar run; a
+        spinor run doubles both ``ntop`` and ``nstsv`` and so is weaker, which
+        makes the scalar form the conservative test.
+
+        The guard this replaces got the scaling backwards in both directions.
+        It demanded that `nempty` be set at all -- refusing a 2-atom Si cell
+        at Elk's defaults, where nempty0=4 gives nempty=8 against a default
+        ncbse of 3, a run Elk performs without complaint -- and it then
+        compared `ncbse` against the raw block value, refusing a 4-atom cell
+        with ``nempty=[2]`` whose real count is 8. Per-atom scaling only ever
+        ADDS states, so a guard reading the block value alone can only be
+        wrong in the refusing direction.
+        """
+        nempty0 = self.extra_blocks.get("nempty")
+        nempty0 = 4.0 if nempty0 is None else float(nempty0[0])  # readinput.f90:99
+        natmtot = sum(len(atoms) for atoms in self.structure.species.values())
+        nempty = round(nempty0 * max(natmtot, 1))
+        if ncbse > nempty + 1:
             raise ValueError(
-                "the BSE needs empty states: set nempty on the Calculation "
-                "(extra_blocks={'nempty': [n]}) with n >= ncbse. Elk's default "
-                "(nempty0 = 4, readinput.f90:99) leaves src/genidxbse.f90 to "
-                "hard-stop with 'not enough conduction states' on most cells"
-            )
-        if float(nempty[0]) < ncbse:
-            raise ValueError(
-                f"nempty={nempty[0]} is smaller than ncbse={ncbse}; "
-                f"src/genidxbse.f90 needs at least ncbse states above the "
-                f"topmost occupied band at every k-point"
+                f"ncbse={ncbse} needs more conduction states than this run "
+                f"has: nempty={nempty0:g} over {natmtot} atoms is "
+                f"nint(nempty0*natmtot) = {nempty} empty states "
+                f"(init1.f90:316), and src/genidxbse.f90:82 stops with 'not "
+                f"enough conduction states' unless ncbse <= nempty + 1 = "
+                f"{nempty + 1}. Lower ncbse, or raise nempty on the "
+                "Calculation (extra_blocks={'nempty': [n]}) -- n is PER ATOM."
             )
 
     # ------------------------------------------------------------------

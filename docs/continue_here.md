@@ -264,7 +264,17 @@ proves each, what the verifier re-read, and a suggested fix. Suggested order:
    through `magnetism_manybody._run_dependent()` (the non-wiping mode already
    written for this) and, for the third, using task **241** not 240 plus
    `lmaxi>=2` — `tasks/phonons.py:1180` already gets that chain right.
-2. **`phonons.py:630`** — the `couplings` from `LAMBDAQ.OUT` are exactly **half**
+2. **~~The six medium findings.~~ DONE (2026-09-12).** All of 4-9, with the
+   details in `docs/review_findings.md`. Two changed a NUMBER rather than a
+   docstring: `get_stress()`'s pressure was out by `scale**2` (measured 105.3
+   for Si, exactly 10.26²), and `get_electron_phonon_coupling`'s `couplings`
+   were half the `lambda` in the same dict. Tests:
+   `tests/test_tasks_medium_findings.py` (12, no binary) and
+   `tests/test_calculation_medium_findings.py` (2, ~13 s) — the second was
+   confirmed to FAIL without each fix before being kept. The descriptions
+   below are what was wrong, kept for the reading.
+
+   **`phonons.py:630`** — the `couplings` from `LAMBDAQ.OUT` are exactly **half**
    the `lambda` returned beside them in the same dict. Settled from the source:
    `writelambda.f90` divides by `pi*fermidos` (total, both-spin) where
    `alpha2f.f90` uses `fermidos/2`. Costs an order of magnitude in T_c.

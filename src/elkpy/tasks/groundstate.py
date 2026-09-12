@@ -171,6 +171,29 @@ class GroundStateResponseTasks:
         self.launcher.run(subdir)
         return subdir
 
+    @staticmethod
+    def _raise_on_elk_error(log, subdir):
+        """Turn a bare Fortran ``stop`` into a Python exception.
+
+        Elk reports most internal failures as ``write(*,...)`` followed by an
+        unadorned ``stop``, which exits **0** -- so ``launcher.run()``, whose
+        only test is the return code, returns normally. That is harmless when
+        the run directory was wiped first (the parse then fails on a missing
+        file), and it is not harmless on the one non-wiping path here: the
+        previous run's output is still sitting there, ready to be parsed and
+        returned as if it were new.
+        """
+        try:
+            text = Path(log).read_text(errors="replace")
+        except OSError:
+            return
+        for line in text.splitlines():
+            if line.lstrip().startswith("Error("):
+                raise RuntimeError(
+                    f"elk reported {line.strip()!r} in {subdir} and then "
+                    f"stopped with exit status 0; see {log}"
+                )
+
     # ------------------------------------------------------------------
     # 430 / 440 -- strain basis and stress
     # ------------------------------------------------------------------
@@ -256,6 +279,14 @@ class GroundStateResponseTasks:
         this task (its ``latvopt`` branch applies to tasks 2/3 only);
         this method checks that e_1 really is proportional to ``avec``
         and returns ``pressure=None`` if it somehow is not.
+
+        The volume and norm are taken from ``scale * avec``, the vectors
+        Elk actually works with (``readinput.f90:2275`` scales them before
+        any physics), so the pressure is independent of how a given cell is
+        split between ``Structure.avec`` and ``Structure.scale``. Getting
+        that wrong is a factor of ``scale**2`` -- 105x for silicon written
+        the conventional way -- and it is invisible to the isotropy check
+        above, ``avec/||avec||`` being scale-invariant.
         """
         blocks = {}
         if deltast is not None:
@@ -263,7 +294,13 @@ class GroundStateResponseTasks:
         subdir = self._run_standalone(label, [_task("stress")], blocks)
         result = stress.parse_stress(subdir / _file("stress"))
 
-        avec = np.asarray(self.structure.avec, dtype=float)
+        # readinput.f90:2275 does avec(:,:)=sc*avec(:,:) BEFORE any physics,
+        # so genstrain built e_1 from the scaled vectors and genstress
+        # differentiated in that frame. Handing pressure_from_stress the
+        # unscaled ones uses ||A||/sc and V/sc^3 and returns the pressure
+        # times sc^2 -- 105x for Si at scale=10.26. The guard below cannot
+        # catch it, since avec/||avec|| is itself scale-invariant.
+        avec = np.asarray(self.structure.avec, dtype=float) * self.structure.scale
         isotropic = avec / np.linalg.norm(avec)
         if np.allclose(result["strain"][0], isotropic, atol=1e-6):
             result["pressure"] = stress.pressure_from_stress(result["stress"], avec)
@@ -787,18 +824,48 @@ class GroundStateResponseTasks:
 
         if restart:
             subdir = self.workdir / label
-            if not (subdir / _file("md_timestep")).exists():
-                raise FileNotFoundError(
-                    f"restart=True needs a completed task-420 run in {subdir} "
-                    f"(TIMESTEP.OUT and ATDVC.OUT); run get_molecular_dynamics() first"
-                )
+            # ATDVC.OUT, not TIMESTEP.OUT. moldyn.f90:36-43 sets trdatdv and
+            # calls readatdvc, which is the file that must exist; TIMESTEP.OUT
+            # is written unconditionally by writetimes and so proves nothing.
+            # A single-force-step run leaves the former and not the latter:
+            # atptstep.f90:17-18 returns on itimes+ntsforce > ntimes, before
+            # the writeatdvc at its line 34.
+            for key, why in (
+                ("md_restart", "moldyn.f90:36-43 reads it through readatdvc"),
+                ("md_timestep", "readtimes.f90 reads the time grid back from it"),
+            ):
+                if not (subdir / _file(key)).exists():
+                    raise FileNotFoundError(
+                        f"restart=True needs {_file(key)} in {subdir} ({why}), "
+                        "and it is not there. A run short enough that "
+                        "atptstep never reached a force step writes TIMESTEP.OUT "
+                        "but no ATDVC.OUT, and so cannot be restarted; run "
+                        "get_molecular_dynamics() for longer than ntsforce steps."
+                    )
+            before = (subdir / _file("md_timestep")).stat().st_mtime_ns
             f = InputFile()
             f.add_block("tasks", [_task("molecular_dynamics_resume")])
             self._add_base_blocks(f)
             for name, lines in blocks.items():
                 f.add_block(name, lines)
             f.write(subdir / "elk.in")
-            self.launcher.run(subdir)
+            log = self.launcher.run(subdir)
+            # readatdvc and readtimes both end in a BARE Fortran `stop` after
+            # printing, which exits 0 -- so the launcher sees success while the
+            # directory still holds the PREVIOUS run's *_TD.OUT files, which
+            # moldyn deletes only on task 420. Without this the caller gets the
+            # old trajectory back as if it were new. Changing dtimes between
+            # runs takes the same path (readtimes.f90:32-40), which no
+            # existence check can catch, so the test is on the run's own
+            # output: an error line, or a TIMESTEP.OUT that never moved.
+            self._raise_on_elk_error(log, subdir)
+            if (subdir / _file("md_timestep")).stat().st_mtime_ns == before:
+                raise RuntimeError(
+                    f"the restart left {_file('md_timestep')} in {subdir} "
+                    "untouched, so it wrote no new time step and the "
+                    "trajectory files there are still the previous run's; see "
+                    f"{log}"
+                )
         else:
             subdir = self._run_standalone(
                 label, [_task("molecular_dynamics")], blocks or None

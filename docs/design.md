@@ -4394,6 +4394,71 @@ but unit-cell shapes; `ngridq` deliberately is not, because
 zeroes the rest, which makes a restart on a finer Q-grid a supported use rather
 than a mismatch.
 
+### The six medium findings, and the two that were numbers
+
+Four of these were prose or a guard; two returned a wrong number, and both
+were wrong for the same kind of reason — a factor that lives in Elk's input
+handling or in Elk's own choice of normalisation rather than in the physics.
+
+**`get_stress()`'s pressure ignored `Structure.scale`.** `readinput.f90:2275`
+is `avec(:,:)=sc*avec(:,:)`, executed before anything else, so `genstrain`
+built $e_1$ from the scaled vectors and `genstress` differentiated in that
+frame; handing `pressure_from_stress` the unscaled ones uses
+$\lVert A\rVert/s$ and $V/s^3$ and returns $P\,s^2$. For silicon written the
+conventional way — fractional vectors with `scale=10.26` — that is **105.3×**,
+measured, against $10.26^2=105.27$. The method's own isotropy check cannot see
+it: $A/\lVert A\rVert$ is scale-invariant, so $e_1$ matches and the wrong
+number is returned rather than `None`. The test is the invariance itself, not
+a reference pressure: the same crystal built twice, once in Bohr and once as
+fractional vectors plus `scale`, must give one answer.
+
+**The mode couplings were half the $\lambda$ beside them.** Elk's two
+electron-phonon routines divide by different densities of states, and neither
+says so in the file it writes. `occupy.f90:94` builds `fermidos` as
+$N_{\rm total}$ (both spins), and `ephcouple.f90:136` multiplies the linewidth
+accumulator by `occmax`, so `GAMMAQ.OUT` is the full Allen linewidth. Then
+`writelambda.f90:25` divides by $\pi N_{\rm total}\omega^2$ where Allen's
+$\lambda_{\mathbf q\nu}=\gamma/(\pi N_{\rm spin}\omega^2)$ — and where
+`alpha2f.f90:99`'s $2\pi(N_{\rm total}/2)$, and therefore
+`get_eliashberg_function()`'s `lambda`, sit. The factor is exactly 2, in a
+spin-polarised run too, being just `fermidos` against `fermidos/2`. Elk's own
+shipped Nb example says which side is standard: its `MCMILLAN.OUT` gives
+1.0534, the accepted value, from the `alpha2f` side. Returning both numbers in
+one dict under names that both mean "coupling" is the trap — feeding the
+smaller one to McMillan/Allen-Dynes at $\mu^*=0.15$ drops $T_c$ by about an
+order of magnitude and looks entirely plausible — so `couplings` is corrected
+on the way out and `couplings_as_written` keeps the raw column. This one is a
+**derivation**, verified line by line, not a measured ratio: Elk ships
+`MCMILLAN.OUT` for Nb and no `LAMBDAQ.OUT` beside it, so there is no
+q-resolved file to sum and compare, and doing it from a run of one's own would
+test `alpha2f`'s q-mesh interpolation at least as much as the factor.
+
+The other four are guards that did not guard, or prose that was not true.
+`get_core_wavefunctions()` died on any cell containing H, He or Li:
+`wfcrplot.f90:21` opens the file unconditionally but writes only inside
+`if (spcore(ist,is))`, and those three species files flag no core state at
+all, so their file is 0 bytes and the parser's `ValueError` discarded the
+heavy atoms' data alongside it — it now skips an empty file and returns the
+rest. `get_molecular_dynamics(restart=True)` checked `TIMESTEP.OUT` while its
+own error message named `ATDVC.OUT`, which is the file `moldyn.f90:36-43`
+actually reads; worse, a failed restart is invisible, because Elk reports most
+internal failures as a print followed by a bare `stop` that **exits 0**, and
+the one non-wiping run mode still holds the previous run's `*_TD.OUT` files
+ready to be parsed and returned as new. Both halves are now checked: the file
+that is read, and afterwards the log for an `Error(` line plus a
+`TIMESTEP.OUT` whose timestamp moved. `get_expiqr` claimed every element
+carries $\Omega$ and offered $\sum_j|M_{ij}|^2\le\Omega^2$ as a convergence
+check; `writeexpmat.f90:35`'s `omega*expmt` reaches only `genexpmat.f90:92`,
+the muffin-tin loop, so what is exported is
+$\Omega\,(\text{MT})+1\,(\text{interstitial})$ and dividing by $\Omega$ is
+wrong by a q- and state-dependent amount. `elnes.f90:53` calls the same
+`genexpmt` with no $\Omega$, which is what makes the factor anomalous rather
+than a convention. And `_check_bse_states` refused 2-atom silicon at Elk's own
+defaults: the `nempty` block sets `nempty0`, which `init1.f90:316` scales
+**per atom**, so the real count was 8 against a default `ncbse` of 3. The
+guard now computes what `init1` computes and refuses only `ncbse > nempty+1`,
+which is what `genidxbse.f90:82` stops on.
+
 ### Four things the never-run tests found
 
 Both were found by running the tests that had never been run, and in both the

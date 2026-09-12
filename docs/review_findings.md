@@ -32,12 +32,12 @@ verifier corrected the original reviewer, the corrected version is what is recor
 | 1 | High | `src/elkpy/tasks/magnetism_manybody.py:921` | **FIXED** -- reuse_epsinv=True was unusable: 601 needs a file it deletes |
 | 2 | High | `src/elkpy/tasks/magnetism_manybody.py:1230` | **FIXED** -- from_state=True was unusable: 701 needs a file it deletes |
 | 3 | High | `src/elkpy/tasks/optics.py:1177` | **FIXED** -- 270 needed EPHMAT.OUT, which only task 241 writes |
-| 4 | Medium | `src/elkpy/tasks/spectra.py:494` | get_core_wavefunctions() crashes on H, He or Li |
-| 5 | Medium | `src/elkpy/tasks/phonons.py:630` | LAMBDAQ couplings are half the lambda in the same dict |
-| 6 | Medium | `src/elkpy/tasks/groundstate.py:269` | get_stress() pressure ignores Structure.scale (off by scale^2) |
-| 7 | Medium | `src/elkpy/tasks/groundstate.py:790` | MD restart guard misses ATDVC.OUT; stale trajectory returned as new |
-| 8 | Medium | `src/elkpy/tasks/optics.py:219` | Omega scales only the muffin-tin part; docstring bound false |
-| 9 | Medium | `src/elkpy/tasks/optics.py:528` | _check_bse_states over-rejects; nempty scaling reasoning inverted |
+| 4 | Medium | `src/elkpy/tasks/spectra.py:494` | **FIXED** -- get_core_wavefunctions() crashes on H, He or Li |
+| 5 | Medium | `src/elkpy/tasks/phonons.py:630` | **FIXED** -- LAMBDAQ couplings are half the lambda in the same dict |
+| 6 | Medium | `src/elkpy/tasks/groundstate.py:269` | **FIXED** -- get_stress() pressure ignores Structure.scale (off by scale^2) |
+| 7 | Medium | `src/elkpy/tasks/groundstate.py:790` | **FIXED** -- MD restart guard misses ATDVC.OUT; stale trajectory returned as new |
+| 8 | Medium | `src/elkpy/tasks/optics.py:219` | **FIXED** -- Omega scales only the muffin-tin part; docstring bound false |
+| 9 | Medium | `src/elkpy/tasks/optics.py:528` | **FIXED** -- _check_bse_states over-rejects; nempty scaling reasoning inverted |
 | 10 | Low | `src/elkpy/calculation.py:362` | _ndmag's spinpol gate is weaker than init0.f90:126's |
 | 11 | Low | `src/elkpy/tasks/magnetism_manybody.py:169` | missing stage sidecar silently drops the producing run's blocks |
 | 12 | Low | `src/elkpy/tasks/phonons.py:89` | phonons/magnetism shadow tables bypass spec.py entirely |
@@ -156,6 +156,14 @@ launcher records which directory each task ran in and which task numbers reached
 
 *correctness / verdict CONFIRMED*
 
+**FIXED (2026-09-12).** An empty `WFCORE` file is skipped, so the heavy atoms' data comes
+back and a species with no `spcore` state is simply absent from the result rather than an
+error. Anything non-empty that will not parse still raises. Tested on rocksalt LiF, where
+lithium's file is 0 bytes and fluorine's holds its 1s: without the skip the call dies with
+exactly the predicted `contains no core-state blocks`
+(`tests/test_calculation_medium_findings.py`).
+
+
 **What is wrong.** get_core_wavefunctions() parses every atom's WFCORE file unconditionally, but wfcrplot.f90 creates an EMPTY file for any species whose species file flags no state `spcore`, and parse_wfcore() raises ValueError on an empty file.
 
 **How it fails.** Any structure containing hydrogen, helium or lithium (a hydride, LiF, H-passivated graphene). Elk runs task 65 fine and writes correct WFCORE files for the heavy atoms, but the H/He/Li file is 0 bytes; parse_wfcore() then hits `raise ValueError(f"{path} contains no core-state blocks")` and the whole call dies, discarding the heavy atoms' data that was computed correctly.
@@ -169,6 +177,26 @@ launcher records which directory each task ran in and which task numbers reached
 ## 5. `src/elkpy/tasks/phonons.py:630` -- LAMBDAQ couplings are half the lambda in the same dict
 
 *misleading-docs / verdict CONFIRMED*
+
+**FIXED (2026-09-12), by correcting the number rather than only the prose.** The suggested
+fix offered both; the returned dict is elkpy's API and not a file dump, and two keys named
+for the same physical quantity must not differ by two. `couplings` is now the Allen mode
+coupling (the file's column times `PhononTasks.EPH_LAMBDAQ_TO_ALLEN = 2.0`) and matches the
+`lambda` returned beside it; the uncorrected column is kept as `couplings_as_written` for
+anyone comparing against LAMBDAQ.OUT itself. Every line of the chain was re-read here
+rather than taken from the finding, since this changes a number: `occupy.f90:94`
+(`fermidos*occmax`, occmax=2 unpolarised, so the TOTAL DOS), `ephcouple.f90:136`
+(`pi*wkptnr*occmax`, so GAMMAQ is the full Allen linewidth), `writelambda.f90:25`
+(`pi*fermidos*w^2`) against `alpha2f.f90:99` (`twopi*(fermidos/2)`). The factor is exactly
+2, and it is 2 for a spin-polarised run too, being just `fermidos` against `fermidos/2`.
+It is a derivation rather than a measured ratio, and the docstrings say so: Elk ships
+MCMILLAN.OUT for Nb with no LAMBDAQ.OUT beside it, so there is no q-resolved file to sum
+against 1.0534, and a run of one's own would test alpha2f's q-mesh interpolation as much
+as the factor.
+The docstrings on `get_electron_phonon_coupling`, `get_eliashberg_function` and
+`parsers.phonon.parse_qpoint_table` now define N(e_F) and state which side each is on; the
+"unsettled" note is gone.
+
 
 **What is wrong.** The 'couplings' returned from LAMBDAQ.OUT are exactly half the standard Allen lambda_{q,nu} and half the 'lambda' returned beside them, because writelambda.f90 divides by pi*fermidos (the TOTAL, both-spin DOS) where alpha2f.f90 uses fermidos/2; the docstring writes the standard Allen formula with N(e_F) left undefined and calls the factor unsettled when it is exactly 2 and derivable from three Fortran lines.
 
@@ -184,6 +212,14 @@ launcher records which directory each task ran in and which task numbers reached
 
 *wrong-units / verdict CONFIRMED*
 
+**FIXED (2026-09-12).** `pressure_from_stress` is handed `scale * avec`, the vectors
+`readinput.f90:2275` gives Elk. The test is the invariance itself rather than a reference
+number: the same silicon crystal is built twice, once with the lattice vectors already in
+Bohr and once as the conventional fractional vectors with `scale=10.26`, and the two
+pressures must agree. Measured before the fix, they differed by **105.3**, which is
+$10.26^2$ to three figures (`tests/test_calculation_medium_findings.py`).
+
+
 **What is wrong.** get_stress() converts Elk's dE/dt into a hydrostatic pressure using the raw, unscaled Structure.avec, but Elk multiplies avec by the `scale` input before doing any physics, so the returned pressure is wrong by a factor of scale^2 whenever scale != 1.0.
 
 **How it fails.** Structure(avec=[[0,0.5,0.5],[0.5,0,0.5],[0.5,0.5,0]], scale=10.26) -> get_stress() goes through _run_standalone (groundstate.py:162-169), which calls _add_base_blocks; that writes `scale 10.26` as its own block and `avec` raw (calculation.py:141-143). readinput.f90:2275 then does avec(:,:)=sc*avec(:,:), so genstrain builds strain(:,:,1)=A_elk/||A_elk|| and genstress returns dE/dt in that scaled frame. pressure_from_stress(stress, avec) is then handed A_python = A_elk/sc, so it uses ||A_elk||/sc and V_elk/sc^3 and returns P_true * sc^2 (105x for scale=10.26). The guard on line 268 cannot catch it: isotropic = avec/||avec|| is scale-invariant, so it matches strain(:,:,1) exactly and the wrong number is returned instead of None. Only result["pressure"] is affected; result["strain"]/result["stress"] are Elk's own output and are fine. The repo's own tests use a scaled Structure (tests/test_calculation_moke.py:32 `scale=3.33`), so the trigger is ordinary usage, not hypothetical.
@@ -197,6 +233,17 @@ launcher records which directory each task ran in and which task numbers reached
 ## 7. `src/elkpy/tasks/groundstate.py:790` -- MD restart guard misses ATDVC.OUT; stale trajectory returned as new
 
 *guard-that-does-not-guard / verdict CONFIRMED*
+
+**FIXED (2026-09-12), both halves.** The precondition now checks `ATDVC.OUT` -- the file
+`moldyn.f90:36-43` actually reads, and the one the error message already named -- as well
+as `TIMESTEP.OUT`, and says explicitly that a run too short to reach a force step leaves
+the second and not the first. That alone does not cover the changed-`dtimes` case, as the
+finding notes, so the restart is additionally checked on its own output:
+`_raise_on_elk_error` scans the log for an `Error(` line, because Elk reports most internal
+failures as a print followed by a bare `stop` that exits 0, and the run is rejected if
+`TIMESTEP.OUT`'s timestamp did not move. The first test is unit-testable without a binary
+and is (`tests/test_tasks_medium_findings.py`).
+
 
 **What is wrong.** The restart=True path is the one non-wiping run mode, and its precondition check tests only TIMESTEP.OUT (line 790) even though its own error message at line 793 names ATDVC.OUT; if ATDVC.OUT is absent or the time grid changed, moldyn hits a bare Fortran `stop` (exit status 0), the launcher does not raise, and the previous run's untouched *_TD.OUT files are parsed and returned as if the restart had run.
 
@@ -212,6 +259,16 @@ launcher records which directory each task ran in and which task numbers reached
 
 *wrong-units / verdict CONFIRMED*
 
+**FIXED (2026-09-12).** The docstring now states what `writeexpmat.f90` exports --
+`Omega * muffin-tin + 1 * interstitial` -- says why dividing by Omega is wrong by a q- and
+state-dependent amount rather than by a removable constant, and drops the
+`sum_j |M_ij|^2 <= Omega^2` bound entirely. It also cites `elnes.f90:53`, which calls the
+same `genexpmt` with no Omega, as the evidence that the factor is anomalous rather than a
+convention. `vecql` is now required and q=0 refused: `genexpmat.f90:30-38` returns the
+identity before it touches a wavefunction, so the old default spent a full Elk run
+obtaining `delta_ij`. Same shape as finding 19, and found for the same reason.
+
+
 **What is wrong.** get_expiqr()'s docstring states that every returned matrix element carries a factor of Omega and that the completeness bound is sum_j |M_ij|^2 <= Omega^2, but writeexpmat.f90's `expmt(:,:)=omega*expmt(:,:)` is consumed only by genexpmat's muffin-tin loop, so the exported matrix is Omega*MT + 1*interstitial at every finite q, and the default vecql=(0,0,0) hits genexpmat's short circuit and returns a bare identity with no Omega at all.
 
 **How it fails.** calc.get_expiqr() with no arguments -> every returned matrix is exactly delta_ij (genexpmat.f90:30-37 short-circuits on |vecql|<epslat before expmt is ever touched), with nothing warning that the documented Omega scale is absent. At finite q the documented scale is also wrong: a caller who divides the whole matrix by Omega to recover <i,k+q|e^{iq.r}|j,k> -- which the docstring's completeness bound invites, e.g. to build chi0(q,w) from |M_cv|^2 -- gets the muffin-tin contribution right and the interstitial contribution too small by Omega, i.e. a mixed, non-physical matrix element that is silently wrong by a q- and state-dependent amount rather than by a removable constant. The sum_j |M_ij|^2 <= Omega^2 'approached from below as the state count grows' statement is therefore not a usable validation check at any q; at q=0 the sum is identically 1.
@@ -225,6 +282,17 @@ launcher records which directory each task ran in and which task numbers reached
 ## 9. `src/elkpy/tasks/optics.py:528` -- _check_bse_states over-rejects; nempty scaling reasoning inverted
 
 *missing-prerequisite / verdict CONFIRMED*
+
+**FIXED (2026-09-12), by reimplementing rather than dropping.** The guard is worth having;
+it was just computing the wrong thing. `init1.f90:316` is
+`nempty = nint(nempty0*max(natmtot,1))` and `:319` `nstfv = nint(chgval/2)+nempty+1`, and
+`genidxbse.f90:82` stops on `ntop + ncbse0 > nstsv` -- which is `ncbse <= nempty + 1` for a
+scalar run, and weaker for a spinor one (both `ntop` and `nstsv` double), so the scalar
+form is the conservative test. The new guard reads `nempty0` from `extra_blocks` or Elk's
+own default of 4.0, multiplies by the atom count, and refuses only what Elk would stop on.
+2-atom Si at the defaults -- which the old guard rejected before starting a process --
+passes with nempty=8 against a bound of 9.
+
 
 **What is wrong.** _check_bse_states refuses to run at all unless `nempty` is in extra_blocks, and otherwise compares the raw block value against ncbse, but readinput reads that block into nempty0 and init1 multiplies it by natmtot, so both branches reject configurations that Elk would run fine, and the docstring justifying the guard names the wrong file and states the scaling in the wrong direction.
 

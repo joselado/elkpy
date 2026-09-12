@@ -257,7 +257,11 @@ def parse_qpoint_table(path):
 
     GAMMAQ's values are phonon linewidths gamma_{q,nu} in Hartree;
     LAMBDAQ's are the dimensionless mode couplings Elk forms as
-    gamma / (pi N(E_F) omega^2) (writelambda.f90).
+    gamma / (pi N(E_F) omega^2) (writelambda.f90) with N(E_F) the TOTAL,
+    both-spin density of states -- which is HALF the standard Allen coupling,
+    since Allen's formula and alpha2f.f90 both use the per-spin DOS. This
+    parser returns the file's own numbers; the factor is applied by
+    ``tasks.phonons._parse_eph_tables``, which documents it.
     """
     natoms = None
     nqpt = None

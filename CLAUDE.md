@@ -102,6 +102,16 @@ file** — this section is a routing table and grew to 940 lines once by not bei
   FIRST k-point and is valid only when the filling is k-independent.
 - Window a whole degenerate group, not a single band — a band can diverge against a *neighbouring
   occupied* band even when the window boundary is gapped.
+- **`Structure.scale` is not decoration: `readinput.f90:2275` applies it before any physics.**
+  Anything computing a volume, a norm or a density from `structure.avec` must multiply by
+  `structure.scale` first — `get_stress()`'s pressure did not, and was out by `scale**2`,
+  measured 105.3× for silicon written the conventional way. Its own isotropy check could not
+  see it, `avec/||avec||` being scale-invariant.
+- **Elk's two electron-phonon routines disagree about which density of states λ is divided
+  by**, and the difference is exactly 2: `writelambda.f90` (LAMBDAQ.OUT) uses the TOTAL DOS,
+  `alpha2f.f90` (and Allen's formula, and MCMILLAN.OUT) the per-spin one. `couplings` is
+  corrected to the Allen convention on the way out; `couplings_as_written` is the raw column.
+  Using the file's own number in McMillan/Allen-Dynes moves T_c by an order of magnitude.
 - `parsers.optical`'s `directions` is **Cartesian**; `get_berry_curvature()`'s identically named
   argument is **reciprocal-lattice**. Same shape of trap one layer down:
   `parsers.transport.compute_transmission()`'s `energies` are **absolute**, while

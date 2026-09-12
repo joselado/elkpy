@@ -249,14 +249,23 @@ def test_get_bse_excitations_without_screening(si_optics):
     assert bound["energies"].real.min() < bare["energies"].real.min()
 
 
-def test_bse_requires_nempty():
+def test_bse_refuses_an_ncbse_genidxbse_would_stop_on():
+    """The refusal is ncbse > nempty + 1, where nempty is what init1.f90:316
+    builds -- nint(nempty0*natmtot) -- and NOT the `nempty` block's own value.
+
+    This test used to assert that Elk's defaults raise. They do not:
+    2-atom Si at nempty0=4 has 8 empty states against a default ncbse of 3,
+    and genidxbse.f90:82 passes with room to spare. Refusing it cost a run
+    elkpy could have made."""
     s = Structure(SI_AVEC, SI_SPECIES)
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
         c = s.get_calculation(tmp, ngridk=(2, 2, 2))
-        with pytest.raises(ValueError, match="nempty"):
-            c.get_bse_excitations()
+        c._check_bse_states(3)          # Elk's own defaults: allowed
+        c._check_bse_states(9)          # exactly the bound, nempty + 1
+        with pytest.raises(ValueError, match="not enough conduction states"):
+            c._check_bse_states(10)
 
 
 # --------------------------------------------------------------------------

@@ -247,9 +247,37 @@ class PhononTasks:
             blocks["ntemp"] = [int(ntemp)]
         return blocks
 
+    # LAMBDAQ.OUT holds HALF the Allen mode coupling, and the factor is
+    # exactly 2 rather than a convention to be settled by inspection:
+    #
+    #   occupy.f90:94    fermidos = fermidos*occmax*t0   -> the TOTAL DOS,
+    #                    both spins (occmax = 2 unpolarised, and a spinor run
+    #                    counts both channels among its nstsv states anyway)
+    #   ephcouple.f90:136  t1 = pi*wkptnr*occmax          -> GAMMAQ carries the
+    #                    spin sum, i.e. it is the full Allen linewidth
+    #   writelambda.f90:25 t1 = pi*fermidos*wphq**2       -> divides by pi*N_total
+    #   alpha2f.f90:99     t1 = twopi*(fermidos/2)*...    -> the standard
+    #                    normalisation, 2*pi*N_per-spin
+    #
+    # so the file's value is gamma/(pi N_total w^2) while Allen's
+    # lambda = gamma/(pi N_per-spin w^2) is twice that -- and twice is also
+    # what alpha2f, and therefore get_eliashberg_function()'s `lambda`, uses.
+    # Elk's own shipped Nb example settles which side is standard:
+    # examples/phonons-superconductivity/Nb-DFPT/MCMILLAN.OUT gives 1.0534,
+    # the accepted value, from the alpha2f side.
+    EPH_LAMBDAQ_TO_ALLEN = 2.0
+
     def _parse_eph_tables(self, subdir):
         """GAMMAQ.OUT + LAMBDAQ.OUT, the two q-resolved tables tasks
-        240/241 always write together."""
+        240/241 always write together.
+
+        ``couplings`` is the Allen mode coupling, i.e. LAMBDAQ.OUT's column
+        times :data:`EPH_LAMBDAQ_TO_ALLEN`. Returning the file's own numbers
+        beside a ``lambda`` normalised the other way is a trap: both are
+        called a coupling, they differ by exactly 2, and using the smaller
+        one in McMillan/Allen-Dynes moves T_c by about an order of magnitude
+        while looking entirely plausible.
+        """
         gamma = parsers_phonon.parse_qpoint_table(subdir / PHONON_OUTPUT_FILES["gammaq"])
         lam = parsers_phonon.parse_qpoint_table(subdir / PHONON_OUTPUT_FILES["lambdaq"])
         return {
@@ -257,7 +285,8 @@ class PhononTasks:
             "qpoints": gamma["qpoints"],
             "qpoints_cartesian": gamma["qpoints_cartesian"],
             "linewidths": gamma["values"],
-            "couplings": lam["values"],
+            "couplings": self.EPH_LAMBDAQ_TO_ALLEN * lam["values"],
+            "couplings_as_written": lam["values"],
         }
 
     # ------------------------------------------------------------------
@@ -629,7 +658,9 @@ class PhononTasks:
 
             lambda_{q nu} = gamma_{q nu} / (pi N(e_F) omega_{q nu}^2)
 
-        to LAMBDAQ.OUT. The vertex g uses the self-consistent first-order
+        to LAMBDAQ.OUT, with N(e_F) the PER-SPIN density of states at the
+        Fermi level -- which is the one place Elk's two routines disagree
+        with each other, see below. The vertex g uses the self-consistent first-order
         change in the Kohn-Sham potential that task 205 saved in the DVS
         files, PLUS the rigid-ion term ``-grad V_s`` that ephcouple adds
         back in (the bare shift of the potential following the nucleus).
@@ -665,14 +696,35 @@ class PhononTasks:
 
         Returns ``{"qpoints": (nq, 3) lattice, "qpoints_cartesian": (nq, 3),
         "linewidths": (nq, nbph) Hartree, "couplings": (nq, nbph)
-        dimensionless, "natoms": int}``.
+        dimensionless, "couplings_as_written": the same before the factor
+        below, "natoms": int}``.
 
-        FORMAT-DERIVED. Note that the mode couplings here and the total
-        lambda that get_eliashberg_function() reports are normalised
-        differently in the Fortran (writelambda.f90 divides by
-        ``pi*fermidos*w^2`` while alpha2f.f90 normalises with
-        ``fermidos/2``); do not assume a naive q-average of `couplings`
-        reproduces the reported lambda without first settling that factor.
+        **`couplings` is TWICE what LAMBDAQ.OUT holds, and the factor is
+        exactly 2** -- settled from the Fortran, not left to the reader.
+        ``occupy.f90:94`` builds ``fermidos`` as the TOTAL (both-spin)
+        density of states, and ``ephcouple.f90:136`` multiplies the
+        linewidth accumulator by ``occmax``, so GAMMAQ.OUT is the full Allen
+        linewidth. ``writelambda.f90:25`` then divides it by
+        ``pi*fermidos*w^2`` -- by the total DOS -- where Allen's formula, and
+        ``alpha2f.f90:99``'s ``twopi*(fermidos/2)``, use the per-spin one. So
+        the file's column is half the standard mode coupling, and half the
+        ``lambda`` that get_eliashberg_function() returns beside it. Elk's own
+        Nb example settles which side is standard: its shipped MCMILLAN.OUT
+        gives 1.0534, the accepted value, from the alpha2f side.
+
+        Read that as a DERIVATION, verified line by line, not as a measured
+        ratio. Elk ships MCMILLAN.OUT for Nb and no LAMBDAQ.OUT beside it, so
+        there is no q-resolved file here to sum and compare against 1.0534 --
+        and doing it from a run of one's own would test the q-mesh
+        convergence of alpha2f's own interpolation at least as much as the
+        factor. What is checked is each of the four Fortran lines above.
+        Feeding the
+        file's own number to McMillan/Allen-Dynes with mu* = 0.15 drops T_c by
+        roughly an order of magnitude and looks entirely plausible, which is
+        why `couplings` is corrected here and the raw column is kept under a
+        name that cannot be mistaken for a coupling.
+
+        FORMAT-DERIVED apart from that factor.
         """
         self._check_eph_commensurate(ngridq, ngridk)
         task = PHONON_TASKS[
@@ -821,6 +873,17 @@ class PhononTasks:
         q-resolved "qpoints"/"linewidths"/"couplings" tables}``. The
         frequency key is prefixed because get_superconductivity() returns
         this alongside a phonon dispersion on a completely different grid.
+
+        ``lambda`` (from MCMILLAN.OUT, via alpha^2F) and the q-resolved
+        ``couplings`` are on the SAME normalisation here, which needs saying
+        because in Elk's own files they are not: LAMBDAQ.OUT divides by the
+        total density of states where alpha2f.f90 divides by the per-spin
+        one, so the file's column is half. get_electron_phonon_coupling()
+        documents the factor and applies it; ``couplings_as_written`` is the
+        uncorrected column if you want to compare against LAMBDAQ.OUT itself.
+        That the two keys agree is derived from the Fortran rather than
+        measured against a shipped file -- see get_electron_phonon_coupling()
+        for why there is no such file to measure against.
 
         FORMAT-DERIVED, except that the MCMILLAN.OUT parser is additionally
         checked against the real file Elk ships in
