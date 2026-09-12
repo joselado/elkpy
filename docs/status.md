@@ -1032,6 +1032,26 @@ half, and its default `q=0` spent a whole run returning $\delta_{ij}$; and `_che
 refused 2-atom silicon at Elk's own defaults, having read the `nempty` block as a state count when
 `init1.f90:316` scales it per atom.
 
+**And the eight LOW findings (10-17).** Three were real behaviour, not documentation.
+`inputfile._format_value` rendered any float below 5e-11 as the literal `0.0000000000` —
+and `epspot`/`epsengy` have no range check in `readinput.f90`, so a convergence tolerance
+of 1e-12 became a tolerance of zero and the loop ran to `maxscl`, reported as
+non-convergence. It is fixed at the source (a fixed-point format kept wherever it survives
+a round trip through zero, exponential otherwise), which retires one of the two shims that
+had grown around it. `parsers.sfac` returned `vhmat` transposed, Elk printing that matrix
+column by column while reading it row by row — a diagonal one, the default, hid it. And
+`_ndmag` missed `init0.f90:126`'s promotion of an unpolarised run to a polarised one by
+`bforb`/`fsmtype`/`spinsprl`/`spincore`. The rest tightened guards: `_run_dependent` refuses
+a directory with no sidecar rather than running with none of the producing run's blocks;
+`params`' `maxrows` was one too permissive on all five blank-terminated lists (Elk's loops
+must see the terminator INSIDE `do i=1,maxN`); `wplot`'s `lo=2` was dead metadata that
+`explain_parameter()` still printed, replaced by the four guards `readinput.f90` really
+makes plus `plot1d`'s and `plot2d`/`plot3d`'s; and the two shadow task tables now resolve
+through `spec.py` with a test that fails in both directions. The params completeness test
+grew the column it never had: it now compares 227 default VALUES against `readinput.f90`'s
+own default section, where before changing `rgkmax`'s default from 7.0 to 8.0 passed the
+whole suite.
+
 ---
 
 ## §34 — `STATE.OUT`: the format written down, and a fixture that pins it

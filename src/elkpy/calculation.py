@@ -347,6 +347,30 @@ class Calculation(*ALL_MIXINS):
         block = self.extra_blocks.get(name)
         return bool(block[0]) if block else False
 
+    def _spinpol_effective(self):
+        """``spinpol`` as ``init0.f90`` has it, not as it was passed in.
+
+        ``init0.f90:126`` is
+
+            if (spinorb.or.bforb.or.(fsmtype /= 0).or.spinsprl.or.spincore) &
+             spinpol=.true.
+
+        i.e. five other settings PROMOTE an unpolarised run to a polarised
+        one, and the whole ``ndmag`` block below it is entered on the
+        promoted value. Reading ``self.spinpol or self.spinorb`` alone
+        misses four of them, all reachable only through hand-written
+        ``extra_blocks`` -- which is exactly how someone would set them,
+        since none has a constructor argument.
+        """
+        if self.spinpol or self.spinorb:
+            return True
+        if self._block_flag("bforb") or self._block_flag("spinsprl"):
+            return True
+        if self._block_flag("spincore"):
+            return True
+        fsmtype = self._block_floats("fsmtype")
+        return bool(fsmtype) and fsmtype[0] != 0
+
     def _ndmag(self):
         """The number of magnetisation components Elk will use, ``ndmag``.
 
@@ -380,9 +404,13 @@ class Calculation(*ALL_MIXINS):
         plotting tasks and the ultra-long-range magnetisation plots carry.
 
         Returns 0, 1 or 3. An ``epslat`` overridden through
-        ``extra_blocks`` is honoured.
+        ``extra_blocks`` is honoured, and so is init0.f90:126's promotion of
+        an unpolarised run to a polarised one -- see
+        :meth:`_spinpol_effective`, without which ``bforb``/``fsmtype``/
+        ``spinsprl``/``spincore`` set through ``extra_blocks`` report
+        ``ndmag = 0`` for a run Elk treats as non-collinear.
         """
-        if not (self.spinpol or self.spinorb):
+        if not self._spinpol_effective():
             return 0
         epslat_block = self._block_floats("epslat")
         epslat = epslat_block[0] if epslat_block else 1e-6

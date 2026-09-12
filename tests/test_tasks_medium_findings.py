@@ -7,6 +7,8 @@ hydride and the stress pressure's scale factor -- are in
 ``tests/test_calculation_medium_findings.py`` instead.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -154,3 +156,73 @@ def test_a_clean_log_raises_nothing(tmp_path):
 def test_a_missing_log_raises_nothing(tmp_path):
     """The check must not turn an unreadable log into a spurious failure."""
     Calculation._raise_on_elk_error(tmp_path / "nope.out", tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Finding 12 -- the shadow tables that never consulted spec.py
+# ---------------------------------------------------------------------------
+
+
+def test_phonon_and_magnetism_constants_agree_with_spec_both_ways():
+    """spec.py is the registry: "an Elk version bump should mean editing this
+    one file" (CLAUDE.md). Two modules kept their own literals and never
+    consulted it, so a bump that retired or reassigned a code would have been
+    picked up by groundstate.py/spectra.py and silently not by them -- a
+    retired code hitting elk.f90's `case default ... stop`, a reassigned one
+    running a different task and returning a plausible wrong number.
+
+    They resolve through spec now, with the literal as a fallback, so this
+    test is what turns a divergence into a failure rather than a fallback.
+    """
+    from elkpy import spec
+    from elkpy.tasks import magnetism_manybody as mmb
+    from elkpy.tasks import phonons as ph
+
+    mismatches = []
+
+    def compare(label, key, literal, registry):
+        if key not in registry:
+            mismatches.append(f"{label}: {key!r} is not in spec")
+        elif registry[key] != literal:
+            mismatches.append(
+                f"{label}: {key!r} is {literal!r} locally and "
+                f"{registry[key]!r} in spec"
+            )
+
+    for key, literal in ph._PHONON_TASKS.items():
+        compare("PHONON_TASKS", key, literal, spec.TASKS)
+    for key, literal in ph._PHONON_OUTPUT_FILES.items():
+        compare("PHONON_OUTPUT_FILES", key, literal, spec.OUTPUT_FILES)
+
+    # magnetism_manybody spells its constants out one per name, so the pairing
+    # is read back off the source rather than from a table
+    import re
+
+    source = (Path(mmb.__file__)).read_text()
+    for name, registry_name, key, literal in re.findall(
+        r"^(TASK_[A-Z0-9_]+|FILE_[A-Z0-9_]+)"
+        r"(?:\s*=\s*|.*?\d+:\s*)(spec\.TASKS|spec\.OUTPUT_FILES)"
+        r'\.get\("([^"]+)",\s*([^)]+)\)',
+        source,
+        flags=re.M,
+    ):
+        registry = spec.TASKS if registry_name == "spec.TASKS" else spec.OUTPUT_FILES
+        value = int(literal) if literal.strip().isdigit() else literal.strip().strip('"')
+        compare(name, key, value, registry)
+
+    assert not mismatches, "\n".join(mismatches)
+
+
+def test_every_magnetism_constant_actually_routes_through_spec():
+    """The pairing above only checks the constants it can see. This one says
+    none was left as a bare literal."""
+    import re
+
+    from elkpy.tasks import magnetism_manybody as mmb
+
+    source = (Path(mmb.__file__)).read_text()
+    bare = [
+        line for line in source.splitlines()
+        if re.match(r"^(TASK|FILE)_[A-Z0-9_]+ = [\"'0-9]", line)
+    ]
+    assert bare == []

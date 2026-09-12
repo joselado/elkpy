@@ -51,6 +51,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .. import spec
 from ..inputfile import InputFile
 from ..parsers import gw as parsers_gw
 from ..parsers import magnetism as parsers_magnetism
@@ -59,22 +60,27 @@ from ..parsers import volumetric
 from ..parsers import wannier90 as parsers_w90
 
 # --- task codes -------------------------------------------------------------
-# Duplicated as module constants rather than read from elkpy.spec so that this
-# module imports cleanly before the integrator adds the matching spec.TASKS
-# entries. The same values are returned as `spec_tasks` for that addition.
-TASK_MAE = 28  # start from atomic densities
-TASK_MAE_RESUME = 29  # read STATE.OUT (mae.f90: trdstate = (task == 29))
-TASK_TORQUE = 160
-TASK_SPIRAL_SUPERCELL = 350
-TASK_SPIRAL_SUPERCELL_RESUME = 351
-TASK_SPIRAL_SUPERCELL_DRYRUN = 352
-TASK_WANNIER90 = 550
-TASK_GW_SELF_ENERGY = 600
-TASK_GW_SELF_ENERGY_KEEP_EPSINV = 601
-TASK_GW_SPECTRAL_FUNCTION = 610
-TASK_GW_BAND_STRUCTURE = 620
-TASK_GW_FERMI_ENERGY = 630
-TASK_GW_DENSITY_MATRIX = 640
+# spec.py is the registry (CLAUDE.md, "Architecture": an Elk version bump
+# should mean editing that one file), so every constant here resolves through
+# it and the literal is only a fallback -- the same `spec.TASKS.get(key, local)`
+# shape groundstate.py:126 uses. They were written as plain literals when
+# spec.py did not yet carry these entries; it does now, and
+# tests/test_tasks_magnetism_manybody.py asserts the two agree in both
+# directions, so a bump that edits spec alone is picked up here rather than
+# silently ignored. The literals stay for their per-entry provenance.
+TASK_MAE = spec.TASKS.get("mae", 28)  # start from atomic densities
+TASK_MAE_RESUME = spec.TASKS.get("mae_resume", 29)  # read STATE.OUT (mae.f90: trdstate = (task == 29))
+TASK_TORQUE = spec.TASKS.get("torque", 160)
+TASK_SPIRAL_SUPERCELL = spec.TASKS.get("spin_spiral_supercell", 350)
+TASK_SPIRAL_SUPERCELL_RESUME = spec.TASKS.get("spin_spiral_supercell_resume", 351)
+TASK_SPIRAL_SUPERCELL_DRYRUN = spec.TASKS.get("spin_spiral_supercell_dryrun", 352)
+TASK_WANNIER90 = spec.TASKS.get("wannier90", 550)
+TASK_GW_SELF_ENERGY = spec.TASKS.get("gw_self_energy", 600)
+TASK_GW_SELF_ENERGY_KEEP_EPSINV = spec.TASKS.get("gw_self_energy_keep_epsinv", 601)
+TASK_GW_SPECTRAL_FUNCTION = spec.TASKS.get("gw_spectral_function", 610)
+TASK_GW_BAND_STRUCTURE = spec.TASKS.get("gw_band_structure", 620)
+TASK_GW_FERMI_ENERGY = spec.TASKS.get("gw_fermi_energy", 630)
+TASK_GW_DENSITY_MATRIX = spec.TASKS.get("gw_density_matrix", 640)
 # Blocks that EPSINV.OUT is built with, and so cannot change when task 601
 # reuses it. `wmaxgw`/`tempk` set the number of Matsubara frequencies
 # (genwgw.f90: nwgw = 2*nint(wmaxgw/(pi*kB*tempk)), then nwrf = nwbs+1) and
@@ -94,36 +100,60 @@ GW_EPSINV_PINNED = ("wmaxgw", "tempk", "gmaxrf", "nempty", "ngridq")
 # Q-grid is a supported use, not a mismatch.
 ULR_STATE_PINNED = ("avecu", "scaleu")
 
-TASK_ULR_GROUND_STATE = 700
-TASK_ULR_GROUND_STATE_RESUME = 701
-TASK_ULR_DOS = 710
-TASK_ULR_BANDS = 720  # kappa = 0 only
-TASK_ULR_BANDS_ALL_KAPPA = 725
-TASK_ULR_DENSITY = {1: 731, 2: 732, 3: 733}
-TASK_ULR_POTENTIAL = {1: 741, 2: 742, 3: 743}
-TASK_ULR_MAGNETISATION = {1: 771, 2: 772, 3: 773}
+TASK_ULR_GROUND_STATE = spec.TASKS.get("ulr_ground_state", 700)
+TASK_ULR_GROUND_STATE_RESUME = spec.TASKS.get("ulr_ground_state_resume", 701)
+TASK_ULR_DOS = spec.TASKS.get("ulr_dos", 710)
+TASK_ULR_BANDS = spec.TASKS.get("ulr_bands", 720)  # kappa = 0 only
+TASK_ULR_BANDS_ALL_KAPPA = spec.TASKS.get("ulr_bands_all_kappa", 725)
+TASK_ULR_DENSITY = {
+    1: spec.TASKS.get("ulr_density_1d", 731),
+    2: spec.TASKS.get("ulr_density_2d", 732),
+    3: spec.TASKS.get("ulr_density_3d", 733),
+}
+TASK_ULR_POTENTIAL = {
+    1: spec.TASKS.get("ulr_potential_1d", 741),
+    2: spec.TASKS.get("ulr_potential_2d", 742),
+    3: spec.TASKS.get("ulr_potential_3d", 743),
+}
+TASK_ULR_MAGNETISATION = {
+    1: spec.TASKS.get("ulr_magnetisation_1d", 771),
+    2: spec.TASKS.get("ulr_magnetisation_2d", 772),
+    3: spec.TASKS.get("ulr_magnetisation_3d", 773),
+}
 
 # --- output filenames -------------------------------------------------------
-FILE_MAE = "MAE.OUT"
-FILE_MAE_PER_VOLUME = "MAEPUV.OUT"
-FILE_MAE_INFO = "MAE_INFO.OUT"
-FILE_GW_SELF_ENERGY = "GWSEFM.OUT"
-FILE_GW_EPSINV = "EPSINV.OUT"
-FILE_GW_TOTAL_SPECTRAL_FUNCTION = "GWTSF.OUT"
-FILE_GW_BAND = "GWBAND.OUT"
-FILE_GW_FERMI_ENERGY = "GWEFERMI.OUT"
-FILE_ULR_STATE = "STATE_ULR.OUT"
-FILE_ULR_INFO = "ULR_INFO.OUT"
-FILE_ULR_RMSDVS = "RMSDVS.OUT"
-FILE_ULR_TDOS = "TDOSULR.OUT"
-FILE_ULR_BAND = "BANDULR.OUT"
-FILE_ULR_BAND_SPECTRAL = "BANDSFU.OUT"
-FILE_ULR_DENSITY = {1: "RHOU1D.OUT", 2: "RHOU2D.OUT", 3: "RHOU3D.OUT"}
-FILE_ULR_DENSITY_LINES = "RHOULINES.OUT"
-FILE_ULR_POTENTIAL = {1: "VSU1D.OUT", 2: "VSU2D.OUT", 3: "VSU3D.OUT"}
-FILE_ULR_POTENTIAL_LINES = "VSULINES.OUT"
-FILE_ULR_MAGNETISATION = {1: "MAGU1D.OUT", 2: "MAGU2D.OUT", 3: "MAGU3D.OUT"}
-FILE_ULR_MAGNETISATION_LINES = "MAGULINES.OUT"
+FILE_MAE = spec.OUTPUT_FILES.get("mae", "MAE.OUT")
+FILE_MAE_PER_VOLUME = spec.OUTPUT_FILES.get("mae_per_volume", "MAEPUV.OUT")
+FILE_MAE_INFO = spec.OUTPUT_FILES.get("mae_info", "MAE_INFO.OUT")
+FILE_GW_SELF_ENERGY = spec.OUTPUT_FILES.get("gw_self_energy", "GWSEFM.OUT")
+FILE_GW_EPSINV = spec.OUTPUT_FILES.get("epsinv", "EPSINV.OUT")
+FILE_GW_TOTAL_SPECTRAL_FUNCTION = spec.OUTPUT_FILES.get("gw_total_spectral_function", "GWTSF.OUT")
+FILE_GW_BAND = spec.OUTPUT_FILES.get("gw_band", "GWBAND.OUT")
+FILE_GW_FERMI_ENERGY = spec.OUTPUT_FILES.get("gw_fermi_energy", "GWEFERMI.OUT")
+FILE_ULR_STATE = spec.OUTPUT_FILES.get("ulr_state", "STATE_ULR.OUT")
+FILE_ULR_INFO = spec.OUTPUT_FILES.get("ulr_info", "ULR_INFO.OUT")
+FILE_ULR_RMSDVS = spec.OUTPUT_FILES.get("ulr_rmsdvs", "RMSDVS.OUT")
+FILE_ULR_TDOS = spec.OUTPUT_FILES.get("ulr_tdos", "TDOSULR.OUT")
+FILE_ULR_BAND = spec.OUTPUT_FILES.get("ulr_band", "BANDULR.OUT")
+FILE_ULR_BAND_SPECTRAL = spec.OUTPUT_FILES.get("ulr_band_spectral", "BANDSFU.OUT")
+FILE_ULR_DENSITY = {
+    1: spec.OUTPUT_FILES.get("ulr_density_1d", "RHOU1D.OUT"),
+    2: spec.OUTPUT_FILES.get("ulr_density_2d", "RHOU2D.OUT"),
+    3: spec.OUTPUT_FILES.get("ulr_density_3d", "RHOU3D.OUT"),
+}
+FILE_ULR_DENSITY_LINES = spec.OUTPUT_FILES.get("ulr_density_lines", "RHOULINES.OUT")
+FILE_ULR_POTENTIAL = {
+    1: spec.OUTPUT_FILES.get("ulr_potential_1d", "VSU1D.OUT"),
+    2: spec.OUTPUT_FILES.get("ulr_potential_2d", "VSU2D.OUT"),
+    3: spec.OUTPUT_FILES.get("ulr_potential_3d", "VSU3D.OUT"),
+}
+FILE_ULR_POTENTIAL_LINES = spec.OUTPUT_FILES.get("ulr_potential_lines", "VSULINES.OUT")
+FILE_ULR_MAGNETISATION = {
+    1: spec.OUTPUT_FILES.get("ulr_magnetisation_1d", "MAGU1D.OUT"),
+    2: spec.OUTPUT_FILES.get("ulr_magnetisation_2d", "MAGU2D.OUT"),
+    3: spec.OUTPUT_FILES.get("ulr_magnetisation_3d", "MAGU3D.OUT"),
+}
+FILE_ULR_MAGNETISATION_LINES = spec.OUTPUT_FILES.get("ulr_magnetisation_lines", "MAGULINES.OUT")
 
 GWSF_TEMPLATE = "GWSF_K{ik:06d}.OUT"
 
@@ -180,12 +210,33 @@ class MagnetismManyBodyTasks:
         written by :meth:`_write_stage_manifest`, so the k-set, ``ngridq``,
         ``avecu`` and friends are guaranteed identical between the two
         invocations -- getting those wrong does not error, it silently reads
-        a mismatched file.
+        a mismatched file. A directory with no sidecar is refused for that
+        same reason rather than treated as an empty block set.
         """
         subdir = Path(subdir)
         if not subdir.is_dir():
             raise FileNotFoundError(f"no such run directory: {subdir}")
         stage = self._read_stage_manifest(subdir)
+        if not stage:
+            # Running anyway is never the intent: without the sidecar this
+            # writes an elk.in with NONE of the producing run's defining
+            # blocks, and for the ULR family that is silent rather than
+            # fatal. readstulr.f90 hard-checks natmtot/npcmtmax/ngtc/ngtot/
+            # ndmag/fsmtype but only rejects nqpt_ < 1 for the Q-set; at
+            # :118-128 it maps the stored Q-vectors onto the new grid and
+            # `cycle`s (leaving map=0, i.e. a zeroed density) for every one
+            # outside it. A defaulted ngridq against a 21-cell ultracell
+            # therefore plots a wrong remapping rather than erroring, and
+            # avecu's own default is the identity (readinput.f90:320-323),
+            # so that is not caught either.
+            raise FileNotFoundError(
+                f"{subdir} has no {_STAGE_MANIFEST}, so the blocks the "
+                "producing run was defined by (avecu/ngridq/scaleu for the "
+                "ULR family, nempty/wmaxgw/tempk/gmaxrf for GW) are unknown. "
+                "Running without them would not fail -- readstulr silently "
+                "remaps a mismatched Q-set -- so this refuses instead. Re-run "
+                "the producing task, which writes the sidecar."
+            )
         blocks = dict(stage.get("blocks", {}))
         blocks.update(extra_blocks or {})
         f = InputFile()

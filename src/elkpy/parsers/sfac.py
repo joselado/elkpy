@@ -46,18 +46,25 @@ def parse_structure_factors(sfac_out_path):
     Returns {"vhmat": (3,3) array, "hkl": (n,3), "multiplicity": (n,) int,
     "h": (n,) |H| in Bohr^-1, "F": (n,) complex}.
 
-    ``vhmat`` rows are the three lines written after "h k l indices
-    transformed by vhmat matrix:", i.e. ``vhmat(:,1)``, ``vhmat(:,2)``,
-    ``vhmat(:,3)`` -- Elk prints the matrix column by column, and the file
-    is only ever a record of the input setting, so it is returned as
-    printed rather than transposed.
+    ``vhmat`` is returned as the caller of ``get_structure_factors`` passed
+    it, which means TRANSPOSING what the file holds. Elk reads the block row
+    by row (``readinput.f90:1414-1417``: ``vhmat(1,:)``, ``vhmat(2,:)``,
+    ``vhmat(3,:)``) and applies it that way (``sfacrho.f90:50-52``), but
+    prints it column by column (``sfacrho.f90:43-45``: ``vhmat(:,1)`` and
+    friends, one per line). Returning the printed lines as rows would hand
+    back the transpose of the matrix that was supplied, under the same key
+    name -- and a diagonal ``vhmat``, which is the default, hides it
+    completely.
     """
     lines = _lines(sfac_out_path)
     header = None
     vhmat = np.eye(3)
     for i, line in enumerate(lines):
         if "transformed by vhmat matrix" in line:
-            vhmat = np.array([[float(x) for x in lines[i + 1 + r].split()] for r in range(3)])
+            # printed column by column, so the stacked lines are vhmat^T
+            vhmat = np.array(
+                [[float(x) for x in lines[i + 1 + r].split()] for r in range(3)]
+            ).T
         if _TABLE_HEADER in line:
             header = i
     if header is None:

@@ -83,10 +83,16 @@ from .. import spec
 from ..parsers import band, dos, eliashberg as parsers_eliashberg
 from ..parsers import phonon as parsers_phonon
 
-# Task codes for this family. These mirror the entries handed to the
-# integrator for spec.TASKS; the existing three (205/210/220) plus 120/121
-# are taken from spec.TASKS itself rather than duplicated.
-PHONON_TASKS = {
+# Task codes and output filenames for this family. spec.py is the registry
+# (CLAUDE.md, "Architecture": an Elk version bump should mean editing that one
+# file), so the literals below are a FALLBACK and spec wins wherever it has the
+# key -- the same `spec.TASKS.get(key, local)` shape groundstate.py:126 and
+# spectra.py:70-82 use. They were written when spec.py did not yet carry these
+# entries; it does now, and tests/test_tasks_phonons.py asserts the two agree
+# in both directions, so a bump that edits spec alone is picked up here rather
+# than silently ignored. Left in place rather than deleted because they carry
+# the per-entry `src/*.f90` provenance, which spec.py does not.
+_PHONON_TASKS = {
     "phonons_supercell": 200,          # src/phononsc.f90
     "phonons_supercell_resume": 201,   # src/phononsc.f90, trdstate=.true.
     "phonons_supercell_dryrun": 202,   # src/phononsc.f90, empty DYN files only
@@ -104,7 +110,7 @@ PHONON_TASKS = {
     "born_charges_dynamical": 478,     # src/bornecdyn.f90
 }
 
-PHONON_OUTPUT_FILES = {
+_PHONON_OUTPUT_FILES = {
     "phonon_modes": "PHONON.OUT",        # src/writephn.f90
     "gammaq": "GAMMAQ.OUT",              # src/writegamma.f90
     "lambdaq": "LAMBDAQ.OUT",            # src/writelambda.f90
@@ -121,6 +127,11 @@ PHONON_OUTPUT_FILES = {
     "faceeh": "FACEEH.OUT",              # src/ephdos.f90
     "ephgap": "EPHGAP.OUT",              # src/gndsteph.f90
     "eph_info": "EPH_INFO.OUT",          # src/gndsteph.f90
+}
+
+PHONON_TASKS = {k: spec.TASKS.get(k, v) for k, v in _PHONON_TASKS.items()}
+PHONON_OUTPUT_FILES = {
+    k: spec.OUTPUT_FILES.get(k, v) for k, v in _PHONON_OUTPUT_FILES.items()
 }
 
 # BEC_Sss_Aaaa_Pp.OUT is indexed, so it belongs in OUTPUT_FILE_TEMPLATES;

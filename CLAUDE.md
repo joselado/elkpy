@@ -102,6 +102,13 @@ file** — this section is a routing table and grew to 940 lines once by not bei
   FIRST k-point and is valid only when the filling is k-independent.
 - Window a whole degenerate group, not a single band — a band can diverge against a *neighbouring
   occupied* band even when the window boundary is gapped.
+- **A float below 5e-11 used to render as the literal `0.0000000000`.** `inputfile.py`'s
+  fixed ten-decimal format was a floor as well as a format, and Elk range-checks neither
+  `epspot` nor `epsengy`, so a tolerance of 1e-12 became a tolerance of zero and the only
+  symptom was non-convergence. `_format_float` now escapes to exponential form for exactly
+  those values and leaves every other rendering alone. The STRING half of `_format_value`
+  is still unfixed — it quotes every `str`, right for `sppath` and wrong for the verbatim
+  blocks — so `magnetism_manybody._RawToken` is still shimming it.
 - **`Structure.scale` is not decoration: `readinput.f90:2275` applies it before any physics.**
   Anything computing a volume, a norm or a density from `structure.avec` must multiply by
   `structure.scale` first — `get_stress()`'s pressure did not, and was out by `scale**2`,

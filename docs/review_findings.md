@@ -38,14 +38,14 @@ verifier corrected the original reviewer, the corrected version is what is recor
 | 7 | Medium | `src/elkpy/tasks/groundstate.py:790` | **FIXED** -- MD restart guard misses ATDVC.OUT; stale trajectory returned as new |
 | 8 | Medium | `src/elkpy/tasks/optics.py:219` | **FIXED** -- Omega scales only the muffin-tin part; docstring bound false |
 | 9 | Medium | `src/elkpy/tasks/optics.py:528` | **FIXED** -- _check_bse_states over-rejects; nempty scaling reasoning inverted |
-| 10 | Low | `src/elkpy/calculation.py:362` | _ndmag's spinpol gate is weaker than init0.f90:126's |
-| 11 | Low | `src/elkpy/tasks/magnetism_manybody.py:169` | missing stage sidecar silently drops the producing run's blocks |
-| 12 | Low | `src/elkpy/tasks/phonons.py:89` | phonons/magnetism shadow tables bypass spec.py entirely |
-| 13 | Low | `src/elkpy/tasks/params.py:129` | FortranReal shim bypassed by raw extra_blocks paths |
-| 14 | Low | `src/elkpy/params.py:1563` | block-shape lo/hi never applied; wplot's lo=2 is dead and wrong |
-| 15 | Low | `src/elkpy/params.py:542` | maxrows off by one: Elk stops at exactly maxrows rows |
-| 16 | Low | `tests/test_params.py:62` | Completeness test checks names only, never a default/type/arity |
-| 17 | Low | `src/elkpy/parsers/sfac.py:60` | sfac vhmat returned transposed relative to the input block |
+| 10 | Low | `src/elkpy/calculation.py:362` | **FIXED** -- _ndmag's spinpol gate is weaker than init0.f90:126's |
+| 11 | Low | `src/elkpy/tasks/magnetism_manybody.py:169` | **FIXED** -- missing stage sidecar silently drops the producing run's blocks |
+| 12 | Low | `src/elkpy/tasks/phonons.py:89` | **FIXED** -- phonons/magnetism shadow tables bypass spec.py entirely |
+| 13 | Low | `src/elkpy/tasks/params.py:129` | **FIXED** -- FortranReal shim bypassed by raw extra_blocks paths |
+| 14 | Low | `src/elkpy/params.py:1563` | **FIXED** -- block-shape lo/hi never applied; wplot's lo=2 is dead and wrong |
+| 15 | Low | `src/elkpy/params.py:542` | **FIXED** -- maxrows off by one: Elk stops at exactly maxrows rows |
+| 16 | Low | `tests/test_params.py:62` | **FIXED** -- Completeness test checks names only, never a default/type/arity |
+| 17 | Low | `src/elkpy/parsers/sfac.py:60` | **FIXED** -- sfac vhmat returned transposed relative to the input block |
 | 18 | High | `src/elkpy/tasks/optics.py:268` | **FIXED, found 2026-09-12** -- get_plane_wave_wavefunctions(hkmax=) is inert; init4.f90:24 overwrites it |
 | 19 | Medium | `src/elkpy/tasks/spectra.py:1234` | **FIXED, found 2026-09-12** -- get_elnes defaulted to q=0, the one q whose cross-section is identically zero |
 | 20 | High | `vendor/elk/src/bandstr.f90:40` | **UPSTREAM Elk bug, FIXED by patch 0026, found 2026-09-12** -- elm declared real(4) where genlmirep writes real(8): task 22 overruns the heap and aborts |
@@ -312,6 +312,12 @@ passes with nempty=8 against a bound of 9.
 
 *guard-that-does-not-guard / verdict CONFIRMED*
 
+**FIXED (2026-09-12).** `Calculation._spinpol_effective()` mirrors `init0.f90:126` --
+`bforb`, `fsmtype /= 0`, `spinsprl` or `spincore` set through `extra_blocks` promote an
+unpolarised run before the gate, exactly as Elk does -- and `_ndmag` gates on it. Checked
+against the Fortran's own branches: `spinsprl` gives 3 (it clears `cmagz`), the other
+three give 1, and `fsmtype=0` correctly stays 0.
+
 **What is wrong.** _ndmag returns 0 whenever spinpol and spinorb are both false, but init0.f90:126 forces spinpol true when bforb, fsmtype/=0, spinsprl or spincore is set, so such a run is magnetic (ndmag 1 or 3) while elkpy reports 0.
 
 **How it fails.** The transcription diverges from Elk in exactly one case: spinpol=False and spinorb=False with one of bforb / fsmtype!=0 / spinsprl / spincore hand-set through extra_blocks. init0.f90:126 then sets spinpol=.true., and lines 173-190 give ndmag=3 (spinsprl also clears cmagz), while _ndmag returns 0 at line 362 before reaching either branch. CORRECTIONS to the reviewer's consequences: (a) get_ulr_magnetisation does NOT default nf=0 — line 1494's `if not (self.spinpol or self.spinorb): raise ValueError` fires before `ndmag = self._ndmag()` at line 1500, so that claim is refuted; (b) get_total_magnetic_torque's ValueError comes from its own sibling gate at calculation-style line 384, not from _ndmag. The one consequence actually caused by _ndmag is spectra.py:632, `if self._ndmag() != 3: raise ValueError`, which spuriously REFUSES get_magnetic_torque() on a run Elk would treat as non-collinear. That is a loud false negative, never a wrong number, and it is unreachable through every in-package path that sets these flags: _spiral_child (line 422) and exchange._configuration_calculation (exchange.py:189) both pass spinpol=True. Hence severity downgraded from medium to low.
@@ -325,6 +331,12 @@ passes with nempty=8 against a bound of 9.
 ## 11. `src/elkpy/tasks/magnetism_manybody.py:169` -- missing stage sidecar silently drops the producing run's blocks
 
 *guard-that-does-not-guard / verdict CONFIRMED*
+
+**FIXED (2026-09-12).** `_run_dependent` raises on a missing sidecar instead of treating
+it as an empty block set. The reachability the verifier narrowed it to -- a hand-made or
+dotfile-stripped copy of a run directory -- is exactly the case where the failure would be
+silent, since `readstulr.f90:118-128` remaps a mismatched Q-set rather than rejecting it.
+`_run_reusing` (findings 1 and 2) carries the same check with a more specific message.
 
 **What is wrong.** _run_dependent treats an absent .elkpy_stage.json as an empty block set and runs anyway, so a dependent task can execute with none of the producing run's defining blocks instead of refusing.
 
@@ -340,6 +352,16 @@ passes with nempty=8 against a bound of 9.
 
 *duplicated-constants / verdict CONFIRMED*
 
+**FIXED (2026-09-12), by routing rather than by correcting the comments.** Both
+modules' constants now resolve through `spec` with the literal as a fallback -- the same
+`spec.TASKS.get(key, local)` shape `groundstate.py:126` uses -- so a version bump that
+edits `spec.py` alone is picked up here instead of silently ignored. The literals stay
+because they carry the per-entry `src/*.f90` provenance `spec.py` does not, and
+`tests/test_tasks_medium_findings.py` asserts the two agree in both directions, so a
+divergence is now a failing test rather than a fallback. Verified sharp: perturbing one
+constant fails the test naming it. The stale rationale comments ("before the integrator
+adds the matching spec.TASKS entries") are replaced.
+
 **What is wrong.** phonons.py and magnetism_manybody.py duplicate task codes and output filenames as module constants that never consult spec.py, so the documented single-registry invariant does not hold for those two modules -- though every duplicated value is currently identical to spec's.
 
 **How it fails.** No runtime defect today: I compared every entry programmatically and all 15 PHONON_TASKS codes, all 15 PHONON_OUTPUT_FILES names and all 27 task / 26 filename constants in magnetism_manybody.py are equal to their spec.TASKS / spec.OUTPUT_FILES counterparts, so nothing currently emits a wrong task or reads a wrong file. What is inaccurate in the present tense is the stated rationale: both modules' comments (phonons.py:86-88 "These mirror the entries handed to the integrator for spec.TASKS"; magnetism_manybody.py:62-64 "Duplicated ... so that this module imports cleanly before the integrator adds the matching spec.TASKS entries") describe a fallback for spec entries that do not exist yet -- but those entries have since been merged into spec.py, so the duplication is now live and unguarded rather than transitional. The latent risk is the one the reviewer names: an Elk version bump that edits spec.py alone (CLAUDE.md's stated invariant) is picked up by groundstate.py/spectra.py via spec.TASKS.get(key, default) but silently not by these two modules; a retired code then hits elk.f90's `case default ... stop`, while a reassigned code would run a different task and return a plausible wrong number.
@@ -353,6 +375,16 @@ passes with nempty=8 against a bound of 9.
 ## 13. `src/elkpy/tasks/params.py:129` -- FortranReal shim bypassed by raw extra_blocks paths
 
 *silent-truncation / verdict CONFIRMED*
+
+**FIXED (2026-09-12), at the source rather than by a third shim.**
+`inputfile._format_float` keeps `f"{v:.10f}"` wherever it survives a round trip through
+zero and falls back to exponential form for anything that format would annihilate --
+`1e-12` renders as `1e-12`, `5.13` still as `5.1300000000`, and a value that merely loses
+digits (1/3) is left alone so no currently-correct file changes. This covers every path
+into `InputFile`, including the raw `extra_blocks` that bypass `params.validate_blocks()`
+and `get_mae(epspot=...)`'s own. NOT fixed: the string branch still quotes every `str`,
+which is right for `sppath` and wrong for the verbatim blocks -- `params.FortranReal` is
+now unnecessary for floats, but `_RawToken` is still doing the string half's work.
 
 **What is wrong.** The FortranReal shim protects only values routed through params.validate_blocks(), so raw extra_blocks (constructor and the new magnetism_manybody task) still reach inputfile._format_value, where any real below 1e-10 renders as the literal 0.0000000000, and effective_parameters() reports the un-rendered value so the misrender is invisible.
 
@@ -368,6 +400,16 @@ passes with nempty=8 against a bound of 9.
 
 *guard-does-not-guard / verdict CONFIRMED*
 
+**FIXED (2026-09-12), by expressing the relations rather than by enabling lo/hi.**
+Enabling the block branch's range check was not an option, as the verifier found: one
+(lo, hi) pair applies to every column of every line, so `wplot`'s own `lo=2` would reject
+its default second line `(-0.5, 0.5)`. The `lo` is removed, so `explain_parameter()` no
+longer prints a bound nothing enforces, and `params._RELATIONS` now carries the checks
+that are actually in the Fortran: `wplot`'s four (`nwplot < 2`, `ngrkf < 1`,
+`nswplot < 0`, `wplot(1) > wplot(2)`), `plot1d`'s `npp1d >= nvp1d`, and `plot2d`/
+`plot3d`'s `np < 1`. All six verified to fire on the inputs the finding names and to pass
+each block's own default.
+
 **What is wrong.** _validate_one's 'block' branch calls _check_line with rng=False, so lo/hi on a block-shaped entry is dead metadata; wplot is the only such entry, its lo=2 enforces none of readinput.f90's four wplot guards, and explain_parameter() still prints it to the user as 'Elk requires: >= 2'. The 'counted' branch range-checks only the header, missing plot1d's npp1d >= nvp1d relation.
 
 **How it fails.** params.render_blocks({"wplot": ((1, 0, -5), (0.5, -0.5))}) is accepted and renders cleanly (verified), but trips four hard stops in one Fortran branch: nwplot < 2 (readinput.f90:847), ngrkf < 1 (:853), nswplot < 0 (:859) and wplot(1) > wplot(2) (:867). params.render_blocks({"plot1d": ((10, 5), <10 vertex rows>)}) is likewise accepted (verified) while readinput.f90:803 stops on npp1d < nvp1d. plot2d/plot3d's np2d/np3d < 1 checks are unexpressed too (plot2d/plot3d carry no lo at all). In each case Elk dies with the generic readinput error the module exists to pre-empt.
@@ -381,6 +423,12 @@ passes with nempty=8 against a bound of 9.
 ## 15. `src/elkpy/params.py:542` -- maxrows off by one: Elk stops at exactly maxrows rows
 
 *off-by-one / verdict CONFIRMED*
+
+**FIXED (2026-09-12).** `optcomp` 26, `kstlist` 19, `istxbse` 19, `jstxbse` 19,
+`tasks` 39, with the reason recorded at the `maxrows` field itself: the blank-terminated
+lists are `do i=1,maxN` and must see the terminator INSIDE the loop, so exactly `maxN`
+rows falls out into a hard stop. `tests/test_params.py` pins all five in both directions
+(`maxN - 1` accepted, `maxN` refused) rather than only `optcomp`.
 
 **What is wrong.** Elk's blank-line-terminated list branches loop `do i=1,maxN` and must see the terminator INSIDE the loop; supplying exactly maxN rows falls out of the loop into a hard stop. The table's maxrows equals maxN, so the validator accepts one row more than Elk does, on optcomp (27), kstlist (20), istxbse (20), jstxbse (20) and tasks (40).
 
@@ -396,6 +444,16 @@ passes with nempty=8 against a bound of 9.
 
 *test-coverage / verdict CONFIRMED*
 
+**FIXED (2026-09-12).** `tests/test_params.py` now parses `readinput.f90`'s own
+default-value section -- the block between its two banners, which is plain assignments --
+and compares every scalar entry whose `var` names one variable. 256 assignments found,
+227 table entries reached, 0 mismatches, and a second test pins those counts so a refactor
+that silently stops finding variables fails rather than going quiet. Verified sharp:
+changing `rgkmax`'s default from 7.0 to 8.0 now fails with
+`rgkmax: table 8.0, readinput.f90 7.0`, which is the exact regression the finding said the
+suite would miss. The narrowing the verifier noted stands: vector and block defaults
+(`ngridk`, `np3d`, `avec`, `wplot`) are still unchecked in both directions.
+
 **What is wrong.** tests/test_params.py re-parses readinput.f90 for block names, alias grouping, case-branch line numbers and deprecated status, but never compares a default VALUE, declared type or arity against the Fortran, so those columns of all ~317 entries are test-unguarded and an Elk version bump would report only appearing and vanishing block names.
 
 **How it fails.** Change any default in the table (rgkmax 7.0 -> 8.0, plot3d's np3d 20 -> 40) and the suite still passes: test_defaults_are_typed_consistently checks only Python types, and test_every_active_default_validates_against_its_own_block round-trips the default through the same table's own shape spec. explain_parameter() and effective_parameters(include_defaults=True) then report the wrong number to the user as fact with nothing to catch it.
@@ -409,6 +467,10 @@ passes with nempty=8 against a bound of 9.
 ## 17. `src/elkpy/parsers/sfac.py:60` -- sfac vhmat returned transposed relative to the input block
 
 *index-order / verdict CONFIRMED*
+
+**FIXED (2026-09-12), by transposing rather than by documenting.** The returned
+`vhmat` is now the matrix the caller passed. `get_structure_factors`' own docstring says
+so and cites both sides of the asymmetry, not just the parser's.
 
 **What is wrong.** parse_structure_factors returns the vhmat echoed in SFACRHO.OUT/SFACMAG_j.OUT as printed, but Elk prints it column by column while readinput reads it row by row, so result["vhmat"] is the transpose of the matrix the user passed to get_structure_factors(vhmat=...); the parser docstring documents the as-printed layout, but the public method's docstring does not and nothing warns that input and output differ.
 

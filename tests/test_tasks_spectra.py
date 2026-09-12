@@ -73,6 +73,28 @@ def test_ndmag_noncollinear_from_an_in_plane_bfcmt(tmp_path):
     assert calc._ndmag() == 3
 
 
+def test_ndmag_honours_init0s_promotion_of_spinpol(tmp_path):
+    """src/init0.f90:126 is
+
+        if (spinorb.or.bforb.or.(fsmtype /= 0).or.spinsprl.or.spincore) &
+         spinpol=.true.
+
+    and the whole ndmag block below it runs on the PROMOTED value. Reading
+    `spinpol or spinorb` alone reported ndmag=0 for a run Elk treats as
+    magnetic -- which made get_magnetic_torque() refuse a non-collinear
+    calculation. All four promoters are reachable only through hand-written
+    extra_blocks, since none has a constructor argument."""
+    # spinsprl also clears cmagz (init0.f90:186-189), so it alone gives 3
+    assert make(tmp_path, extra_blocks={"spinsprl": [True]})._ndmag() == 3
+    assert make(tmp_path, extra_blocks={"bforb": [True]})._ndmag() == 1
+    assert make(tmp_path, extra_blocks={"spincore": [True]})._ndmag() == 1
+    assert make(tmp_path, extra_blocks={"fsmtype": [1]})._ndmag() == 1
+    assert make(tmp_path, extra_blocks={"fsmtype": [-1]})._ndmag() == 1
+    # fsmtype = 0 is the one value that does NOT promote
+    assert make(tmp_path, extra_blocks={"fsmtype": [0]})._ndmag() == 0
+    assert make(tmp_path)._ndmag() == 0
+
+
 def test_ndmag_cmagz_forces_collinear(tmp_path):
     """src/init0.f90 line 190: ``cmagz`` overrides everything else."""
     calc = make(tmp_path, spinpol=True, spinorb=True, extra_blocks={"cmagz": [True]})

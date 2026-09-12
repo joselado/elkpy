@@ -8,11 +8,35 @@ new upstream blocks don't require code changes here.
 """
 
 
+def _format_float(v):
+    """A fixed-point rendering that never silently turns a value into zero.
+
+    ``f"{v:.10f}"`` is what almost every block wants -- lattice vectors and
+    positions read far better as ``5.1300000000`` than as ``5.13`` -- but it
+    is a floor as well as a format: anything below 5e-11 renders as the
+    literal ``0.0000000000``, and Elk accepts that without complaint for the
+    tolerances where it matters most. ``epspot``/``epsengy`` have no range
+    check in ``readinput.f90`` (unlike ``epsband``), so a convergence
+    tolerance of 1e-12 became a tolerance of zero, the loop ran to ``maxscl``,
+    and the only symptom was non-convergence.
+
+    So the fixed format is kept wherever it survives a round trip through
+    zero, and anything it would annihilate is written in exponential form,
+    which Elk's list-directed reads accept everywhere a real is expected.
+    Values that merely lose digits (1/3) are left alone: changing those would
+    alter every currently-correct file for no gain.
+    """
+    text = f"{v:.10f}"
+    if v != 0.0 and float(text) == 0.0:
+        return repr(float(v))
+    return text
+
+
 def _format_value(v):
     if isinstance(v, bool):
         return ".true." if v else ".false."
     if isinstance(v, float):
-        return f"{v:.10f}"
+        return _format_float(v)
     if isinstance(v, str):
         return f"'{v}'"
     return str(v)

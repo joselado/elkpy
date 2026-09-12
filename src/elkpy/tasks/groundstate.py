@@ -537,6 +537,12 @@ class GroundStateResponseTasks:
           a multiplicity (Elk default true).
         - `vhmat`: 3x3 matrix transforming the printed (h,k,l) labels, for
           reporting indices in a different (e.g. conventional) setting.
+          It is written and read ROW by row (``readinput.f90:1414-1417``)
+          and applied that way (``sfacrho.f90:50-52``), but the output file
+          echoes it COLUMN by column (``sfacrho.f90:43-45``). The returned
+          ``vhmat`` is transposed back, so what comes out is the matrix that
+          went in; a diagonal one, which is the default, hides the
+          difference entirely.
         - `wsfac`: (emin, emax) energy window in Hartree restricting which
           states contribute -- this is how a *valence-only* or
           *core-only* structure factor is obtained. Leaving it at the

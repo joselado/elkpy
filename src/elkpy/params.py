@@ -116,6 +116,17 @@ class FortranReal(float):
     value -- `Calculation._basis_signature` json-dumps `extra_blocks` into
     the ground-state cache manifest, so a token that serialised to a
     constant would make two different inputs share a cache entry.
+
+    This is no longer load-bearing for correctness. `inputfile._format_float`
+    fixes the underlying bug at the source -- the fixed ten-decimal format
+    turned anything below 5e-11 into the literal ``0.0000000000`` -- so a
+    plain float now renders safely on every path, including the raw
+    `extra_blocks` that never reach `validate_blocks()`. What survives here is
+    the FORM: this type's ``__format__`` is what `_format_float`'s
+    ``f"{v:.10f}"`` calls, so a value routed through `render_blocks` still
+    comes out as ``1.0E-12`` rather than ``1e-12``. Both are Fortran-readable;
+    keeping the type costs nothing and removing it is a separate change with
+    its own blast radius.
     """
 
     __slots__ = ()
@@ -169,6 +180,12 @@ class ParamBlock(object):
 
     def __init__(self, name, type=None, shape="scalar", n=None, nmin=None,
                  opt=0, lines=None, line=None, linemin=None, header=None,
+                 # maxrows is one BELOW Elk's own maxN parameter, deliberately:
+                 # readinput.f90's blank-terminated lists are `do i=1,maxN` and
+                 # must see the terminator INSIDE the loop, so exactly maxN rows
+                 # falls out of the loop into a hard stop ("too many tasks",
+                 # "optical component list too long", ...). The reachable bounds
+                 # are therefore 39/26/19/19, not 40/27/20/20.
                  count_at=None, maxrows=None, nlines=None, default=None,
                  lo=None, lo_ex=False, hi=None, hi_ex=False, var="",
                  module="", cat="misc", src=0, aliases=(), status="active",
@@ -264,7 +281,7 @@ def _b(*args, **kw):
 #: Generated from vendor/elk/src/readinput.f90 (see the module docstring for
 #: where each field comes from) and checked by tests/test_params.py.
 _UPSTREAM = [
-    _b("tasks", shape='list', line=('int', 1), maxrows=40, var='tasks', module='modmain',
+    _b("tasks", shape='list', line=('int', 1), maxrows=39, var='tasks', module='modmain',
        cat='control', src=421, desc='the list of tasks to perform, one integer per line',
        dsrc='fortran'),
     _b("species", shape='opaque', var='-', cat='structure', src=448,
@@ -484,7 +501,7 @@ _UPSTREAM = [
        desc='the plot box: origin and three corners (lattice coordinates), then the three grid sizes',
        dsrc='fortran'),
     _b("wplot", shape='block', lines=(('int', 3, 0), ('real', 2, 0)),
-       default=((500, 100, 1), (-0.5, 0.5)), lo=2, var='nwplot/ngrkf/nswplot/wplot',
+       default=((500, 100, 1), (-0.5, 0.5)), var='nwplot/ngrkf/nswplot/wplot',
        module='modmain', cat='dos', src=845, aliases=('dos',),
        desc="'nwplot ngrkf nswplot' then the frequency/energy window 'wmin wmax' for DOS and optics plots",
        dsrc='fortran',
@@ -539,7 +556,7 @@ _UPSTREAM = [
     _b("noptcomp", 'int', default=1, lo=1, hi=27, var='noptcomp', module='modmain',
        cat='optics', src=938, desc='number of optical matrix components required',
        dsrc='fortran'),
-    _b("optcomp", shape='list', line=('int', 3), linemin=1, maxrows=27, var='optcomp',
+    _b("optcomp", shape='list', line=('int', 3), linemin=1, maxrows=26, var='optcomp',
        module='modmain', cat='optics', src=947,
        desc="the components of the optical tensor to calculate, one 'i j k' line each",
        dsrc='fortran'),
@@ -649,7 +666,7 @@ _UPSTREAM = [
        desc='no longer used by this version of Elk', dsrc='fortran'),
     _b("tau0oep", 'real', default=0.1, lo=0.0, var='tau0oep', module='modmain', cat='xc',
        src=1169, desc='initial step length for the OEP iterative solver', dsrc='manual'),
-    _b("kstlist", shape='list', line=('int', 3), linemin=2, maxrows=20, var='kstlist',
+    _b("kstlist", shape='list', line=('int', 3), linemin=2, maxrows=19, var='kstlist',
        module='modmain', cat='kpoints', src=1177,
        desc="the k-point and state list: one 'ik ist [jst]' line each", dsrc='fortran'),
     _b("vklem", 'real', shape='vector', n=3, default=(0.0, 0.0, 0.0), var='vklem',
@@ -794,11 +811,11 @@ _UPSTREAM = [
     _b("ncbse", 'int', default=3, lo=0, var='ncbse0', module='modmain', cat='response',
        src=1442, desc='number of conduction states to be used for BSE calculations',
        dsrc='manual'),
-    _b("istxbse", shape='list', line=('int', 1), maxrows=20, var='istxbse', module='modmain',
+    _b("istxbse", shape='list', line=('int', 1), maxrows=19, var='istxbse', module='modmain',
        cat='response', src=1450,
        desc='extra valence states to include in the BSE Hamiltonian, one index per line',
        dsrc='fortran'),
-    _b("jstxbse", shape='list', line=('int', 1), maxrows=20, var='jstxbse', module='modmain',
+    _b("jstxbse", shape='list', line=('int', 1), maxrows=19, var='jstxbse', module='modmain',
        cat='response', src=1476,
        desc='extra conduction states to include in the BSE Hamiltonian, one index per line',
        dsrc='fortran'),
@@ -1573,6 +1590,61 @@ def _check_line(b, v, spec, where, nmin=None, rng=True, nrange=None):
     return tuple(out)
 
 
+def _wplot_relations(rows, where):
+    """readinput.f90:845-871's four guards, none expressible as lo/hi.
+
+    A single (lo, hi) pair is applied to every column of every line of a
+    block, so `wplot`'s old `lo=2` would have rejected its own default second
+    line (-0.5, 0.5) the moment it was enforced -- and while it was NOT
+    enforced, `explain_parameter()` still printed "Elk requires: >= 2" for a
+    two-line block where the bound is true of exactly one of five numbers.
+    """
+    (nwplot, ngrkf, nswplot), (wmin, wmax) = rows[0], rows[1]
+    if nwplot < 2:
+        raise ParameterError("%s: nwplot < 2 (readinput.f90:847)" % where)
+    if ngrkf < 1:
+        raise ParameterError("%s: ngrkf < 1 (readinput.f90:853)" % where)
+    if nswplot < 0:
+        raise ParameterError("%s: nswplot < 0 (readinput.f90:859)" % where)
+    if wmin > wmax:
+        raise ParameterError(
+            "%s: the window is empty, wplot(1) > wplot(2) -- %r > %r "
+            "(readinput.f90:867)" % (where, wmin, wmax))
+
+
+def _plot_grid_positive(rows, where, src):
+    """plot2d/plot3d's np2d/np3d < 1 check -- the grid sizes are the LAST
+    line of the block, and the entries carry no `lo` at all."""
+    if any(n < 1 for n in rows[-1]):
+        raise ParameterError(
+            "%s: every grid size must be at least 1, got %r "
+            "(readinput.f90:%d)" % (where, tuple(rows[-1]), src))
+
+
+def _plot1d_relation(rows, where):
+    """readinput.f90:803 stops on npp1d < nvp1d: a path cannot have fewer
+    points than it has vertices. The `counted` branch range-checks the header
+    but expresses no relation between its two numbers."""
+    nvp1d, npp1d = rows[0][0], rows[0][1]
+    if npp1d < nvp1d:
+        raise ParameterError(
+            "%s: npp1d=%d is fewer than the nvp1d=%d vertices it must pass "
+            "through (readinput.f90:803)" % (where, npp1d, nvp1d))
+
+
+# Relations readinput.f90 enforces that the (lo, hi) columns cannot express,
+# because they hold between numbers rather than on one. Keyed by block name.
+_RELATIONS = {
+    # keyed by the CANONICAL name: aliases resolve to their entry before
+    # _validate_one runs, so `dos` arrives here as `wplot` and a second key
+    # for it would be dead.
+    "wplot": _wplot_relations,
+    "plot2d": lambda rows, where: _plot_grid_positive(rows, where, 791),
+    "plot3d": lambda rows, where: _plot_grid_positive(rows, where, 791),
+    "plot1d": _plot1d_relation,
+}
+
+
 def _validate_one(b, value):
     where = "block %r" % b.name
     if b.status == "removed":
@@ -1608,9 +1680,13 @@ def _validate_one(b, value):
             raise ParameterError(
                 "%s: expected %d lines (%s), got %r"
                 % (where, len(b.lines), b.signature(), value))
-        return [_check_line(b, row, (ln[0], ln[1] + ln[2]),
+        rows = [_check_line(b, row, (ln[0], ln[1] + ln[2]),
                             "%s line %d" % (where, i + 1), nmin=ln[1], rng=False)
                 for i, (row, ln) in enumerate(zip(value, b.lines))]
+        relation = _RELATIONS.get(b.name)
+        if relation is not None:
+            relation(rows, where)
+        return rows
     if b.shape == "list":
         rows = _rows(b, value, where)
         if b.maxrows is not None and len(rows) > b.maxrows:
@@ -1659,6 +1735,9 @@ def _validate_counted(b, value, where):
     for i, row in enumerate(rows):
         out.append(_check_line(b, row, b.line, "%s row %d" % (where, i + 1),
                                nmin=b.linemin, rng=False))
+    relation = _RELATIONS.get(b.name)
+    if relation is not None:
+        relation(out, where)
     return out
 
 

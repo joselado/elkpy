@@ -19,7 +19,8 @@ from elkpy.parsers import sfac
 
 # vendor/elk/src/sfacrho.f90:40-71
 #   write(50,'("h k l indices transformed by vhmat matrix:")')
-#   write(50,'(3G18.10)') vhmat(:,1)   ! and (:,2), (:,3)
+#   write(50,'(3G18.10)') vhmat(:,1)   ! and (:,2), (:,3) -- COLUMNS, while
+#                                       ! readinput reads the block as ROWS
 #   write(50,'("      h      k      l  multipl.   |H|            Re(F)&
 #    &            Im(F)           |F|")')
 #   write(50,'(4I7,4G16.8)') iv(:),mulh(ih),hc(ih),a,b,r
@@ -107,7 +108,13 @@ def test_parse_structure_factors_non_integer_hkl(tmp_path):
     assert result["hkl"].shape == (2, 3)
     assert result["hkl"][1] == pytest.approx([-0.5, 0.5, 0.0])
     assert result["multiplicity"][1] == 4
-    assert result["vhmat"][0] == pytest.approx([0.5, 0.5, 0.0])
+    # sfacrho.f90:43-45 prints vhmat COLUMN by column while readinput.f90:
+    # 1414-1417 reads it row by row, so the parser transposes: what comes back
+    # is the matrix get_structure_factors() was given, not the file's lines.
+    # The fixture's printed rows are (0.5, 0.5, 0), (-0.5, 0.5, 0), (0, 0, 1).
+    assert result["vhmat"][0] == pytest.approx([0.5, -0.5, 0.0])
+    assert result["vhmat"][1] == pytest.approx([0.5, 0.5, 0.0])
+    assert result["vhmat"][2] == pytest.approx([0.0, 0.0, 1.0])
 
 
 def test_parse_structure_factors_magnetic(tmp_path):

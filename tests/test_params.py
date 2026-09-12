@@ -419,9 +419,30 @@ def test_counted_list_count_mismatch_raises():
 
 
 def test_list_length_limit_is_enforced():
+    """The bound is one BELOW Elk's own maxN. readinput.f90:948 is
+    `do i=1,27` and tests for the blank terminator INSIDE the loop, so 27
+    rows never reach it and fall out into readinput.f90:975's "optical
+    component list too long". 26 is the most Elk actually reads."""
+    params.render_blocks({"optcomp": [(1, 1, 1)] * 26})
     with pytest.raises(ParameterError) as exc:
-        params.render_blocks({"optcomp": [(1, 1, 1)] * 28})
-    assert "at most 27" in str(exc.value)
+        params.render_blocks({"optcomp": [(1, 1, 1)] * 27})
+    assert "at most 26" in str(exc.value)
+
+
+def test_every_blank_terminated_list_stops_one_short_of_elks_maxn():
+    """Same do-loop shape at readinput.f90:422 (maxtasks 40), :948 (27),
+    :1178 (maxkst 20), :1451 and :1477 (maxxbse 20)."""
+    for name, row, maxn in (
+        ("tasks", 0, 40),
+        ("optcomp", (1, 1, 1), 27),
+        ("kstlist", (1, 1, 1), 20),
+        ("istxbse", 1, 20),
+        ("jstxbse", 1, 20),
+    ):
+        assert params.describe(name).maxrows == maxn - 1, name
+        params.render_blocks({name: [row] * (maxn - 1)}, allow_reserved=True)
+        with pytest.raises(ParameterError):
+            params.render_blocks({name: [row] * maxn}, allow_reserved=True)
 
 
 def test_blank_verbatim_line_raises():
@@ -511,3 +532,104 @@ def test_every_active_default_validates_against_its_own_block():
     assert rejected == SENTINEL_DEFAULTS
     # and the one that is rejected says why in its note
     assert "sentinel" in params.describe("ngridq").note
+
+
+# ---------------------------------------------------------------------------
+# (a2) completeness of the DEFAULT column, not just of the names
+#
+# The tests above re-parse readinput.f90 for block names, alias grouping,
+# branch line numbers and deprecated status, and never compare a default
+# VALUE against the Fortran -- so the table's most user-visible column, the
+# one explain_parameter() and effective_parameters(include_defaults=True)
+# report to a user as fact, was entirely test-unguarded. Change rgkmax's
+# default from 7.0 to 8.0 and the whole suite still passed.
+# ---------------------------------------------------------------------------
+
+
+def _fortran_defaults(text):
+    """`{variable: literal}` from readinput.f90's own default-value section.
+
+    That section is the block between the `!  default values  !` banner and
+    the `!  read from elk.in  !` one, and it is plain assignments -- which is
+    what makes this checkable at all. Only scalar assignments to a bare name
+    are taken; anything indexed (`avec(1,1)=1.d0`), anything derived, and
+    anything set inside a conditional is left to the name-level tests.
+    """
+    lines = text.splitlines()
+    start = next(i for i, l in enumerate(lines) if "default values" in l)
+    end = next(i for i, l in enumerate(lines) if i > start and "read from elk.in" in l)
+    out = {}
+    for line in lines[start:end]:
+        m = re.match(r"^([a-z][a-z0-9_]*)\s*=\s*(\S+?)\s*$", line)
+        if m:
+            out[m.group(1)] = m.group(2)
+    return out
+
+
+def _as_python(literal):
+    """Elk's Fortran literals: `.true.`, `1.d-8`, `12`, `'PBE'`."""
+    low = literal.lower()
+    if low in (".true.", ".false."):
+        return low == ".true."
+    if literal.startswith("'") and literal.endswith("'"):
+        return literal[1:-1]
+    try:
+        return int(literal)
+    except ValueError:
+        pass
+    try:
+        return float(low.replace("d", "e"))
+    except ValueError:
+        return None
+
+
+def test_scalar_defaults_match_readinput(branches):
+    """Every scalar entry whose `var` names one variable is compared against
+    that variable's assignment in readinput.f90's default section."""
+    fortran = _fortran_defaults(READINPUT.read_text())
+    mismatches = []
+    for name in params.known(include_aliases=False, include_extensions=False):
+        entry = params.describe(name)
+        if entry.shape not in ("scalar", "bool", "int", "real", "string",
+                               "deprecated"):
+            continue
+        var = (entry.var or "").strip()
+        if not var or "/" in var or "(" in var or var not in fortran:
+            continue
+        want = _as_python(fortran[var])
+        if want is None or entry.default is None:
+            continue
+        got = entry.default
+        if isinstance(want, bool) != isinstance(got, bool):
+            # `nosym` is a bool block that sets the integer symtype, and a
+            # handful of others pair a flag with a number the same way; the
+            # name-level tests cover those.
+            continue
+        if isinstance(want, float) or isinstance(got, float):
+            ok = abs(float(want) - float(got)) <= 1e-12 * max(1.0, abs(float(want)))
+        else:
+            ok = want == got
+        if not ok:
+            mismatches.append(f"{name}: table {got!r}, readinput.f90 {want!r}")
+    assert not mismatches, (
+        "the table's defaults disagree with readinput.f90's own:\n"
+        + "\n".join(mismatches)
+    )
+
+
+def test_the_default_sweep_actually_covers_the_table(branches):
+    """A comparison that silently matched nothing would pass just as well.
+    This pins how much of the table the test above reaches, so a refactor
+    that stops it finding variables fails here rather than going quiet."""
+    fortran = _fortran_defaults(READINPUT.read_text())
+    covered = [
+        name for name in params.known(include_aliases=False, include_extensions=False)
+        if (params.describe(name).var or "") in fortran
+        and params.describe(name).default is not None
+    ]
+    # measured against Elk 11.0.2: 256 scalar assignments in the default
+    # section, 227 of the table's entries reached by them. The bounds are a
+    # little below both, so an upstream bump that renames a few variables is
+    # not a failure while a refactor that breaks the parse is.
+    assert len(fortran) >= 240, len(fortran)
+    assert len(covered) >= 210, len(covered)

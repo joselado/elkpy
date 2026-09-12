@@ -277,6 +277,14 @@ proves each, what the verifier re-read, and a suggested fix. Suggested order:
    binary-free set **526 passed**. The descriptions
    below are what was wrong, kept for the reading.
 
+   **~~And the eight low findings (10-17).~~ DONE (2026-09-12)**, so
+   `docs/review_findings.md` has no open entry left. Three of them were
+   behaviour rather than prose: `inputfile._format_value` rendered any float
+   below 5e-11 as the literal `0.0000000000` (so `epsengy=1e-12` became zero,
+   and Elk range-checks neither `epspot` nor `epsengy`), `parsers.sfac`
+   returned `vhmat` transposed, and `_ndmag` missed `init0.f90:126`'s
+   promotion of an unpolarised run to a polarised one.
+
    **`phonons.py:630`** — the `couplings` from `LAMBDAQ.OUT` are exactly **half**
    the `lambda` returned beside them in the same dict. Settled from the source:
    `writelambda.f90` divides by `pi*fermidos` (total, both-spin) where
@@ -288,15 +296,17 @@ proves each, what the verifier re-read, and a suggested fix. Suggested order:
 
 ### Also open, not from the review
 
-`src/elkpy/inputfile.py:15` — `_format_value` renders floats with a fixed
-ten-decimal format, so anything below 1e-10 becomes the literal string of ten
-zeros (`epsband`'s own Elk default is 1e-12), and it quotes every `str`, which
-corrupts the verbatim lines of `notes`/`xlwin`/`wann_bands`. **Two independent
-shims** (`params.FortranReal`, `magnetism_manybody._RawToken`) work around this
-rather than one fix. Findings 13 and 15 are both downstream of it. The float
-branch is an unambiguous bug; the string branch is subtler than it looks, since
-species filenames genuinely need the quotes — so a `Verbatim` marker is probably
-the right design, just not two of them.
+`src/elkpy/inputfile.py:15` — **the float half is FIXED (2026-09-12)**:
+`_format_float` keeps the fixed ten-decimal format wherever it survives a round
+trip through zero and falls back to exponential form for anything that format
+would annihilate, so `1e-12` renders as `1e-12` and `5.13` still as
+`5.1300000000`. That covers every path into `InputFile`, including the raw
+`extra_blocks` the shims existed for, and it retires `params.FortranReal`'s
+reason to exist. **The string half is not fixed**: `_format_value` still quotes
+every `str`, which is right for `sppath` and wrong for the verbatim lines of
+`notes`/`xlwin`/`wann_bands`, so `magnetism_manybody._RawToken` is still doing
+that work. A `Verbatim` marker is probably the right design — one of them, not
+two.
 
 Note the fix touches a file every one of the 64 new files depends on, which is
 why it was left alone during a parallel merge.
@@ -1003,7 +1013,7 @@ $O$ and the reduced norm (§1f).
 **Workstream A** (unchanged from the previous session)
 
 - The 17 review findings in `docs/review_findings.md`, three of which are one bug.
-- Fix `inputfile.py:15` at the source and collapse the two shims, or leave the shims.
+- ~~Fix `inputfile.py:15` at the source~~ DONE for the float half (2026-09-12); the string half, and so `_RawToken`, remains.
 - Run the three never-executed integration suites (`spectra`, `optics`,
   `magnetism_manybody`), which will likely surface assertion adjustments.
 - ~~`docs/field_report_nibr2.md` — 7 items from a real 45-atom NiBr2 spin-spiral run
