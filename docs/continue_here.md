@@ -244,7 +244,19 @@ need adjustment on first run — see the last bullet of `docs/design.md` §32.
 `docs/review_findings.md` has all of them with the `vendor/elk/src/` line that
 proves each, what the verifier re-read, and a suggested fix. Suggested order:
 
-1. **The three high findings are one bug.** `get_gw_self_energy(reuse_epsinv=True)`
+1. **~~The three high findings are one bug.~~ DONE (2026-09-12).**
+   `magnetism_manybody._run_reusing()` is the non-wiping dispatch the module
+   header always said it wanted; tasks 601 and 701 go through it, and
+   `get_anomalous_entropy` now runs `(205, 241, 270)` with the phonon
+   family's own `lmaxi>=2` blocks. Fixing them turned up a fourth claim of
+   the same kind: task 601 cannot be used "at a different `wmaxgw`/`tempk`
+   with the same screening" either, because both set the Matsubara count and
+   `getcfgq` stops on a differing record dimension. Details in
+   `docs/review_findings.md`; 14 binary-free tests in
+   `tests/test_tasks_restart_chains.py`. The description below is what was
+   wrong, kept because it is the clearest statement of the trap.
+
+   `get_gw_self_energy(reuse_epsinv=True)`
    (task 601), `get_ulr_ground_state(from_state=True)` (task 701) and
    `get_anomalous_entropy`'s chain all select a task whose purpose is to read a
    file that `_run_resumed`'s unconditional `shutil.rmtree` (`calculation.py:280`)

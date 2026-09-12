@@ -29,9 +29,9 @@ verifier corrected the original reviewer, the corrected version is what is recor
 
 | # | Severity | Location | Finding |
 |---|---|---|---|
-| 1 | High | `src/elkpy/tasks/magnetism_manybody.py:921` | reuse_epsinv=True is unusable: 601 needs a file it deletes |
-| 2 | High | `src/elkpy/tasks/magnetism_manybody.py:1230` | from_state=True is unusable: 701 needs a file it deletes |
-| 3 | High | `src/elkpy/tasks/optics.py:1177` | 270 needs EPHMAT.OUT, which only task 241 writes |
+| 1 | High | `src/elkpy/tasks/magnetism_manybody.py:921` | **FIXED** -- reuse_epsinv=True was unusable: 601 needs a file it deletes |
+| 2 | High | `src/elkpy/tasks/magnetism_manybody.py:1230` | **FIXED** -- from_state=True was unusable: 701 needs a file it deletes |
+| 3 | High | `src/elkpy/tasks/optics.py:1177` | **FIXED** -- 270 needed EPHMAT.OUT, which only task 241 writes |
 | 4 | Medium | `src/elkpy/tasks/spectra.py:494` | get_core_wavefunctions() crashes on H, He or Li |
 | 5 | Medium | `src/elkpy/tasks/phonons.py:630` | LAMBDAQ couplings are half the lambda in the same dict |
 | 6 | Medium | `src/elkpy/tasks/groundstate.py:269` | get_stress() pressure ignores Structure.scale (off by scale^2) |
@@ -59,6 +59,48 @@ concrete instances.
 ---
 
 # High severity (3)
+
+**FIXED (2026-09-12).** All three, in one change, plus a fourth claim found while
+fixing them. `magnetism_manybody._run_reusing()` is the one non-wiping dispatch the
+module header said it wanted: it asserts the file the task exists to read is present
+(a Python `ValueError` naming it, instead of a Fortran end-of-file abort inside
+`getcfgq`/`readstulr`), checks the blocks that file was built with against the
+producing run's sidecar, and then goes through the existing `_run_dependent()`. Tasks
+601 and 701 both call `readstate` themselves (`gwsefm.f90:19-24`,
+`gndstulr.f90:45-52`), so neither needs `_run_resumed`'s prepended task 1.
+
+What the pinning check had to be measured, not guessed. For `EPSINV.OUT`:
+`genwgw.f90` builds the Matsubara count from `wmaxgw` AND `tempk`
+(`nwgw = 2*nint(wmaxgw/(pi*kB*tempk))`, then `nwrf = nwbs+1`) and `init3.f90` builds
+`ngrf` from `gmaxrf`, both of which are record dimensions that `getcfgq.f90:54-71`
+stops on -- so the docstring's own advertised use, "re-running the self-energy at a
+different `wmaxgw`/`tempk` with the same screening", **cannot work either** and is now
+corrected to what does (a killed run, or a change of `tsediag`/`actype`/`npole`/
+`nspade`). `nempty` is pinned for the opposite reason: it changes the states epsinv is
+built from without changing any dimension, so it is the one Elk cannot catch. For
+`STATE_ULR.OUT` only `avecu`/`scaleu` are pinned -- `readstulr.f90` checks nothing but
+unit-cell shapes, so a changed ultracell is read silently -- while `ngridq` is
+deliberately NOT pinned, because `readstulr.f90:114-127` maps the file's own
+Q-vectors onto the new grid and zeroes the rest, which makes a restart on a finer
+Q-grid a supported use rather than a mismatch.
+
+Finding 3 needed no new mechanism, only the right chain: `(205, 241, 270)` and blocks
+from the phonon family's own `_phonon_blocks()`, so the `lmaxi >= 2` floor
+(`phonon.f90:34`) has one transcription rather than two. Its docstring carried the
+same misconception as findings 1 and 2 in a fourth place -- "pass a shorter tuple if
+part of the chain has already been run in this Calculation", which the wiped
+subdirectory makes impossible -- and now says the chain runs in one invocation.
+
+One consequence worth naming: on the 701 path the RuntimeError that checks for
+`STATE_ULR.OUT` afterwards can no longer mean anything, since the file is a
+precondition of the run. It is the file's **timestamp** that is now checked, so a
+restart that dies without writing a new state is reported instead of returning the
+previous pass's.
+
+Tests: `tests/test_tasks_restart_chains.py`, 14 of them, no Elk binary -- a fake
+launcher records which directory each task ran in and which task numbers reached the
+`tasks` block, which is exactly what the bug got wrong.
+
 
 ## 1. `src/elkpy/tasks/magnetism_manybody.py:921` -- reuse_epsinv=True is unusable: 601 needs a file it deletes
 

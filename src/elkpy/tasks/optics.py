@@ -1174,7 +1174,8 @@ class OpticsTasks:
     # ------------------------------------------------------------------
 
     def get_anomalous_entropy(
-        self, ngridq, prerequisite_tasks=(205, 240, 270), label="aceplot",
+        self, ngridq, prerequisite_tasks=None, nrmtscf=4, lmaxi=2,
+        extra_blocks=None, label="aceplot",
     ):
         """Fermionic and bosonic anomalous correlation entropy on the k-
         and q-meshes (task 285, src/aceplot.f90, FACE3D.OUT/BACE3D.OUT).
@@ -1194,13 +1195,35 @@ class OpticsTasks:
         validated. src/initeph.f90 reads EVALUV.OUT/EVECUV.OUT via
         getevaluv/getevecuv, which only the electron-phonon
         superconductivity ground state (task 270/271, src/gndsteph.f90)
-        writes; that in turn needs the electron-phonon matrix elements
-        (task 240/241) and those need the DFPT phonons (task 205). The
-        default `prerequisite_tasks` is that chain, and running it is
-        hours to days of compute on anything but a toy cell -- the phonon
-        step alone is measured at 11-13 minutes for 2-atom Si on a
-        2x2x2 q-mesh (see CLAUDE.md). Pass a shorter tuple if part of the
-        chain has already been run in this Calculation.
+        writes; that in turn needs the electron-phonon matrix elements and
+        those need the DFPT phonons (task 205). The default
+        `prerequisite_tasks` is that chain -- (205, 241, 270) -- and running
+        it is hours to days of compute on anything but a toy cell; the
+        phonon step alone is measured at 11-13 minutes for 2-atom Si on a
+        2x2x2 q-mesh (see CLAUDE.md).
+
+        All four tasks run in ONE invocation, and `prerequisite_tasks` is
+        there to change the chain -- task 200 in place of 205 for supercell
+        rather than DFPT phonons, say -- not to shorten it. It cannot pick up
+        where an earlier call left off: like every `get_*` here this one runs
+        in a subdirectory that is wiped first (docs/design.md #4), so a
+        shortened chain finds none of the files it means to reuse and aborts
+        inside the Fortran exactly as a missing EPHMAT.OUT does.
+
+        The coupling step is **241, not 240**, and the difference is not the
+        band window the two task numbers suggest: src/ephcouple.f90:131 is
+        `if (task == 241) call putephmat(iq,ik,ephmat)` and is the only
+        putephmat call site in the tree, so task 240 writes no EPHMAT.OUT at
+        all. src/initeph.f90:92-100 then calls getephmat for every (q,k),
+        which opens EPHMAT.OUT as an UNFORMATTED DIRECT file -- created empty
+        if absent -- and reads a record, i.e. a Fortran end-of-file abort
+        after the whole phonon run has already been paid for.
+
+        `lmaxi` >= 2 is likewise a prerequisite of task 205 rather than an
+        accuracy knob: src/phonon.f90:34 stops with "lmaxi too small for
+        calculating DFPT phonons", and readinput.f90:84's default is 1, so
+        the blocks come from the phonon family's own `_phonon_blocks()`
+        rather than from a second copy of the same rule here.
 
         `ngridq` is REQUIRED rather than defaulted: task 205 is not on
         src/init2.f90:44-47's list of tasks that force ngridq = ngridk, so
@@ -1214,13 +1237,17 @@ class OpticsTasks:
                  "kgrid": (3,), "qgrid": (3,), "workdir": Path}.
         """
         ngridq = tuple(int(n) for n in ngridq)
-        if any(k % q for k, q in zip(self.ngridk, ngridq)):
-            raise ValueError(
-                f"ngridq={ngridq} must divide ngridk={self.ngridk} "
-                f"(src/init2.f90:58 stops otherwise)"
+        self._check_eph_commensurate(ngridq)
+        if prerequisite_tasks is None:
+            prerequisite_tasks = (
+                spec.TASKS["phonon_dfpt"],
+                spec.TASKS["ephcouple_write"],
+                spec.TASKS["gndsteph"],
             )
+        blocks = self._phonon_blocks(ngridq, nrmtscf=nrmtscf, lmaxi=lmaxi)
+        blocks.update(extra_blocks or {})
         tasks = list(prerequisite_tasks) + [spec.TASKS["anomalous_entropy"]]
-        subdir = self._run_resumed(label, tasks, {"ngridq": [ngridq]})
+        subdir = self._run_resumed(label, tasks, blocks)
         kgrid, kpoints, fermionic = _parse_ace(subdir / spec.OUTPUT_FILES["face_3d"])
         qgrid, qpoints, bosonic = _parse_ace(subdir / spec.OUTPUT_FILES["bace_3d"])
         return {

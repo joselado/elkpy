@@ -75,6 +75,25 @@ TASK_GW_SPECTRAL_FUNCTION = 610
 TASK_GW_BAND_STRUCTURE = 620
 TASK_GW_FERMI_ENERGY = 630
 TASK_GW_DENSITY_MATRIX = 640
+# Blocks that EPSINV.OUT is built with, and so cannot change when task 601
+# reuses it. `wmaxgw`/`tempk` set the number of Matsubara frequencies
+# (genwgw.f90: nwgw = 2*nint(wmaxgw/(pi*kB*tempk)), then nwrf = nwbs+1) and
+# `gmaxrf` the number of response G-vectors (init3.f90's ngrf loop); both are
+# record dimensions, and getcfgq.f90:54-71 stops with "differing ng"/"differing
+# m". `ngridq` changes the q-set getcfgq indexes records by, caught the same way
+# ("differing vectors"). `nempty` is the dangerous one: it changes the states
+# epsinv is BUILT from without changing any dimension, so Elk reads the stale
+# file happily and returns a wrong self-energy.
+GW_EPSINV_PINNED = ("wmaxgw", "tempk", "gmaxrf", "nempty", "ngridq")
+
+# The ULR state file holds the Q-space density and potential of ONE ultracell.
+# readstulr.f90 checks only unit-cell shapes (natmtot, npcmtmax, ngtc, ngtot,
+# ndmag, fsmtype), so a changed ultracell is read silently and means nothing.
+# `ngridq` is deliberately NOT here: readstulr.f90:114-127 maps the file's own
+# Q-vectors onto the new grid and zeroes the rest, so restarting on a larger
+# Q-grid is a supported use, not a mismatch.
+ULR_STATE_PINNED = ("avecu", "scaleu")
+
 TASK_ULR_GROUND_STATE = 700
 TASK_ULR_GROUND_STATE_RESUME = 701
 TASK_ULR_DOS = 710
@@ -199,6 +218,82 @@ class MagnetismManyBodyTasks:
             return {}
         with open(path) as fh:
             return json.load(fh)
+
+    @staticmethod
+    def _normalise_block(value):
+        """A block's value in a form two calls can be compared in.
+
+        The stage sidecar is JSON, so every tuple in it comes back a list and
+        anything exotic came back through ``default=str``. Round-tripping the
+        in-memory value the same way is the only comparison that cannot report
+        a spurious mismatch between ``(2, 2, 2)`` and ``[2, 2, 2]``.
+        """
+        return json.loads(json.dumps(value, default=str))
+
+    def _run_reusing(self, label, tasks, blocks, required, pinned, ngridk=None):
+        """Run task(s) **in** an existing run directory, reusing a file in it.
+
+        The restart-style tasks -- 601 (skip ``epsinv``, read the existing
+        ``EPSINV.OUT``) and 701 (restart from ``STATE_ULR.OUT``) -- exist to
+        READ a file a previous, expensive call left in this same directory.
+        Dispatching them through :meth:`Calculation._run_resumed` cannot work
+        and did: its ``shutil.rmtree`` is unconditional, so the file was
+        deleted before ``elk.in`` was written. The task was therefore
+        unreachable under ANY label -- a fresh label gives an empty directory
+        and the identical Fortran abort -- and, under the label it was given,
+        additionally destroyed hours of prior work.
+
+        `required` is the filename the task exists to read: a precondition
+        here, so the failure is a Python ``ValueError`` naming the file rather
+        than a Fortran end-of-file abort inside ``getcfgq``/``readstulr``.
+
+        `pinned` names the blocks that must be IDENTICAL to the producing
+        run's, because the file was built with them. Elk catches some of these
+        itself (``getcfgq`` stops on a differing ``ng``/``m``) and misses
+        others entirely -- so the check is here, on every one of them, and
+        names the block that moved. Blocks outside `pinned` are free to
+        change; that is the whole point of a restart.
+
+        Returns ``(subdir, merged_blocks, ngridk)``. The merged blocks and the
+        producing run's mesh are what the caller must record in the stage
+        sidecar, so that a later dependent task (610, 710, ...) replays what
+        actually ran rather than this call's half of it.
+        """
+        subdir = self.workdir / label
+        if not (subdir / required).is_file():
+            raise ValueError(
+                f"no {required} in {subdir}, which this task exists to read. "
+                f"Run the producing task first, under the same label "
+                f"(label={label!r}), and do not delete its directory -- unlike "
+                "every other get_* here, this one runs IN that directory "
+                "rather than in a wiped copy, because wiping it would delete "
+                f"{required}."
+            )
+        stage = self._read_stage_manifest(subdir)
+        old = stage.get("blocks", {})
+        for name in pinned:
+            was, now = old.get(name), (blocks or {}).get(name)
+            if self._normalise_block(was) != self._normalise_block(now):
+                raise ValueError(
+                    f"{required} in {subdir} was built with {name}={was!r}, "
+                    f"but this call asks for {name}={now!r}. The file is only "
+                    f"meaningful for the {name} it was built with, so it "
+                    "cannot be reused here: either pass the original value, "
+                    "or re-run the producing task from scratch under a "
+                    "different label."
+                )
+        stage_ngridk = tuple(stage["ngridk"]) if stage.get("ngridk") else None
+        if ngridk is not None and tuple(ngridk) != stage_ngridk:
+            raise ValueError(
+                f"{required} in {subdir} was built on ngridk={stage_ngridk}, "
+                f"but this call asks for ngridk={tuple(ngridk)}. The k-set is "
+                "part of the file; _run_dependent replays the producing run's "
+                "mesh and would silently ignore this one."
+            )
+        merged = dict(old)
+        merged.update(blocks or {})
+        self._run_dependent(subdir, tasks, blocks)
+        return subdir, merged, stage_ngridk
 
     def _fresh_subdir(self, label, keep=False):
         subdir = self.workdir / label
@@ -885,8 +980,26 @@ class MagnetismManyBodyTasks:
 
         ``reuse_epsinv=True`` selects **task 601**, whose only difference is
         that it skips the ``epsinv`` call and reads the existing
-        ``EPSINV.OUT`` -- worth it when re-running the self-energy at a
-        different ``wmaxgw``/``tempk`` with the same screening.
+        ``EPSINV.OUT`` in the SAME directory -- so it runs in place there
+        rather than in a wiped copy, and raises if the file is absent.
+
+        Note what it is *not* good for. ``EPSINV.OUT``'s records are
+        dimensioned by ``ngrf`` and ``nwrf``, and ``genwgw.f90`` builds the
+        Matsubara count from ``wmaxgw`` and ``tempk``
+        (:math:`n_{\\rm wgw}=2\\,{\\rm nint}[w_{\\max}/(\\pi k_B T)]`,
+        then ``nwrf = nwbs + 1``), so changing either makes
+        ``getcfgq`` stop with "differing m" -- the screening is not
+        independent of the frequency grid the way re-running "at a different
+        ``wmaxgw`` with the same screening" would need. The legitimate use is
+        re-entering the k-loop with the screening already built: a run killed
+        partway through, or a change of ``tsediag`` (``gwsefmk.f90:209``,
+        which touches only the self-energy's own matrix structure) or of the
+        continuation settings ``actype``/``npole``/``nspade``, which tasks
+        610/620 consume later. Every block ``EPSINV.OUT`` depends on is
+        checked against the producing run's (``GW_EPSINV_PINNED``) and a
+        mismatch raises here, naming the block -- including ``nempty``, which
+        changes the file's contents without changing its shape and which Elk
+        therefore cannot catch.
 
         Both ``GWSEFM.OUT`` and ``EPSINV.OUT`` are unformatted direct-access
         files whose record length is compiler-dependent, so elkpy treats them
@@ -914,11 +1027,16 @@ class MagnetismManyBodyTasks:
             wmaxgw, tempk, nempty, gmaxrf, actype, npole, nspade, tsediag,
             ngridq, extra_blocks,
         )
-        task = (
-            TASK_GW_SELF_ENERGY_KEEP_EPSINV if reuse_epsinv else TASK_GW_SELF_ENERGY
-        )
         ngridk = tuple(ngridk) if ngridk else None
-        subdir = self._run_resumed(label, [task], blocks, ngridk=ngridk)
+        if reuse_epsinv:
+            task = TASK_GW_SELF_ENERGY_KEEP_EPSINV
+            subdir, blocks, ngridk = self._run_reusing(
+                label, [task], blocks, FILE_GW_EPSINV, GW_EPSINV_PINNED,
+                ngridk=ngridk,
+            )
+        else:
+            task = TASK_GW_SELF_ENERGY
+            subdir = self._run_resumed(label, [task], blocks, ngridk=ngridk)
         if not (subdir / FILE_GW_SELF_ENERGY).exists():
             raise RuntimeError(
                 f"task {task} did not produce {FILE_GW_SELF_ENERGY} in {subdir}; "
@@ -1170,8 +1288,23 @@ class MagnetismManyBodyTasks:
         ``reducek=0``. It is a full self-consistent loop of its own, with its
         own ``ULR_INFO.OUT``/``RMSDVS.OUT``, and Elk's own example warns that
         a "very small mixing parameter [is] required", so ``maxscl`` in the
-        thousands is normal. Task 701 restarts from an existing
-        ``STATE_ULR.OUT`` instead of initialising the long-range potential.
+        thousands is normal.
+
+        ``from_state=True`` selects **task 701**, which calls ``readstulr``
+        instead of ``potuinit`` -- it restarts from the ``STATE_ULR.OUT`` a
+        previous pass left in the SAME directory, so it runs in place there
+        rather than in a wiped copy, and raises if that file is absent. This
+        is how a ULR calculation is actually converged: ``maxscl`` in the
+        thousands at a mixing parameter of 0.001 is several restarts, not one
+        call. ``ngridq`` may legitimately change between passes --
+        ``readstulr.f90:114-127`` maps the file's own Q-vectors onto the new
+        grid and zeroes the rest, so a restart on a finer Q-grid keeps what it
+        already has -- but the ultracell itself may not, and ``avecu``/
+        ``scaleu`` are checked against the producing run
+        (``ULR_STATE_PINNED``). ``readstulr`` verifies only unit-cell shapes
+        (``natmtot``, ``npcmtmax``, ``ngtc``, ``ngtot``, ``ndmag``,
+        ``fsmtype``), so a changed ultracell is read without complaint and
+        means nothing.
 
         Parameters
         ----------
@@ -1227,7 +1360,29 @@ class MagnetismManyBodyTasks:
             TASK_ULR_GROUND_STATE_RESUME if from_state else TASK_ULR_GROUND_STATE
         )
         ngridk = tuple(ngridk) if ngridk else None
-        subdir = self._run_resumed(label, [task], blocks, ngridk=ngridk)
+        if from_state:
+            # The restart runs in place, so the file it reads is also the file
+            # it rewrites: its mere existence afterwards proves nothing, and
+            # the RuntimeError below would pass on the PREVIOUS pass's state.
+            # Its timestamp is what says this pass got as far as writing one.
+            # ...taken before the run but tolerant of the file's absence, so
+            # that a missing file is _run_reusing's ValueError below and not a
+            # bare FileNotFoundError from this stat().
+            state = self.workdir / label / FILE_ULR_STATE
+            before = state.stat().st_mtime_ns if state.is_file() else None
+            subdir, blocks, ngridk = self._run_reusing(
+                label, [task], blocks, FILE_ULR_STATE, ULR_STATE_PINNED,
+                ngridk=ngridk,
+            )
+            if (subdir / FILE_ULR_STATE).stat().st_mtime_ns == before:
+                raise RuntimeError(
+                    f"task {task} left {FILE_ULR_STATE} in {subdir} untouched, "
+                    "so this restart wrote no new ultracell state and the file "
+                    "there is still the previous pass's; see "
+                    f"{subdir / 'elk.out'} and {FILE_ULR_INFO}"
+                )
+        else:
+            subdir = self._run_resumed(label, [task], blocks, ngridk=ngridk)
         if not (subdir / FILE_ULR_STATE).exists():
             raise RuntimeError(
                 f"task {task} did not write {FILE_ULR_STATE} in {subdir} -- "
