@@ -1010,6 +1010,14 @@ is useless; that bites at the Cholesky-reduced `eigh`, which is the next forward
 Done — `hamiltonian.projector_tolerance` measures it per run from a dense `eigvalsh` of
 $O$ and the reduced norm (§1f).
 
+**Workstream A, 2026-09-28: turning the moments (§36), patches 0027 and 0028.** `Calculation(rotate_moments=True)` turns the whole magnetic texture by the Harris-Foulkes gradient $\int\mathbf B_{\rm in}\times\mathbf m_{\rm out}$ after every loop; FePt lands on $c$ (0.08 degrees) and Mn$_3$Ir within about a degree of its (111) plane in one ground state (`docs/status.md` §36); the Mn$_3$Ir residual and its untested explanation are in `docs/design.md` §36's traps. Its null test found that upstream Elk's muffin-tin sigma.B block is not Hermitian for a non-spherical field, and at your instruction the fix went in always on as patch 0028, the second upstream fix after 0026: every magnetic noncollinear result moves at the 1e-6 Ha level. Open, each measured and none asserted as done:
+
+- `eveqnss.f90` (spin spirals) builds the same block the same way and is not fixed.
+- The eight-operation FePt run along $c$ sits 0.66 meV above the same state on the $\{E, I\}$ mesh with 0028 (0.73 upstream), and FePt's relaxation ends 0.08 degrees from $c$ with and without 0028; neither is explained, and they may share a cause.
+- `mixrho=.true.` is refused by §36 rather than supported.
+- 0028 costs 19 per cent of the second-variational step on bcc Fe and is paid by nonmagnetic spin-orbit runs too, whose zero field is still multiplied through; skipping an atom with an identically zero field is a one-line follow-up.
+- Of the integration suites that contain magnetic noncollinear runs, the ones re-run against 0028 are listed in `docs/status.md` §36; the rest have not been, and their tolerances were set on upstream numbers.
+
 **Workstream A** (unchanged from the previous session)
 
 - The 17 review findings in `docs/review_findings.md`, three of which are one bug.

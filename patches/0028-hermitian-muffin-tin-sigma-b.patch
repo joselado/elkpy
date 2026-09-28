@@ -1,0 +1,169 @@
+--- a/src/elkpy_hermsv.f90
++++ b/src/elkpy_hermsv.f90
+@@ -0,0 +1,108 @@
++
++! elkpy fix to upstream Elk: the muffin-tin sigma.B block of the
++! second-variational Hamiltonian, made Hermitian (eveqnsv.f90).
++!
++! Upstream builds <phi_i|X|phi_j> for X = B_z and X = B_x - i B_y as
++! harmonics -> points, times X, -> harmonics (zbsht, zfsht), and that operator
++! is Hermitian only when X is spherical. It then fills the two diagonal spin
++! blocks from their upper triangle and the off-diagonal one in full, so once
++! the muffin-tin field has non-spherical parts the Hamiltonian no longer
++! commutes with sigma.u even for a field exactly along u: measured on bcc Fe
++! without spin-orbit coupling, a field collinear to 4e-16 gives a
++! well-separated occupied state a transverse spin of 3e-6, and the loop feels a
++! torque of 1.4e-6 Ha/rad that no rotation-invariant Hamiltonian can have.
++!
++! Here the three field columns are kept apart, in double precision, and added
++! as their Hermitian parts: 1/2 (M_z + M_z^H) on the two diagonal blocks (with
++! opposite signs), and 1/2 (M_-(i,j) + conj(M_+(j,i))) on the off-diagonal
++! one, M_- and M_+ being the matrices of B_x - i B_y and B_x + i B_y. For a
++! field along u the three are u_z M, (u_x - i u_y) M and (u_x + i u_y) M of one
++! matrix M, so the block is sigma.u times the Hermitian part of M, and commutes
++! with sigma.u exactly. Only the field term is touched: spin-orbit coupling is
++! applied in harmonics (lopzflmn) times a spherical radial function and is
++! Hermitian already, and every other term keeps upstream's path.
++
++! The storage is a local array of eveqnsv, hsvb(nstfv,nstfv,3), and not a
++! module one: genevfsv calls eveqnsv from several threads at once, one per
++! k-point. hsvb(:,j,1:3) is <phi_i|X|phi_j> for X = B_z, B_x - i B_y and
++! B_x + i B_y.
++
++! Called for state jst where eveqnsv has just built the field part:
++! wfmt31 = F(B_z T phi_j), wfmt33 = F((B_x - i B_y) T phi_j), wfmt32 = -wfmt31,
++! with wfmt2 = T phi_j. Stores the three columns and zeroes the three arrays,
++! so that what eveqnsv adds to them afterwards is everything but the field.
++subroutine elkpy_hermsv_col(is,ias,jst,wfmt1,wfmt2,wfmt31,wfmt32,wfmt33,hsvb)
++use modmain
++implicit none
++! arguments
++integer, intent(in) :: is,ias,jst
++complex(8), intent(in) :: wfmt1(npcmtmax,nstfv),wfmt2(npcmtmax)
++complex(8), intent(inout) :: wfmt31(npcmtmax),wfmt32(npcmtmax)
++complex(8), intent(inout) :: wfmt33(npcmtmax)
++complex(8), intent(inout) :: hsvb(nstfv,nstfv,3)
++! local variables
++integer nrc,nrci,npc
++complex(8) x(npcmtmax),y(npcmtmax)
++nrc=nrcmt(is)
++nrci=nrcmti(is)
++npc=npcmt(is)
++! (B_x + i B_y) T phi_j back in harmonics
++y(1:npc)=cmplx(bsmt(1:npc,ias,1),bsmt(1:npc,ias,2),8)*wfmt2(1:npc)
++call zfsht(nrc,nrci,y,x)
++! <phi_i| X |phi_j> with the radial weights applied to the right-hand vector,
++! all in double precision
++call elkpy_hermsv_wr(nrc,nrci,wr2cmt(:,is),x)
++call zgemv('C',npc,nstfv,zone,wfmt1,npcmtmax,x,1,zzero,hsvb(:,jst,3),1)
++x(1:npc)=wfmt31(1:npc)
++call elkpy_hermsv_wr(nrc,nrci,wr2cmt(:,is),x)
++call zgemv('C',npc,nstfv,zone,wfmt1,npcmtmax,x,1,zzero,hsvb(:,jst,1),1)
++x(1:npc)=wfmt33(1:npc)
++call elkpy_hermsv_wr(nrc,nrci,wr2cmt(:,is),x)
++call zgemv('C',npc,nstfv,zone,wfmt1,npcmtmax,x,1,zzero,hsvb(:,jst,2),1)
++wfmt31(1:npc)=0.d0
++wfmt32(1:npc)=0.d0
++wfmt33(1:npc)=0.d0
++end subroutine
++
++! Adds the Hermitian parts of this atom's three field matrices to the
++! second-variational Hamiltonian, upper triangle of the diagonal blocks and
++! the whole off-diagonal block, the parts of evecsv upstream fills.
++subroutine elkpy_hermsv_add(hsvb,evecsv)
++use modmain
++implicit none
++complex(8), intent(in) :: hsvb(nstfv,nstfv,3)
++complex(8), intent(inout) :: evecsv(nstsv,nstsv)
++integer i,jst
++complex(8) z1
++do jst=1,nstfv
++  do i=1,jst
++    z1=0.5d0*(hsvb(i,jst,1)+conjg(hsvb(jst,i,1)))
++    evecsv(i,jst)=evecsv(i,jst)+z1
++    evecsv(nstfv+i,nstfv+jst)=evecsv(nstfv+i,nstfv+jst)-z1
++  end do
++  do i=1,nstfv
++    evecsv(i,nstfv+jst)=evecsv(i,nstfv+jst) &
++     +0.5d0*(hsvb(i,jst,2)+conjg(hsvb(jst,i,3)))
++  end do
++end do
++end subroutine
++
++! Multiplies a coarse muffin-tin function in harmonics by the radial weights,
++! as zcfmtwr does, in place and in double precision.
++pure subroutine elkpy_hermsv_wr(nr,nri,wr,zfmt)
++use modmain
++implicit none
++integer, intent(in) :: nr,nri
++real(8), intent(in) :: wr(nr)
++complex(8), intent(inout) :: zfmt(*)
++integer ir,i
++i=1
++do ir=1,nri
++  zfmt(i:i+lmmaxi-1)=wr(ir)*zfmt(i:i+lmmaxi-1)
++  i=i+lmmaxi
++end do
++do ir=nri+1,nr
++  zfmt(i:i+lmmaxo-1)=wr(ir)*zfmt(i:i+lmmaxo-1)
++  i=i+lmmaxo
++end do
++end subroutine
+--- a/src/eveqnsv.f90
++++ b/src/eveqnsv.f90
+@@ -35,6 +35,8 @@
+ ! allocatable arrays
+ complex(4), allocatable :: wfmt0(:,:),wfgp0(:,:)
+ complex(8), allocatable :: wfmt1(:,:)
++! elkpy: the three muffin-tin field matrices of this atom (elkpy_hermsv.f90)
++complex(8), allocatable :: hsvb(:,:,:)
+ ! external functions
+ real(4), external :: sdot
+ ! no calculation of second-variational eigenvectors
+@@ -80,6 +82,8 @@
+ !-------------------------!
+ !$OMP SINGLE
+ allocate(wfmt0(npcmtmax,nstfv),wfmt1(npcmtmax,nstfv))
++! elkpy: storage for the Hermitised sigma.B block
++if (ncmag.and.(.not.socz)) allocate(hsvb(nstfv,nstfv,3))
+ !$OMP END SINGLE
+ ! begin loop over atoms
+ do ias=1,natmtot
+@@ -128,6 +132,9 @@
+         call zfsht(nrc,nrci,wfmt32,wfmt33)
+       end if
+       wfmt32(1:npc)=-wfmt31(1:npc)
++! elkpy: the sigma.B part is added Hermitised after the loop over states
++      if (ncmag.and.(.not.socz)) call elkpy_hermsv_col(is,ias,jst,wfmt1,wfmt2, &
++       wfmt31,wfmt32,wfmt33,hsvb)
+ ! apply spin-orbit or B-field-orbit coupling if required
+       if (spinorb.or.bforb) then
+         call lopzflmn(lmaxi,nrci,lmmaxi,wfmt1(1,jst),wfmt4,wfmt4(1,2), &
+@@ -249,10 +256,16 @@
+ ! end loop over states
+   end do
+ !$OMP END DO
++! elkpy: the Hermitised sigma.B block of this atom
++!$OMP SINGLE
++  if (ncmag.and.(.not.socz)) call elkpy_hermsv_add(hsvb,evecsv)
++!$OMP END SINGLE
+ ! end loop over atoms
+ end do
+ !$OMP SINGLE
+ deallocate(wfmt0,wfmt1)
++! elkpy: storage for the Hermitised sigma.B block
++if (allocated(hsvb)) deallocate(hsvb)
+ !$OMP END SINGLE
+ !---------------------------!
+ !     interstitial part     !
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -226,7 +226,7 @@
+ # Berry curvature (task 9000, see elkpy_berry.f90)
+ SRC_ELKPY = elkpy_berry.f90 elkpy_eigenstates.f90 elkpy_stm.f90 \
+  elkpy_transport.f90 elkpy_initstate.f90 elkpy_fermitunnel.f90 \
+- elkpy_rotmom.f90
++ elkpy_rotmom.f90 elkpy_hermsv.f90
+ 
+ SRC = $(SRC_modules) $(SRC_FFT) $(SRC_elk) $(SRC_main) $(SRC_LAPACK) \
+  $(SRC_phonon) $(SRC_XC) $(SRC_DFTU) $(SRC_RDMFT) $(SRC_GW) $(SRC_TDDFT) \

@@ -1,0 +1,694 @@
+--- a/src/elk.f90
++++ b/src/elk.f90
+@@ -1648,6 +1648,39 @@
+ !   {\tt is} only, leaving every other species at {\tt socscf}. One line per
+ !   overridden species, terminated by a blank line.
+ !
++!   \block{elkpy\_torque}{
++!   {\tt elkpy\_torque} & set to {\tt .true.} to write the orientation
++!    gradient of every self-consistent loop & logical & {\tt .false.}}
++!   elkpy extension (not upstream Elk): writes $\partial E/\partial\boldsymbol
++!   \omega=\int{\bf B}_{\rm in}\times{\bf m}_{\rm out}\,d^3r$, the gradient of
++!   the total energy with respect to one global rotation of the spin frame, to
++!   {\tt ELKPY\_ROTMOM.OUT}. Needs a non-collinear calculation.
++!
++!   \block{elkpy\_rotmom}{
++!   {\tt elkpy\_rotmom} & set to {\tt .true.} to turn the whole magnetic
++!    texture by the orientation gradient every self-consistent loop & logical &
++!    {\tt .false.}}
++!   elkpy extension (not upstream Elk): after each loop the field of the next
++!   one, the mixing vector and the mixer's history are turned together by a
++!   BFGS step on the orientation, so that one ground state converges onto the
++!   orientation of lowest energy. Needs {\tt spinorb}, {\tt reducebf}$<1$ and
++!   a magnetic group whose spin rotations are all the identity (seed the
++!   moments off every symmetry element, or set {\tt symtype}$=0$).
++!
++!   \block{elkpy\_rotmom\_pm}{
++!   {\tt elkpy\_rotmompm(1)} & tolerance on $|\partial E/\partial
++!    \boldsymbol\omega|$ (Ha/rad) & real & $10^{-7}$\\
++!   {\tt elkpy\_rotmompm(2)} & largest step (rad) & real & $0.1$\\
++!   {\tt elkpy\_rotmompm(3)} & first step (rad) & real & $0.05$\\
++!   {\tt elkpy\_rotmompm(4)} & RMS potential change below which steps start &
++!    real & $10^{-4}$}
++!
++!   \block{elkpy\_rotmom\_fixphase}{
++!   {\tt elkpy\_rotmomfix} & set to {\tt .true.} to hold a coplanar texture's
++!    turn about its own plane normal & logical & {\tt .false.}}
++!   Only for a phase the energy does not depend on: a held phase that is not
++!   stationary leaves a residual the self-consistent loop cannot remove.
++!
+ !   \block{elkpy\_berry}{
+ !   {\tt dir1, dir2} & the two {\tt ngridk} grid directions (1, 2 or 3, must
+ !    differ) spanning the Wilson-loop plane & integer, integer & -\\
+--- a/src/elkpy_rotmom.f90
++++ b/src/elkpy_rotmom.f90
+@@ -0,0 +1,545 @@
++
++! elkpy extension (not upstream Elk): turning the magnetic texture as a whole
++! inside the self-consistent loop, by the gradient of the total energy with
++! respect to one global rotation of the spin frame.
++!
++! At every iteration the states have been solved in the input field B_in and
++! the output magnetisation m_out has been built from them. The only term of
++! the Harris-Foulkes energy that is not invariant under a rigid spin rotation
++! of the input is the eigenvalue sum (the exchange-correlation functional is
++! built from |m| alone, Kubler's trick in potxcmt.f90, and the double-counting
++! term m_in.B_in turns with it), so by the Hellmann-Feynman theorem the
++! gradient with respect to the rotation vector w, B_in -> B_in + w x B_in, is
++!
++!   dE/dw = int B_in(r) x m_out(r) d^3r ,
++!
++! the exchange-correlation part of B_in only. Without spin-orbit coupling this
++! is zero at every iteration, converged or not, because the states turn with
++! the field; with it, it is the anisotropy's torque (with a minus sign) and it
++! vanishes at a self-consistent fixed point. The integral is taken on the
++! grids the second-variational Hamiltonian uses (eveqnsv.f90): the coarse
++! muffin-tin mesh in spherical coordinates, where bsmt lives, and the
++! interstitial field bsirc, which already carries the characteristic function.
++!
++! The step is w = -H^-1 dE/dw, H built by a 3x3 BFGS from the gradients of
++! successive iterations, bounded by an adaptive trust angle; it turns the field
++! the next iteration diagonalises in, the mixing vector and every vector in
++! the mixer's history together. Modelled on defumat's OrientationStepper.
++
++module modelkpy_rotmom
++implicit none
++! dE/dw of the current iteration and its part that is acted on (Ha/rad)
++real(8) grm(3),grma(3)
++! bound on the torque the external fields can still exert (Ha/rad)
++real(8) btrm
++! texture class: 0 no moment, 1 collinear, 2 coplanar, 3 non-coplanar
++integer ntxrm
++! principal axis and plane normal of the moment tensor
++real(8) axrm(3),nmrm(3)
++! BFGS state
++logical thrm,tprm
++real(8) hirm(3,3),gprm(3),sprm(3)
++! current trust radius (rad), number of steps, total rotation
++real(8) radrm
++integer nstrm
++real(8) rotrm(3,3)
++! step of the current iteration (rad) and whether it was taken
++real(8) wrm(3)
++logical tstrm
++! whether the gradient of this iteration has been computed
++logical tgrm
++end module
++
++subroutine elkpy_rotmom_init
++use modmain
++use moddftu
++use modgw
++use modmpi
++use modelkpy_rotmom
++implicit none
++integer isym,lspn,is,ia
++real(8) sc(3,3),t1
++logical lopen
++elkpy_rotmom_cv=.true.
++tgrm=.false.
++if (.not.(elkpy_torque.or.elkpy_rotmom)) return
++if (.not.ncmag) then
++  write(*,*)
++  write(*,'("Error(elkpy_rotmom): the orientation gradient needs a &
++   &non-collinear magnetic calculation")')
++  write(*,'(" (spinorb = .true., or an x or y component in bfcmt or &
++   &bfieldc)")')
++  write(*,*)
++  stop
++end if
++if (elkpy_rotmom) then
++  if (.not.spinorb) then
++    write(*,*)
++    write(*,'("Error(elkpy_rotmom): turning the moments needs spin-orbit &
++     &coupling")')
++    write(*,'(" Without it every orientation has the same energy and the &
++     &gradient is zero at")')
++    write(*,'(" every iteration; use elkpy_torque alone to see that")')
++    write(*,*)
++    stop
++  end if
++! every symmetry must leave every orientation alone: with spin-orbit coupling
++! the spin rotation of a symmetry is the proper part of its lattice rotation
++! (findsym.f90), and symrvf would undo any turn off an axis such a rotation
++! fixes
++  do isym=1,nsymcrys
++    lspn=lspnsymc(isym)
++    sc(1:3,1:3)=dble(symlatd(lspn))*symlatc(1:3,1:3,lspn)
++    sc(1,1)=sc(1,1)-1.d0
++    sc(2,2)=sc(2,2)-1.d0
++    sc(3,3)=sc(3,3)-1.d0
++    if (sum(abs(sc(1:3,1:3))) > epslat) then
++      write(*,*)
++      write(*,'("Error(elkpy_rotmom): crystal symmetry ",I0," turns the &
++       &spins")') isym
++      write(*,'(" The magnetic group found from the seed fields contains a &
++       &rotation other than")')
++      write(*,'(" the identity or the inversion, and the symmetrisation of &
++       &the magnetisation")')
++      write(*,'(" would undo the turn. Seed the moments along a direction &
++       &off every symmetry")')
++      write(*,'(" element, or set symtype = 0")')
++      write(*,*)
++      stop
++    end if
++  end do
++  if (fsmtype /= 0) then
++    write(*,*)
++    write(*,'("Error(elkpy_rotmom): not with a fixed spin moment: its &
++     &constraining field")')
++    write(*,'(" holds the orientation the step moves")')
++    write(*,*)
++    stop
++  end if
++  if ((dftu /= 0).or.(ftmtype /= 0)) then
++    write(*,*)
++    write(*,'("Error(elkpy_rotmom): not with DFT+U or a fixed tensor moment: &
++     &the potential")')
++    write(*,'(" matrix vmatmt has a spin structure the step does not turn")')
++    write(*,*)
++    stop
++  end if
++  if (nosource.or.tbdip.or.tafsp) then
++    write(*,*)
++    write(*,'("Error(elkpy_rotmom): not with nosource, tbdip or tafsp: each &
++     &couples the spin")')
++    write(*,'(" index to space, so a rotation of the spins alone is not a &
++     &symmetry of the")')
++    write(*,'(" functional even without spin-orbit coupling")')
++    write(*,*)
++    stop
++  end if
++  if (mixrho) then
++    write(*,*)
++    write(*,'("Error(elkpy_rotmom): not with mixrho = .true.: the turn of a &
++     &density-mixing")')
++    write(*,'(" history has not been run against anything; mix the potential &
++     &(the default)")')
++    write(*,*)
++    stop
++  end if
++  if (spinsprl.or.spincore.or.ksgwrho) then
++    write(*,*)
++    write(*,'("Error(elkpy_rotmom): not with spinsprl, spincore or ksgwrho")')
++    write(*,*)
++    stop
++  end if
++  if ((xctype(1) < 0).or.any(xcgrad == [3,4,5,6])) then
++    write(*,*)
++    write(*,'("Error(elkpy_rotmom): not with an OEP or meta-GGA functional: &
++     &the spin-resolved")')
++    write(*,'(" kinetic energy density is held along the global z axis")')
++    write(*,*)
++    stop
++  end if
++! a field that is never switched off holds the orientation, and the history
++! of the mixer would have to be turned about it rather than with it
++  t1=sum(abs(bfieldc(1:3)))
++  do is=1,nspecies
++    do ia=1,natoms(is)
++      t1=t1+sum(abs(bfcmt(1:3,ia,is)))
++    end do
++  end do
++  if ((t1 > 0.d0).and.(reducebf >= 1.d0)) then
++    write(*,*)
++    write(*,'("Error(elkpy_rotmom): the seed fields bfcmt and bfieldc must &
++     &die away: set")')
++    write(*,'(" reducebf < 1, or they hold the moments along the direction &
++     &they seed")')
++    write(*,*)
++    stop
++  end if
++  if ((elkpy_rotmompm(1) <= 0.d0).or.(elkpy_rotmompm(2) <= 0.d0).or. &
++      (elkpy_rotmompm(3) <= 0.d0).or.(elkpy_rotmompm(4) <= 0.d0)) then
++    write(*,*)
++    write(*,'("Error(elkpy_rotmom): every entry of elkpy_rotmom_pm must be &
++     &positive : ",4G12.4)') elkpy_rotmompm(1:4)
++    write(*,*)
++    stop
++  end if
++  elkpy_rotmom_cv=.false.
++end if
++! reset the stepper
++thrm=.false.
++tprm=.false.
++hirm(:,:)=0.d0
++gprm(:)=0.d0
++sprm(:)=0.d0
++radrm=elkpy_rotmompm(2)
++nstrm=0
++rotrm(:,:)=0.d0
++rotrm(1,1)=1.d0; rotrm(2,2)=1.d0; rotrm(3,3)=1.d0
++if (mp_mpi) then
++! gndstate is called more than once by a geometry optimisation
++  inquire(unit=167,opened=lopen)
++  if (lopen) close(167)
++  open(167,file='ELKPY_ROTMOM'//trim(filext),form='FORMATTED')
++  write(167,'("# elkpy orientation gradient, one line per self-consistent &
++   &loop")')
++  if (elkpy_rotmom) then
++    write(167,'("# moments turned: yes")')
++    write(167,'("# parameters (tolerance Ha/rad, trust rad, first step rad, &
++     &start below dv):",4G14.6)') elkpy_rotmompm(1:4)
++    write(167,'("# in-plane phase of a coplanar texture held: ",L1)') &
++     elkpy_rotmomfix
++  else
++    write(167,'("# moments turned: no")')
++  end if
++  write(167,'("# columns: loop, dE/dw (3, Ha/rad), |dE/dw| acted on, &
++   &external-field bound, dv,")')
++  write(167,'("#  step w (3, rad), total angle turned (rad), moment axis &
++   &(3), plane normal (3),")')
++  write(167,'("#  texture class (1 collinear, 2 coplanar, 3 non-coplanar), &
++   &step taken (0/1)")')
++  flush(167)
++  write(60,*)
++  if (elkpy_rotmom) then
++    write(60,'("elkpy: moments turned by the orientation gradient every &
++     &loop")')
++  else
++    write(60,'("elkpy: orientation gradient reported every loop")')
++  end if
++end if
++end subroutine
++
++subroutine elkpy_rotmom_grad
++use modmain
++use modelkpy_rotmom
++implicit none
++integer is,ia,ias,nrc,nrci,npc,idm,i
++integer lwork,info
++real(8) cb,g(3),gx(3),v(3),c(3),t1,t2
++real(8) tm(3,3),ev(3),work(12)
++real(8), allocatable :: mc(:,:),cr(:,:),bf(:,:)
++real(8), external :: rfmtint
++if (.not.(elkpy_torque.or.elkpy_rotmom)) return
++cb=gfacte/(4.d0*solsc)
++g(:)=0.d0
++gx(:)=0.d0
++btrm=0.d0
++!-------------------------------------------------!
++!     muffin-tin part, on the coarse radial mesh     !
++!-------------------------------------------------!
++allocate(mc(npcmtmax,3),cr(npcmtmax,3))
++do ias=1,natmtot
++  is=idxis(ias)
++  ia=idxia(ias)
++  nrc=nrcmt(is)
++  nrci=nrcmti(is)
++  npc=npcmt(is)
++! output magnetisation on the coarse mesh in spherical coordinates, exactly
++! the values rhomagk accumulated before rfmtctof interpolated them
++  do idm=1,3
++    call rfmtftoc(nrc,nrci,magmt(:,ias,idm),mc(:,idm))
++    call rbshtip(nrc,nrci,mc(:,idm))
++  end do
++! B_in x m_out, pointwise
++  do i=1,npc
++    cr(i,1)=bsmt(i,ias,2)*mc(i,3)-bsmt(i,ias,3)*mc(i,2)
++    cr(i,2)=bsmt(i,ias,3)*mc(i,1)-bsmt(i,ias,1)*mc(i,3)
++    cr(i,3)=bsmt(i,ias,1)*mc(i,2)-bsmt(i,ias,2)*mc(i,1)
++  end do
++  do idm=1,3
++    call rfshtip(nrc,nrci,cr(:,idm))
++    g(idm)=g(idm)+rfmtint(nrc,nrci,wr2cmt(:,is),cr(:,idm))
++! the muffin-tin moment on the same mesh, for the external-field part
++    call rfshtip(nrc,nrci,mc(:,idm))
++    v(idm)=rfmtint(nrc,nrci,wr2cmt(:,is),mc(:,idm))
++  end do
++! genbs adds cb*(bfcmt+bfieldc) at every point of the sphere
++  c(1:3)=cb*(bfcmt(1:3,ia,is)+bfieldc(1:3))
++  gx(1)=gx(1)+c(2)*v(3)-c(3)*v(2)
++  gx(2)=gx(2)+c(3)*v(1)-c(1)*v(3)
++  gx(3)=gx(3)+c(1)*v(2)-c(2)*v(1)
++  btrm=btrm+sqrt(sum(c(1:3)**2))*sqrt(sum(v(1:3)**2))
++end do
++deallocate(mc,cr)
++!----------------------------!
++!     interstitial part      !
++!----------------------------!
++! bsirc is the field times the characteristic function on the coarse grid;
++! rfirctof and rfirftoc keep the same G-vectors, so the fine-grid sum is the
++! coarse one and it vanishes pointwise at a fixed point
++allocate(bf(ngtot,3))
++do idm=1,3
++  call rfirctof(bsirc(:,idm),bf(:,idm))
++end do
++t1=omega/dble(ngtot)
++do i=1,ngtot
++  g(1)=g(1)+t1*(bf(i,2)*magir(i,3)-bf(i,3)*magir(i,2))
++  g(2)=g(2)+t1*(bf(i,3)*magir(i,1)-bf(i,1)*magir(i,3))
++  g(3)=g(3)+t1*(bf(i,1)*magir(i,2)-bf(i,2)*magir(i,1))
++end do
++deallocate(bf)
++! the interstitial external field is cb*bfieldc times the characteristic
++! function, whose integral against m_out is momir
++c(1:3)=cb*bfieldc(1:3)
++gx(1)=gx(1)+c(2)*momir(3)-c(3)*momir(2)
++gx(2)=gx(2)+c(3)*momir(1)-c(1)*momir(3)
++gx(3)=gx(3)+c(1)*momir(2)-c(2)*momir(1)
++btrm=btrm+sqrt(sum(c(1:3)**2))*sqrt(sum(momir(1:3)**2))
++! the gradient of the exchange-correlation part of the field alone
++grm(1:3)=g(1:3)-gx(1:3)
++!------------------------------------------------------!
++!     texture: the moment tensor of the muffin tins     !
++!------------------------------------------------------!
++tm(:,:)=0.d0
++do ias=1,natmtot
++  do i=1,3
++    tm(1:3,i)=tm(1:3,i)+mommt(1:3,ias)*mommt(i,ias)
++  end do
++end do
++lwork=12
++call dsyev('V','U',3,tm,3,ev,work,lwork,info)
++axrm(:)=0.d0
++nmrm(:)=0.d0
++ntxrm=0
++if ((info == 0).and.(ev(3) > 1.d-12)) then
++  axrm(1:3)=tm(1:3,3)
++  nmrm(1:3)=tm(1:3,1)
++! fix the sign of the axis along the total moment, or else along its largest
++! component
++  t2=dot_product(axrm,momtot(1:3))
++  if (abs(t2) < 1.d-6) t2=axrm(maxloc(abs(axrm),1))
++  if (t2 < 0.d0) axrm(:)=-axrm(:)
++  t2=nmrm(maxloc(abs(nmrm),1))
++  if (t2 < 0.d0) nmrm(:)=-nmrm(:)
++  if (ev(1)+ev(2) <= 1.d-3*ev(3)) then
++    ntxrm=1
++  else if (ev(1) <= 1.d-3*ev(3)) then
++    ntxrm=2
++  else
++    ntxrm=3
++  end if
++end if
++! the turn that moves nothing, about the axis of a collinear texture, is taken
++! out, and the turn about a coplanar texture's normal (its phase) when it is
++! held: only for a phase that is flat, since holding a phase the energy does
++! depend on leaves the loop with a residual it can never remove
++grma(1:3)=grm(1:3)
++if (ntxrm == 1) then
++  grma(1:3)=grma(1:3)-dot_product(grma,axrm)*axrm(1:3)
++else if ((ntxrm == 2).and.elkpy_rotmomfix) then
++  grma(1:3)=grma(1:3)-dot_product(grma,nmrm)*nmrm(1:3)
++end if
++tgrm=.true.
++if (elkpy_rotmom) then
++  elkpy_rotmom_cv=(sqrt(sum(grma(1:3)**2)) < elkpy_rotmompm(1)).and. &
++   (btrm < 0.1d0*elkpy_rotmompm(1))
++end if
++end subroutine
++
++subroutine elkpy_rotmom_step(dv,nwork,work)
++use modmain
++use modmpi
++use modelkpy_rotmom
++implicit none
++! arguments
++real(8), intent(in) :: dv
++integer, intent(in) :: nwork
++real(8), intent(inout) :: work(*)
++! local variables
++integer nmix,k,m,i
++real(8) g(3),s(3),y(3),sy,t1,t2,t3,r(3,3),a(3,3),angle
++if (.not.(elkpy_torque.or.elkpy_rotmom)) return
++if (.not.tgrm) return
++tgrm=.false.
++wrm(:)=0.d0
++tstrm=.false.
++g(1:3)=grma(1:3)
++t1=sqrt(sum(g(1:3)**2))
++! a step is taken once the seed fields can no longer turn the moments by a
++! tenth of what the gradient does; convergence waits for them to fall below a
++! tenth of the tolerance as well (elkpy_rotmom_grad)
++if (elkpy_rotmom.and.(.not.tlast).and.(dv < elkpy_rotmompm(4)).and. &
++    (btrm < 0.1d0*t1).and.(t1 >= elkpy_rotmompm(1))) then
++  if (tprm) then
++! the trust angle halves while the gradient does not fall and grows back
++    if (t1 >= sqrt(sum(gprm(1:3)**2))) then
++      radrm=max(0.5d0*radrm,elkpy_rotmompm(2)/64.d0)
++    else
++      radrm=min(1.5d0*radrm,elkpy_rotmompm(2))
++    end if
++    s(1:3)=sprm(1:3)
++    y(1:3)=g(1:3)-gprm(1:3)
++    sy=dot_product(s,y)
++    t2=sqrt(sum(s(1:3)**2))
++    t3=sqrt(sum(y(1:3)**2))
++! no update from a pair whose curvature is not positive, or from a secant at
++! the noise
++    if ((t2 > 1.d-8).and.(sy > 1.d-12*t2*t3)) then
++      if (.not.thrm) then
++        hirm(:,:)=0.d0
++        t2=sy/dot_product(y,y)
++        hirm(1,1)=t2; hirm(2,2)=t2; hirm(3,3)=t2
++        thrm=.true.
++      end if
++! H^-1 <- (1 - rho s y^T) H^-1 (1 - rho y s^T) + rho s s^T
++      a(:,:)=0.d0
++      a(1,1)=1.d0; a(2,2)=1.d0; a(3,3)=1.d0
++      do i=1,3
++        a(1:3,i)=a(1:3,i)-s(1:3)*y(i)/sy
++      end do
++      r(1:3,1:3)=matmul(matmul(a,hirm),transpose(a))
++      do i=1,3
++        r(1:3,i)=r(1:3,i)+s(1:3)*s(i)/sy
++      end do
++      hirm(1:3,1:3)=r(1:3,1:3)
++    end if
++  end if
++  if (thrm) then
++    s(1:3)=-matmul(hirm,g)
++  else
++    s(1:3)=-elkpy_rotmompm(3)*g(1:3)/t1
++  end if
++! keep the step out of the directions the gradient was taken out of
++  if (ntxrm == 1) then
++    s(1:3)=s(1:3)-dot_product(s,axrm)*axrm(1:3)
++  else if ((ntxrm == 2).and.elkpy_rotmomfix) then
++    s(1:3)=s(1:3)-dot_product(s,nmrm)*nmrm(1:3)
++  end if
++  t2=sqrt(sum(s(1:3)**2))
++  if (t2 > radrm) s(1:3)=s(1:3)*(radrm/t2)
++  gprm(1:3)=g(1:3)
++  sprm(1:3)=s(1:3)
++  tprm=.true.
++  wrm(1:3)=s(1:3)
++  tstrm=.true.
++  nstrm=nstrm+1
++! the rotation exp([w]x) by Rodrigues' formula
++  call elkpy_rotmat(s,r)
++  rotrm(1:3,1:3)=matmul(r,rotrm)
++! the mixing vector, which is the field the next loop diagonalises in (bsmt
++! and bsirc are pointers into vsbs), and bsir, which is not mixed
++  nmix=size(vmixer)
++  call elkpy_rotvmix(r,vmixer)
++  call elkpy_rotfield(r)
++! every vector in the mixer's history, which a common rotation leaves
++! orthonormal: the Broyden Gram matrix stays as it is
++  select case(mixtype)
++  case(0)
++    m=1
++  case(1)
++! mu and f; beta is per component and is left alone
++    call elkpy_rotvmix(r,work(1:nmix))
++    call elkpy_rotvmix(r,work(2*nmix+1:3*nmix))
++    m=0
++  case(3)
++    m=4+2*mixsdb
++  case default
++    m=0
++  end select
++  do k=1,m
++    call elkpy_rotvmix(r,work((k-1)*nmix+1:k*nmix))
++  end do
++end if
++t1=(rotrm(1,1)+rotrm(2,2)+rotrm(3,3)-1.d0)/2.d0
++t1=max(-1.d0,min(1.d0,t1))
++angle=acos(t1)
++if (mp_mpi) then
++  write(167,'(I6,3G18.10,3G14.6,3G14.6,G14.6,6F11.6,I3,I3)') iscl,grm(1:3), &
++   sqrt(sum(grma(1:3)**2)),btrm,dv,wrm(1:3),angle,axrm(1:3),nmrm(1:3), &
++   ntxrm,merge(1,0,tstrm)
++  flush(167)
++  write(60,*)
++  write(60,'("elkpy: orientation gradient dE/dw (Ha/rad) : ",3G18.10)') &
++   grm(1:3)
++  write(60,'("elkpy: magnitude acted on (tolerance)      : ",G18.10," (",&
++   &G18.10,")")') sqrt(sum(grma(1:3)**2)),elkpy_rotmompm(1)
++  if (tstrm) then
++    write(60,'("elkpy: moments turned by w (rad)           : ",3G18.10)') &
++     wrm(1:3)
++  end if
++  write(60,'("elkpy: total angle turned (rad)            : ",G18.10)') angle
++end if
++end subroutine
++
++pure subroutine elkpy_rotmat(w,r)
++implicit none
++real(8), intent(in) :: w(3)
++real(8), intent(out) :: r(3,3)
++real(8) t,c(3,3),x(3)
++t=sqrt(sum(w(1:3)**2))
++r(:,:)=0.d0
++r(1,1)=1.d0; r(2,2)=1.d0; r(3,3)=1.d0
++if (t < 1.d-14) return
++x(1:3)=w(1:3)/t
++c(:,:)=0.d0
++c(1,2)=-x(3); c(1,3)=x(2)
++c(2,1)=x(3);  c(2,3)=-x(1)
++c(3,1)=-x(2); c(3,2)=x(1)
++r(1:3,1:3)=r(1:3,1:3)+sin(t)*c(1:3,1:3)+(1.d0-cos(t))*matmul(c,c)
++end subroutine
++
++! The field outside the mixing vector: bsir, which is not mixed and which
++! energy.f90 pairs with magmt.
++subroutine elkpy_rotfield(r)
++use modmain
++implicit none
++real(8), intent(in) :: r(3,3)
++integer i
++real(8) v(3)
++do i=1,ngtot
++  v(1:3)=bsir(i,1:3)
++  bsir(i,1:3)=matmul(r,v)
++end do
++end subroutine
++
++! Rotates the magnetic block of a vector laid out as vsbs is (vsmt, vsirc,
++! bsmt, bsirc, init0.f90), which is vmixer under potential mixing: applied to
++! vmixer itself it turns bsmt and bsirc.
++subroutine elkpy_rotvmix(r,v)
++use modmain
++implicit none
++real(8), intent(in) :: r(3,3)
++real(8), intent(inout) :: v(*)
++integer i0,nmt,nir,i,j
++real(8) x(3)
++i0=npmtmax*natmtot+ngtc
++nmt=npcmtmax*natmtot
++nir=ngtc
++! muffin-tin block: component idm of point i at i0+(idm-1)*nmt+i
++do i=1,nmt
++  x(1)=v(i0+i)
++  x(2)=v(i0+nmt+i)
++  x(3)=v(i0+2*nmt+i)
++  v(i0+i)=r(1,1)*x(1)+r(1,2)*x(2)+r(1,3)*x(3)
++  v(i0+nmt+i)=r(2,1)*x(1)+r(2,2)*x(2)+r(2,3)*x(3)
++  v(i0+2*nmt+i)=r(3,1)*x(1)+r(3,2)*x(2)+r(3,3)*x(3)
++end do
++! interstitial block
++j=i0+3*nmt
++do i=1,nir
++  x(1)=v(j+i)
++  x(2)=v(j+nir+i)
++  x(3)=v(j+2*nir+i)
++  v(j+i)=r(1,1)*x(1)+r(1,2)*x(2)+r(1,3)*x(3)
++  v(j+nir+i)=r(2,1)*x(1)+r(2,2)*x(2)+r(2,3)*x(3)
++  v(j+2*nir+i)=r(3,1)*x(1)+r(3,2)*x(2)+r(3,3)*x(3)
++end do
++end subroutine
+--- a/src/gndstate.f90
++++ b/src/gndstate.f90
+@@ -115,6 +115,8 @@
+ ! initialise the mixer
+ iscl=0
+ call mixerifc(mixtype,nmix,vmixer,dv,nwork,work)
++! elkpy: set up the orientation gradient and refuse what it cannot turn
++call elkpy_rotmom_init
+ iscl0=1
+ if (mixsave.and.trdstate) then
+ ! read in starting loop and mixer work array from file if required
+@@ -205,6 +207,8 @@
+       if (tmwrite) call writetm3
+     end if
+   end if
++! elkpy: orientation gradient, while bsmt is still the field of the states
++  call elkpy_rotmom_grad
+ ! compute the Kohn-Sham potential and magnetic field before potential mixing
+   if (.not.mixrho) call potks(.true.)
+ ! mix the old density/magnetisation or potential/field with the new
+@@ -290,6 +294,8 @@
+       flush(69)
+     end if
+   end if
++! elkpy: turn the moments for the next loop by the orientation gradient
++  call elkpy_rotmom_step(dv,nwork,work)
+ ! exit self-consistent loop if required
+   if (tlast) goto 10
+ ! check for convergence
+@@ -305,7 +311,7 @@
+        &G18.10,")")') de,epsengy
+       write(66,'(G18.10)') de
+       flush(66)
+-      if ((dv < epspot).and.(de < epsengy)) then
++      if ((dv < epspot).and.(de < epsengy).and.elkpy_rotmom_cv) then
+         write(60,*)
+         write(60,'("Convergence targets achieved")')
+         tlast=.true.
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -225,7 +225,8 @@
+ # elkpy extension (not upstream Elk): Wilson-loop / Fukui-Hatsugai-Suzuki
+ # Berry curvature (task 9000, see elkpy_berry.f90)
+ SRC_ELKPY = elkpy_berry.f90 elkpy_eigenstates.f90 elkpy_stm.f90 \
+- elkpy_transport.f90 elkpy_initstate.f90 elkpy_fermitunnel.f90
++ elkpy_transport.f90 elkpy_initstate.f90 elkpy_fermitunnel.f90 \
++ elkpy_rotmom.f90
+ 
+ SRC = $(SRC_modules) $(SRC_FFT) $(SRC_elk) $(SRC_main) $(SRC_LAPACK) \
+  $(SRC_phonon) $(SRC_XC) $(SRC_DFTU) $(SRC_RDMFT) $(SRC_GW) $(SRC_TDDFT) \
+--- a/src/modmain.f90
++++ b/src/modmain.f90
+@@ -278,6 +278,15 @@
+ integer elkpy_ft_axis,elkpy_ft_ngrid(3)
+ real(8) elkpy_ft_tip,elkpy_ft_exit,elkpy_ft_window(2),elkpy_ft_koff(3)
+ real(8) elkpy_ft_tdir(3),elkpy_ft_tpol,elkpy_ft_sdir(3),elkpy_ft_spol
++! elkpy: the orientation gradient dE/dw of a global spin rotation, reported
++! elkpy: every self-consistent loop (elkpy_torque) and followed by turning
++! elkpy: the moments (elkpy_rotmom); elkpy_rotmompm is the tolerance on
++! elkpy: |dE/dw| (Ha/rad), the trust angle and the first step (rad) and the
++! elkpy: RMS potential change below which steps start; elkpy_rotmomfix holds
++! elkpy: the in-plane phase of a coplanar texture; elkpy_rotmom_cv is the
++! elkpy: convergence flag gndstate.f90 reads. See elkpy_rotmom.f90
++logical elkpy_torque,elkpy_rotmom,elkpy_rotmomfix,elkpy_rotmom_cv
++real(8) elkpy_rotmompm(4)
+ ! bforb is .true. for external B-field-orbit coupling
+ logical bforb
+ ! bfdmag is .true. for external B-field diamagnetic coupling
+--- a/src/readinput.f90
++++ b/src/readinput.f90
+@@ -195,6 +195,11 @@
+ elkpy_ft_tpol=0.d0
+ elkpy_ft_sdir(:)=[0.d0,0.d0,1.d0]
+ elkpy_ft_spol=0.d0
++! elkpy: orientation gradient and turning of the moments off by default
++elkpy_torque=.false.
++elkpy_rotmom=.false.
++elkpy_rotmompm(:)=[1.d-7,0.1d0,0.05d0,1.d-4]
++elkpy_rotmomfix=.false.
+ bforb=.false.
+ bfdmag=.false.
+ atpopt=1
+@@ -800,6 +805,21 @@
+ ! elkpy: .true. to integrate the LDOS over the bias window (constant current
+ ! elkpy: mode) instead of sampling it at efermi+elkpy_stmbias (dI/dV mode)
+   read(50,*,err=20) elkpy_stmint
++case('elkpy_torque')
++! elkpy: .true. to write the orientation gradient dE/dw of every loop to
++! elkpy: ELKPY_ROTMOM.OUT
++  read(50,*,err=20) elkpy_torque
++case('elkpy_rotmom')
++! elkpy: .true. to turn the moments by the orientation gradient every loop
++  read(50,*,err=20) elkpy_rotmom
++case('elkpy_rotmom_pm')
++! elkpy: tolerance on |dE/dw| (Ha/rad), trust angle (rad), first step (rad),
++! elkpy: RMS potential change below which steps start
++  read(50,*,err=20) elkpy_rotmompm(1:4)
++case('elkpy_rotmom_fixphase')
++! elkpy: .true. to hold the in-plane phase of a coplanar texture (only for a
++! elkpy: phase the energy does not depend on)
++  read(50,*,err=20) elkpy_rotmomfix
+ case('elkpy_berry')
+ ! elkpy: Berry curvature (Wilson-loop / Fukui-Hatsugai-Suzuki) task parameters:
+ ! elkpy: the two k-mesh grid directions spanning the Wilson-loop plane, and

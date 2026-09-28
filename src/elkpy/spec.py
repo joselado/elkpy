@@ -331,6 +331,9 @@ OUTPUT_FILES = {
                                            # src/elkpy_transport.f90
     "fermitunnel": "ELKPY_FERMITUNNEL.OUT",  # elkpy extension,
                                            # src/elkpy_fermitunnel.f90
+    "orientation": "ELKPY_ROTMOM.OUT",     # elkpy extension, src/elkpy_rotmom.f90 --
+                                           # written by task 0/1 itself, one line per
+                                           # loop, when elkpy_torque or elkpy_rotmom is set
     "fermidos": "FERMIDOS.OUT",            # src/occupy.f90, DOS at the Fermi
                                            # energy per s.c. iteration
 

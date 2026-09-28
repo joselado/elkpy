@@ -30,6 +30,7 @@ from .parsers import (
     info,
     moke,
     optical,
+    orientation as parsers_orientation,
     quantum_geometry,
     stm,
     symmetry,
@@ -44,6 +45,22 @@ from .tasks import ALL_MIXINS
 MANIFEST_NAME = ".elkpy_manifest.json"
 
 
+def _raise_on_elk_error(log_path):
+    """Raise RuntimeError carrying Elk's own "Error(...)" text, if the log has one."""
+    try:
+        lines = open(log_path).read().splitlines()
+    except OSError:
+        return
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("Error("):
+            message = [line.strip()]
+            for follow in lines[i + 1:]:
+                if not follow.strip():
+                    break
+                message.append(follow.strip())
+            raise RuntimeError(f"Elk stopped in {log_path.parent}: " + " ".join(message))
+
+
 class Calculation(*ALL_MIXINS):
     def __init__(
         self,
@@ -53,6 +70,7 @@ class Calculation(*ALL_MIXINS):
         spinpol=False,
         spinorb=False,
         soc_scale=None,
+        rotate_moments=False,
         rgkmax=7.0,
         ngridk=(4, 4, 4),
         vkloff=(0.0, 0.0, 0.0),
@@ -84,6 +102,21 @@ class Calculation(*ALL_MIXINS):
         entirely and a scale has nothing to act on. Every key must be a
         species symbol present in `structure`.
 
+        rotate_moments: turn the whole magnetic texture by the gradient of
+        the total energy with respect to one global spin rotation after
+        every self-consistent loop (elkpy Fortran extension, patches/0027,
+        docs/design.md #36), so that one ground state converges onto the
+        easy axis of a ferromagnet or the equilibrium plane of a coplanar
+        texture. Requires spinorb=True: without spin-orbit coupling every
+        orientation has the same energy. The seed fields in `structure`
+        (each atom's bfcmt) only set the starting direction and have to die
+        away, so `reducebf` defaults to 0.5 here unless extra_blocks sets it;
+        seed the moments off every symmetry element of the crystal, or Elk's
+        magnetic group pins them (the run then stops with an error saying
+        so). Tolerance and step controls are the `elkpy_rotmom_pm` block, via
+        extra_blocks; get_orientation_relaxation() reads the loop-by-loop
+        record.
+
         raise_on_nonconvergence: if True (default), ensure_ground_state()
         raises RuntimeError on non-convergence -- the safe default, since a
         bare energy/bands/dos value from a non-converged run is easy to
@@ -113,12 +146,23 @@ class Calculation(*ALL_MIXINS):
         negative = {k: v for k, v in self.soc_scale.items() if v < 0}
         if negative:
             raise ValueError(f"soc_scale must be >= 0, got {negative}")
+        self.rotate_moments = bool(rotate_moments)
+        if self.rotate_moments and not self.spinorb:
+            raise ValueError(
+                "rotate_moments=True needs spinorb=True -- without spin-orbit coupling "
+                "every orientation of the moments has the same energy, so there is "
+                "nothing to turn towards"
+            )
         self.rgkmax = rgkmax
         self.ngridk = tuple(ngridk)
         self.vkloff = tuple(vkloff)
         self.sppath = Path(sppath) if sppath else (structure.sppath or config.resolve_species_path())
         self._launcher = launcher
         self.extra_blocks = dict(extra_blocks or {})
+        if self.rotate_moments:
+            # the seed fields only choose where the moments start; a field that
+            # stays on holds them there, and elkpy_rotmom.f90 refuses reducebf=1
+            self.extra_blocks.setdefault("reducebf", [0.5])
         self.raise_on_nonconvergence = raise_on_nonconvergence
         self._manifest_path = self.workdir / MANIFEST_NAME
         self._converged = None
@@ -182,6 +226,8 @@ class Calculation(*ALL_MIXINS):
                 "elkpy_socscale",
                 [(species_index[symbol], scale) for symbol, scale in self.soc_scale.items()],
             )
+        if self.rotate_moments:
+            input_file.add_block("elkpy_rotmom", [True])
         input_file.add_block("rgkmax", [self.rgkmax])
         input_file.add_block("ngridk", [ngridk or self.ngridk])
         input_file.add_block("vkloff", [vkloff or self.vkloff])
@@ -199,6 +245,7 @@ class Calculation(*ALL_MIXINS):
             "spinpol": self.spinpol,
             "spinorb": self.spinorb,
             "soc_scale": self.soc_scale,
+            "rotate_moments": self.rotate_moments,
             "rgkmax": self.rgkmax,
             "sppath": str(self.sppath),
             "ngridk": list(self.ngridk),
@@ -261,8 +308,12 @@ class Calculation(*ALL_MIXINS):
         f.add_block("tasks", [spec.TASKS["ground_state"]])
         self._add_base_blocks(f)
         f.write(self.workdir / "elk.in")
-        self.launcher.run(self.workdir)
+        log_path = self.launcher.run(self.workdir)
         converged = info.parse_convergence(self.workdir / spec.OUTPUT_FILES["info"])
+        if converged is None:
+            # Elk reports a refused input with "Error(...)" and exits 0, which
+            # would otherwise surface below as a misleading "did not converge"
+            _raise_on_elk_error(log_path)
         with open(self._manifest_path, "w") as fh:
             json.dump({"basis_signature": self._basis_signature(), "converged": converged}, fh)
         self._converged = converged
@@ -532,6 +583,26 @@ class Calculation(*ALL_MIXINS):
         """Total energy in Hartree (task 0/1, TOTENERGY.OUT)."""
         self.ensure_ground_state()
         return totenergy.parse_final_energy(self.workdir / spec.OUTPUT_FILES["totenergy"])
+
+    def get_orientation_relaxation(self):
+        """The orientation of the magnetic texture loop by loop (ELKPY_ROTMOM.OUT).
+
+        Written by the ground state itself when `rotate_moments=True`, or when
+        `extra_blocks={"elkpy_torque": [True]}` asks only for the gradient to
+        be reported. Returns parsers.orientation.parse_orientation's dict:
+        per loop, the gradient ``dE/dw`` (Ha/rad, the torque with a minus
+        sign), the part of it the step acts on, the step and the angle turned
+        so far, and the moment axis and plane normal of that loop's output
+        magnetisation (docs/design.md #36).
+        """
+        self.ensure_ground_state()
+        path = self.workdir / spec.OUTPUT_FILES["orientation"]
+        if not path.exists():
+            raise FileNotFoundError(
+                f"{path} was not written: pass rotate_moments=True, or "
+                "extra_blocks={'elkpy_torque': [True]} to report the gradient alone"
+            )
+        return parsers_orientation.parse_orientation(path)
 
     def get_bands(self, vertices=None, kpath=None, npoints=200):
         """Band structure along a path (task 20, BAND.OUT).

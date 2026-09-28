@@ -66,6 +66,11 @@ node's own. Override with `ELKPY_F90_LIB`, `ELKPY_MARCH` or `ELKPY_MODULES`
 - Its decomposition into isotropic Heisenberg exchange, the Dzyaloshinskii-Moriya vector $D^x=\tfrac12(J^{yz}-J^{zy})$, and the symmetric anisotropy that carries the Kitaev $K$ and $\Gamma$ terms of a honeycomb magnet [[notebook]](notebooks/18_exchange_constants.ipynb)
 - Single-ion anisotropy $\mathbf A_{ii}$, which the exchange formula cancels by construction and so needs configurations and formulas of its own [[notebook]](notebooks/18_exchange_constants.ipynb)
 
+## Magnetic anisotropy ##
+- The orientation of a magnetic texture relaxed inside one self-consistent run with spin-orbit coupling: after every loop the whole texture is turned by the gradient of the energy with respect to a global spin rotation, $\partial E/\partial\boldsymbol\omega=\int\mathbf B_{\rm in}\times\mathbf m_{\rm out}\,d^3r$, so a ferromagnet converges onto its easy axis where a plain loop barely moves off its start [[notebook]](notebooks/22_turning_the_moments.ipynb)
+- The plane of a coplanar antiferromagnet and its in-plane phase from the same step, e.g. to within about a degree of the (111) kagome plane of the 120-degree state of Mn$_3$Ir [[notebook]](notebooks/22_turning_the_moments.ipynb)
+- The gradient itself, reported for any noncollinear run; at 45 degrees from a uniaxial easy axis it measures $K_1+K_2=E(90^\circ)-E(0)$ [[notebook]](notebooks/22_turning_the_moments.ipynb)
+
 ## Spin-polarized scanning tunneling microscopy ##
 - Spin-polarized STM images in the Tersoff-Hamann picture, $dI/dV(\mathbf r)\propto n(\mathbf r,E_F+eV)+P_T\,\mathbf m(\mathbf r,E_F+eV)\cdot\hat{\mathbf e}_T$ — the vacuum local density of states projected onto an arbitrary Cartesian tip magnetization direction, which resolves magnetically inequivalent but chemically identical atoms [[notebook]](notebooks/19_spin_polarized_stm.ipynb)
 - Both the differential-conductance map at one energy and the bias-window-integrated (constant-current) image, at any tip height [[notebook]](notebooks/19_spin_polarized_stm.ipynb)
@@ -161,6 +166,19 @@ result["nu0_by_axis"] # (1, 1, 1): the strong index agrees identically across al
                       # axes -- an algebraic consistency check that does hold
 ```
 ![Alt text](images/cs_dimerized_z2_invariant_3d.png?raw=true "Wannier charge centers on the k1=0 and k1=pi planes of a dimerized diamond lattice; the crossing count on the k1=0 plane is mesh-dependent, see docs/design.md section 23")
+
+## FePt turned onto its easy axis in one ground state ##
+Started 45 degrees from $c$, a plain self-consistent loop barely moves the moment, since the
+push on the orientation is the anisotropy over the exchange; turning the whole texture after every
+loop by the gradient $\partial E/\partial\boldsymbol\omega=\int\mathbf B_{\rm in}\times\mathbf m_{\rm out}\,d^3r$
+brings it to within a degree of $c$ in nine steps:
+```python
+fept = Structure(FEPT_AVEC, {"Fe": [((0, 0, 0), seed)], "Pt": [((0.5, 0.5, 0.5), (0, 0, 0))]})
+turned = fept.get_calculation("fept", spinorb=True, ngridk=(8, 8, 6), rotate_moments=True)
+path = turned.get_orientation_relaxation()               # one row per loop
+theta = np.degrees(np.arccos(np.abs(path["axis"][:, 2])))  # angle of the moment from c
+```
+![Alt text](images/fept_turning_moments.png?raw=true "Angle of the FePt moment from c against the self-consistent loop, with and without the step, and the RMS change of the potential")
 
 ## Spin-polarized STM of a non-collinear 120-degree Néel Cr monolayer ##
 The three Cr atoms are chemically identical, so a conventional STM sees only the 1x1
@@ -317,7 +335,7 @@ points, density = calc.get_density(grid=(24, 24, 24))  # n(r) = sum_i^occ |psi_i
 ![Alt text](images/si_density.png?raw=true "Charge density slice of bulk silicon")
 
 # Notebooks #
-Eighteen notebooks under [`notebooks/`](notebooks), one per feature area above, each
+Twenty-two notebooks under [`notebooks/`](notebooks), one per feature area above, each
 executed end-to-end against a real compiled Elk binary and checked in with its actual
 output (two are exceptions, left unexecuted with a note: the DFPT phonon notebook,
 since a single call takes ~11-13 minutes, and the exchange-constants notebook,
@@ -345,6 +363,7 @@ is the place to actually start:
 | [`19_spin_polarized_stm.ipynb`](notebooks/19_spin_polarized_stm.ipynb) | Spin-polarized STM image of a non-collinear 120-degree Néel Cr monolayer | yes |
 | [`20_vertical_transport.ipynb`](notebooks/20_vertical_transport.ipynb) | Vertical tunnelling transport: monolayer vs AB-bilayer graphene, and where the local picture fails | yes |
 | [`21_tunnelling_fermi_surface.ipynb`](notebooks/21_tunnelling_fermi_surface.ipynb) | The Fermi surface a tunnel junction sees: monolayer NbSe$_2$, where the K pockets all but vanish | yes |
+| [`22_turning_the_moments.ipynb`](notebooks/22_turning_the_moments.ipynb) | Turning the moments inside the SCF: FePt onto its easy axis, the 120-degree state of Mn$_3$Ir to within about a degree of its (111) plane | yes |
 | [`01_getting_started.ipynb`](notebooks/01_getting_started.ipynb) | Ground state, band structure, density of states | -- |
 | [`02_relaxation_forces_and_properties.ipynb`](notebooks/02_relaxation_forces_and_properties.ipynb) | Forces, relaxation, effective mass, density, `run_tasks()` | -- |
 | [`03_phonon_dispersion_and_dos.ipynb`](notebooks/03_phonon_dispersion_and_dos.ipynb) | Phonon dispersion/DOS via DFPT | -- |

@@ -4093,4 +4093,250 @@ only $D$ does.
 \end{thebibliography}
 
 
+
+\part{Turning the moments inside the self-consistent loop}
+\label{part:rotmom}
+
+\section{The orientation as a coordinate}
+
+In the following we see how one self-consistent run with spin-orbit coupling
+is made to converge onto the orientation of lowest energy of a magnetic
+texture, the easy axis of a ferromagnet or the plane of a coplanar
+antiferromagnet. The question is the one a total-energy scan answers one
+direction at a time: which way does the magnetisation point, relative to the
+lattice, once the spin-orbit coupling has tied the two together. It is what
+torque magnetometry and the ferromagnetic resonance field measure, and what
+sets the easy axis a magnetic-force or spin-polarised STM image sees.
+
+Without spin-orbit coupling a global rotation of every spin together is an
+exact symmetry, and the orientation is not a coordinate at all. With it, the
+energy depends on the orientation, but weakly: the anisotropy is of order a
+meV per cell against an exchange of order an eV. A self-consistent loop is in
+principle free to relax the orientation, since its fixed points are exactly
+the orientations at which the energy is stationary, and in practice it barely
+moves, for a reason we will now make precise.
+
+\section{The gradient of the energy with respect to a global spin rotation}
+
+Let us turn the input of one self-consistent loop rigidly in spin space by the
+rotation vector $\boldsymbol\omega$, leaving the lattice where it is,
+\begin{equation}
+  \mathbf B_{\rm in}(\mathbf r)\to\mathbf B_{\rm in}(\mathbf r)
+  +\boldsymbol\omega\times\mathbf B_{\rm in}(\mathbf r),
+  \qquad
+  \mathbf m_{\rm in}(\mathbf r)\to\mathbf m_{\rm in}(\mathbf r)
+  +\boldsymbol\omega\times\mathbf m_{\rm in}(\mathbf r),
+  \label{eq:rotin}
+\end{equation}
+with $\mathbf B_{\rm in}$ the exchange-correlation field the Kohn-Sham states
+are solved in and $\mathbf m_{\rm in}$ the magnetisation it was built from. The
+energy of that input is the Harris-Foulkes functional
+\cite{harris1985,foulkes1989},
+\begin{equation}
+  E_{\rm HF}=\sum_i f_i\varepsilon_i[v_{\rm in},\mathbf B_{\rm in}]
+  -\int\rho_{\rm in}v_{\rm in}\,d^3r
+  -\int\mathbf m_{\rm in}\cdot\mathbf B_{\rm in}\,d^3r
+  +E_{\rm H}[\rho_{\rm in}]+E_{\rm xc}[\rho_{\rm in},\mathbf m_{\rm in}]
+  -TS ,
+  \label{eq:harris}
+\end{equation}
+where the Kohn-Sham Hamiltonian carries $\boldsymbol\sigma\cdot\mathbf B_{\rm
+in}$ and the spin-orbit term $\xi(r)\boldsymbol\sigma\cdot\mathbf L$ is fixed
+to the lattice. Under Eq.~\eqref{eq:rotin} the double-counting term
+$\mathbf m_{\rm in}\cdot\mathbf B_{\rm in}$ turns with both its factors, and
+the exchange-correlation energy of a noncollinear local or gradient-corrected
+functional is built from $|\mathbf m|$ alone \cite{kubler1988}, so both are
+invariant. The only term that is not is the eigenvalue sum, and by the
+Hellmann-Feynman theorem, with the occupations held (the entropy term has no
+first-order contribution from them),
+\begin{equation}
+  \frac{\partial E_{\rm HF}}{\partial\boldsymbol\omega}
+  =\sum_i f_i\langle\psi_i|\boldsymbol\sigma\cdot
+     \frac{\partial\mathbf B_{\rm in}}{\partial\boldsymbol\omega}|\psi_i\rangle
+  =\int\mathbf B_{\rm in}(\mathbf r)\times\mathbf m_{\rm out}(\mathbf r)\,d^3r ,
+  \label{eq:dedw}
+\end{equation}
+meaning that the gradient is the cross product of the field the states were
+solved in with the magnetisation the states produce,
+$\mathbf m_{\rm out}=\sum_i f_i\psi_i^\dagger\boldsymbol\sigma\psi_i$, and the
+torque on the texture is its negative. Note three properties of
+Eq.~\eqref{eq:dedw}. Without spin-orbit coupling it vanishes at every loop,
+converged or not, because the states turn with the field. With it, it
+vanishes at every self-consistent fixed point, because there $\mathbf B_{\rm
+in}=\mathbf B_{\rm xc}[\mathbf m_{\rm out}]$ and the local functional puts that
+field along $\mathbf m_{\rm out}$ at every point. And near self-consistency
+the Harris-Foulkes energy agrees with the Kohn-Sham energy to second order in
+the residual, so Eq.~\eqref{eq:dedw} tends to the true orientation gradient.
+What it costs is one integral per loop and no derivative code: the lean of
+$\mathbf m_{\rm out}$ off $\mathbf B_{\rm in}$ is the spin-orbit coupling's
+own answer to the question of which way the texture wants to turn. This is
+the torque of the torque method \cite{wang1996}, evaluated on the input of
+each loop instead of on one converged state.
+
+External fields are not rotated with the texture, so only the
+exchange-correlation part of the field enters Eq.~\eqref{eq:dedw}; the seed
+fields' share, a constant in each muffin tin and a constant times the
+characteristic function outside, is subtracted in closed form.
+
+\section{Why a plain loop is slow, and the step}
+
+The lean of $\mathbf m_{\rm out}$ off $\mathbf B_{\rm in}$ is the anisotropy
+over the exchange, and a mixer takes a fraction $\beta$ of it per loop, so the
+three global spin rotations are the softest modes of the whole problem: they
+are exact zero modes without spin-orbit coupling and are gapped only by it.
+The step that fixes this is a Newton step on those three coordinates,
+\begin{equation}
+  \boldsymbol\omega=-H^{-1}\frac{\partial E}{\partial\boldsymbol\omega},
+  \label{eq:step}
+\end{equation}
+with $H$ the $3\times3$ curvature of the energy in the orientation, built by
+BFGS from the gradients of successive loops and bounded by a trust angle. You
+can think of it as a preconditioner on three modes, the way Kerker's is on the
+long-wavelength charge: the mixer multiplies the rotational part of the
+residual by $\beta$, where Eq.~\eqref{eq:step} divides it by the curvature.
+Everything the loop carries into the next one is turned together: the input
+field, and every vector in the mixer's history, which a common rotation leaves
+orthonormal. The angles inside a texture are held by exchange and keep
+converging at the loop's usual rate, so the canting the spin-orbit coupling
+adds on each site is in the answer.
+
+What the step does not move is read off the moment tensor
+$M=\sum_a\mathbf m_a\mathbf m_a^{\rm T}$ of the muffin-tin moments. A collinear
+texture does not change under a turn about its own axis, and that component is
+taken out. A coplanar texture turned about its own plane normal changes its
+in-plane phase, which the energy depends on in general and which is relaxed
+with the plane; only the phase of a true spiral is flat, and only there may it
+be held.
+
+The fixed point of the loop with the step is a self-consistent state at which
+Eq.~\eqref{eq:dedw} vanishes, the same stationary state a plain loop reaches
+given enough loops, and it is reached at the loop's own rate. Stationary is
+not minimal: a start on a symmetry element feels no torque whether it is the
+easy axis or the hard one, which is why the start is off every symmetry
+element, and a saddle is told from a minimum by restarting slightly off it.
+
+\section{Worked case: L1$_0$ FePt}
+
+For concreteness, take ordered FePt, Fe at the origin and Pt at the body
+centre of the primitive tetragonal cell ($a=5.147$, $c=7.017$ Bohr), LDA,
+\texttt{ngridk=8 8 6}, $0.005$ Ha of Fermi-Dirac smearing. The easy axis is $c$
+in every functional; the anisotropy is driven by the Pt spin-orbit coupling
+through Fe-Pt hybridisation. Started $45^\circ$ from $c$, the plain loop moves
+the moment from $44.96^\circ$ to $44.69^\circ$ in 23 loops while the RMS change
+of the potential sits at $3.3\times10^{-6}$ Ha and does not fall further. With
+the step, the moment reaches $c$ in 19 loops of steps, $0.1$ rad per loop at
+the trust bound, and the run converges at $0.08^\circ$ from $c$ with
+$|\partial E/\partial\boldsymbol\omega|=6\times10^{-9}$ Ha/rad, at an energy
+7 $\mu$eV from a plain run seeded $0.06^\circ$ off $c$ on the same magnetic
+group.
+
+Along the way the gradient traces $K\sin2\theta$. For
+$E=K_1\sin^2\theta+K_2\sin^4\theta$ the slope at $45^\circ$ is exactly
+$K_1+K_2=E(90^\circ)-E(0)$, so the gradient at $45^\circ$ measures the
+anisotropy, and it reads $6.76\times10^{-5}$ Ha/rad against $E(a)-E(c)=
+6.88\times10^{-5}$ Ha (1.87 meV per cell at this mesh) from two converged runs,
+2 per cent apart.
+
+\section{Worked case: the plane of L1$_2$ Mn$_3$Ir}
+
+The simplest genuinely noncollinear case is the 120-degree state of Mn$_3$Ir,
+Ir at the cube corner and Mn at the face centres ($a=7.153$ Bohr, PBE,
+\texttt{ngridk=8 8 8}). Its T1 state puts the three Mn moments along
+$\langle11\bar2\rangle$ in a (111) kagome plane, and both the tilt of that
+plane and the rotation of the texture inside it (its phase) are set at second
+order in the spin-orbit coupling, largely the Ir one, because each Mn site has
+tetragonal symmetry and so allows a single-ion term $(\mathbf m_i\cdot\hat{\mathbf
+z}_i)^2$ about its own four-fold axis; the same term tilts the plane and turns
+the phase, which is why the two are of the same size and the phase cannot be
+held.
+Seeded with T1 turned by $25^\circ$ about a generic axis, the step turns the
+plane normal from $11.7^\circ$ off $[111]$ to $1.15^\circ$ from it, and the
+total angle turned, $25.9^\circ$, is the $25^\circ$ the seed was turned by. The
+texture stays coplanar throughout, and the three angles between the moments
+end at $120.00\pm0.06^\circ$ with $2.856\,\mu_B$ on each Mn. It stays about
+$1^\circ$ from T1 for the reason given below. The end state carries a net moment of
+$0.019\,\mu_B$ along $-[111]$, the weak moment the T1 symmetry allows, which is
+the canting spin-orbit coupling adds on each site and which no rigid rotation
+could have produced.
+
+\section{What limits it in Elk}
+
+Eq.~\eqref{eq:dedw} is the exact derivative of Elk's eigenvalue sum to the
+extent that the integral uses the Hamiltonian's own quadrature. It uses the
+same grids, and a finite difference of the eigenvalue sum with the occupations
+held reproduces it to 0.01 per cent on its large component, with about
+$10^{-7}$ Ha/rad left on the small ones: pointwise products on the spherical
+cover against the coefficient-space products the Hamiltonian is assembled
+from. The null found more than that. Without spin-orbit coupling the gradient
+has to vanish identically, and in upstream Elk it did not: $1.4\times10^{-6}$
+Ha/rad on bcc Fe and $9.6\times10^{-6}$ on Mn$_3$Ir at its T1 state, with a
+noncollinear loop that would not converge. The reason is that Elk builds the
+muffin-tin block of $\boldsymbol\sigma\cdot\mathbf B$ as spherical harmonics to
+points, times $\mathbf B$, back to harmonics,
+\begin{equation}
+  M_{ij}[X]=\langle\phi_i|\,F\,\mathrm{diag}(X)\,T\,|\phi_j\rangle ,
+  \label{eq:msht}
+\end{equation}
+with $T$ the backward and $F=T^{-1}$ the forward transform on the spherical
+cover, which is Hermitian only when $X$ is spherical, and then fills the two
+diagonal spin blocks from their upper triangle and the off-diagonal one in
+full. For a field along $\hat{\mathbf u}$ the three blocks are then not
+$\boldsymbol\sigma\cdot\hat{\mathbf u}$ times one Hermitian matrix, and the
+Hamiltonian does not commute with a global spin rotation: a fake anisotropy
+every magnetic noncollinear run carried. Patch 0028 adds instead the Hermitian
+parts, $\tfrac12(M[B_z]+M[B_z]^\dagger)$ on the diagonal blocks and
+$\tfrac12(M[B_x-iB_y]_{ij}+M[B_x+iB_y]_{ji}^*)$ off the diagonal, which for a
+field along $\hat{\mathbf u}$ is exactly $\boldsymbol\sigma\cdot\hat{\mathbf u}$
+times the Hermitian part of $M[b]$. With it the bcc Fe gradient is at most
+$1.3\times10^{-12}$ Ha/rad at any loop and the noncollinear loop converges in
+23 loops. One inconsistency remains, and it is not in the Hamiltonian. On
+Mn$_3$Ir without spin-orbit coupling the finite difference of the eigenvalue
+sum under a global rotation is below $1.2\times10^{-9}$ Ha/rad with the fix,
+while Eq.~\eqref{eq:dedw} reads $4$ to $5\times10^{-6}$, the texture drifts
+in phase and the loop has no fixed point; with spin-orbit coupling the
+relaxation ends about $1^\circ$ from T1, with and without the fix. The leading
+explanation, which is not tested, is that the magnetisation Elk builds point by
+point on the spherical cover, which its own self-consistency condition also
+uses, is not quite the one the field of Eq.~\eqref{eq:msht} couples to once the
+texture is noncollinear. bcc Fe does not show it; FePt's $0.08^\circ$ from $c$
+survives the fix as well.
+
+\section{How to use it in code}
+
+\begin{verbatim}
+import numpy as np
+from elkpy.structure import Structure
+
+# seeded 45 degrees off c and 20 from a: the magnetic group is {E, I}
+seed = 0.5 * np.array([0.6645, 0.2418, 0.7071])
+fept = Structure([(5.147, 0, 0), (0, 5.147, 0), (0, 0, 7.017)],
+                 {"Fe": [((0, 0, 0), tuple(seed))],
+                  "Pt": [((0.5, 0.5, 0.5), (0, 0, 0))]})
+calc = fept.get_calculation("fept", spinorb=True, rotate_moments=True,
+                            ngridk=(8, 8, 6),
+                            extra_blocks={"swidth": [0.005], "nempty": [8]})
+path = calc.get_orientation_relaxation()    # one row per loop
+theta = np.degrees(np.arccos(np.abs(path["axis"][:, 2])))
+torque = -path["gradient"]                  # Ha/rad
+\end{verbatim}
+
+\texttt{rotate\_moments=True} writes the \texttt{elkpy\_rotmom} block and sets
+\texttt{reducebf=0.5}, since the seed fields only choose where the moments
+start. The step controls are \texttt{elkpy\_rotmom\_pm}
+(tolerance, trust angle, first step, and the RMS potential change below which
+steps start), \texttt{elkpy\_torque} reports Eq.~\eqref{eq:dedw} for any
+noncollinear run without turning anything, and
+\texttt{elkpy\_rotmom\_fixphase} holds the phase of a coplanar texture.
+
+\begin{thebibliography}{9}
+\bibitem{harris1985} J. Harris, Phys. Rev. B \textbf{31}, 1770 (1985).
+\bibitem{foulkes1989} W.~M.~C. Foulkes and R. Haydock, Phys. Rev. B
+  \textbf{39}, 12520 (1989).
+\bibitem{kubler1988} J. K\"ubler, K.-H. H\"ock, J. Sticht and A.~R. Williams,
+  J. Phys. F \textbf{18}, 469 (1988).
+\bibitem{wang1996} X. Wang, R. Wu, D.-S. Wang and A.~J. Freeman, Phys. Rev. B
+  \textbf{54}, 61 (1996).
+\end{thebibliography}
+
+
 \end{document}

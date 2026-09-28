@@ -947,7 +947,7 @@ Elk *already has* reachable by name (`docs/design.md` §32, no `physics.tex` par
 per `CLAUDE.md`'s routine-wrapping rule): six task-family mixins under `src/elkpy/tasks/`, composed in
 `tasks/__init__.py`'s `ALL_MIXINS` and unpacked by `class Calculation(*ALL_MIXINS)`. **143 of the
 146 live task codes `vendor/elk/src/elk.f90` dispatches on now sit behind a named method (97.9%)**,
-up from about twenty; `Calculation` exposes 116 `get_*` methods. Coverage is measured against the
+up from about twenty; `Calculation` exposes 117 `get_*` methods. Coverage is measured against the
 dispatch, not claimed — a code counts only when a named method actually puts it in a task list,
 since `run_tasks()` could always reach all of them, which is exactly what this improves on. The
 three exceptions: task 2 (`geomopt` from atomic densities — the capability is wrapped, `get_relaxed()`
@@ -1004,8 +1004,8 @@ Running the rest of that suite then found two more, and one of them is not elkpy
 `genlmirep` and `writeelmirep` both declare it `real(8)` — so task 22 ((l,m)-resolved band
 character) writes twice its allocation and **aborts in malloc** under `lmirep`'s own default.
 `dos.f90:58-60` splits the same two declarations correctly, which is what makes it a bug rather
-than a convention; **patch 0026** fixes it and is the only entry in the series that fixes upstream
-rather than adding to it. The check that it moved only `elm` is an identity, not an exit code:
+than a convention; **patch 0026** fixes it and is one of the two entries in the series that fix
+upstream rather than add to it (0028, §36, is the other). The check that it moved only `elm` is an identity, not an exit code:
 `lmirep` mixes $m$ within each $\ell$ and so preserves every $\ell$ sum, and task 22's channels
 summed over each $\ell$ reproduce task 21's per-$\ell$ characters to 1e-6, the F12.6 both are
 written at. And $\mathbf j_p$, which must vanish for a time-reversal-symmetric ground state, came
@@ -1335,3 +1335,33 @@ far better vacuum tail than the one at $E_F$. The pocket sums do not have that
 problem. The height
 sweep is the diagnostic and it is cheap; `notebooks/21_tunnelling_fermi_surface.ipynb`
 runs it before it plots anything.
+
+## §36 — Turning the moments inside the self-consistent loop
+
+**Verified on FePt: the gradient is Elk's own Hellmann-Feynman derivative to 0.2 per cent, and one ground state lands on the easy axis at the energy of a plain run started next to it. The coplanar case, Mn$_3$Ir, is recorded below.**
+
+`Calculation(rotate_moments=True)` (`patches/0027-rotate-moments.patch`, `src/elkpy_rotmom.f90`, and the upstream fix `patches/0028-hermitian-muffin-tin-sigma-b.patch` its null test led to) turns the whole magnetic texture after every loop by a BFGS step on the gradient of the Harris-Foulkes energy with respect to one global spin rotation, $\partial E/\partial\boldsymbol\omega=\int\mathbf B_{\rm in}\times\mathbf m_{\rm out}\,d^3r$, turning the mixer's history with it; `get_orientation_relaxation()` reads the loop-by-loop record `ELKPY_ROTMOM.OUT`, and `extra_blocks={"elkpy_torque": [True]}` writes the same record for any noncollinear run without turning anything. Design reasoning in `docs/design.md` §36, physics in `docs/physics.tex`, Part "Turning the moments inside the self-consistent loop", worked example in `notebooks/22_turning_the_moments.ipynb`.
+
+### What each check establishes
+
+- **The formula against Elk's Hamiltonian.** A debug build turned one loop's input field by $\pm10^{-3}$ rad and rediagonalised with the occupations held, which is exactly the derivative of the eigenvalue sum. On FePt 45 degrees off $c$ the large component agrees to 0.2 per cent at loops 14 and 22, the small ones carry an offset of about $4\times10^{-7}$ Ha/rad, which is the pointwise quadrature on the spherical cover against the Hamiltonian's coefficient-space products. The debug build is not in the patch series.
+- **FePt onto $c$** (`ngridk=8 8 6`, LDA, `swidth=0.005`, group $\{E, I\}$, with 0028): 44.84 to 0.08 degrees in 18 loops of steps, converged at loop 37 with $|\partial E/\partial\boldsymbol\omega|=5.9\times10^{-9}$ Ha/rad; the energy is 7 $\mu$eV from a plain run seeded 0.06 degrees off $c$ on the same group (upstream: 4.5 $\mu$eV, and 15 $\mu$eV from a run along $c$ with `symtype=0`). A plain run from the same start reaches 43.22 degrees after 40 loops with `dv` at $1.4\times10^{-5}$.
+- **The gradient as the anisotropy.** At 45 degrees it reads 0.98 of $E(a)-E(c)=6.88\times10^{-5}$ Ha (1.87 meV) on the same group, and along the path it follows $K\sin2\theta$.
+- **Mn$_3$Ir onto its (111) plane** (PBE, `ngridk=8 8 8`, group $\{E, I\}$, with 0028): the T1 state turned 25 degrees about a generic axis comes back to within 0.8 to 1.5 degrees of the T1 directions, the plane normal from 11.71 to 1.15 degrees off $[111]$, converged at loop 60, with the three moments at $120.00\pm0.06$ degrees, 2.856 $\mu_B$ each, and a net 0.0193 $\mu_B$ along $-[111]$, the weak moment the T1 symmetry allows; the total angle turned is 25.88 degrees. Upstream the normal ended 0.96 degrees off $[111]$. Two things are not clean: the cell's total energy scatters by $10^{-6}$ Ha per loop at `dv` near $10^{-7}$, so it needs `epsengy=1e-5`, and the gradient scatters around the default tolerance at the end. The residual degree is discussed under "What is not established".
+- **Restarts.** Task 1 from the converged state (upstream binary) stays at 0.0913 degrees and reconverges in 4 loops: `init0.f90` zeroes the seed fields outside the self-consistent tasks when `reducebf<1`, so no `_run_resumed` call re-seeds the orientation.
+- **The null, and patch 0028.** Without spin-orbit coupling the gradient must vanish identically. Upstream Elk gives $1.37\times10^{-6}$ Ha/rad on bcc Fe from loop 10 with a loop that does not converge in 60, and $9.6\times10^{-6}$ on Mn$_3$Ir at T1, because its muffin-tin $\boldsymbol\sigma\cdot\mathbf B$ block is Hermitian only for a spherical field. Patch 0028 adds that block's Hermitian part, in double precision: bcc Fe then gives $2.7\times10^{-17}$ at loop 1 and at most $1.3\times10^{-12}$ at any loop, and converges in 23. `tests/test_calculation_rotate_moments.py` pins every loop below $10^{-10}$ and the convergence. With 0028 the gradient also agrees with the finite difference to 0.01 per cent on its large component (0.2 per cent upstream).
+
+### Tests
+
+`tests/test_rotate_moments.py` (no binary): the input blocks, the `reducebf` default, the cache signature, the Elk-error path, the parser and `parse_moments()`. `tests/test_calculation_rotate_moments.py`: the two refusals and the every-loop null always run; the FePt relaxation runs with `ELKPY_RUN_SLOW_TESTS=1` and was **not run** as a test (about three hours on the default one-thread launcher), though its assertions hold on the notebook's runs of the same physics (start 44.95 degrees, end 0.081, 18 steps, final gradient $5.9\times10^{-9}$, $2.7\times10^{-7}$ Ha from the reference).
+
+Re-run against a binary with 0027 and 0028 on 2026-09-28: the binary-free suite (576 passed, 449 skipped), `test_calculation_rotate_moments.py` (3 passed), `test_calculation_spin_stm.py` (13 passed, the noncollinear Cr monolayer), `test_calculation_moke.py` and `test_calculation_spin.py` (7 passed). **Not** re-run against 0028: `test_calculation_magnetism_manybody.py`, `test_calculation_exchange_nio.py` and the magnetic parts of `test_calculation_transport.py` and `test_calculation_fermitunnel.py`, whose tolerances were set on upstream numbers.
+
+### What is not established
+
+- The 0.73 meV by which Elk's eight-operation FePt run along $c$ sits above the same state on the $\{E, I\}$ and unreduced meshes (0.07 meV along $a$), still 0.66 meV with 0028. Measured, not explained; compare energies on one magnetic group. FePt's 0.08-degree offset from $c$, which also survives 0028, may share its cause.
+- `mixrho=.true.` is refused rather than supported: the rotation of a density-mixing history was written and never run.
+- `elkpy_rotmom_fixphase=.true.` has never taken a step: the one run with the phase held (Mn$_3$Ir) was stopped at loop 13, before its first step, once its gradient showed the phase was not flat. The held-phase projection is untested.
+- No spin spiral in a supercell has been run. Mn$_3$Ir's commensurate 120-degree state is the only noncollinear texture the relaxation has been tried on.
+- Mn$_3$Ir's relaxation ends about 1 degree from T1, upstream and with 0028 alike. With 0028 the Hamiltonian is rotation invariant on this texture (finite difference of the eigenvalue sum $\le1.2\times10^{-9}$ Ha/rad without spin-orbit coupling), but $\int\mathbf B_{\rm in}\times\mathbf m_{\rm out}$ reads $4$ to $5\times10^{-6}$ there, the texture drifts in phase at 0.004 degrees per loop and `dv` stalls near $10^{-6}$. The leading explanation, not tested, is that the magnetisation `rhomagk` builds point by point is not quite the one the Hamiltonian's coefficient-space field couples to once the texture is noncollinear; the single-precision interstitial block is not excluded. FePt's offset from $c$ (0.09 degrees upstream, 0.08 with 0028) is not that, and is not explained. bcc Fe, whose true torque is below the tolerance, stopped 33 degrees from its easy axis upstream; that is a resolution limit and 0028 does not remove it.
+- `eveqnss.f90` (spin spirals) builds the same field block the same way and is not fixed by 0028, and the interstitial field block is still assembled in single precision (it is Hermitian, so it costs round-off, the $10^{-12}$ above).

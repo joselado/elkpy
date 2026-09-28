@@ -1391,6 +1391,33 @@ _EXTENSIONS = [
        source="elkpy",
        desc="the substrate's effective spin polarisation, in [-1, 1]",
        note="patches/0025-tunnelling-fermi-surface.patch"),
+    _b("elkpy_torque", "bool", default=False, var="elkpy_torque",
+       module="modmain", cat="magnetism", src=0, source="elkpy",
+       desc=".true. to write the orientation gradient dE/dw = int B_in x m_out "
+            "of every self-consistent loop to ELKPY_ROTMOM.OUT, without "
+            "turning anything",
+       note="patches/0027-rotate-moments.patch; needs a non-collinear run"),
+    _b("elkpy_rotmom", "bool", default=False, var="elkpy_rotmom",
+       module="modmain", cat="magnetism", src=0, source="elkpy",
+       desc=".true. to turn the whole magnetic texture by the orientation "
+            "gradient after every self-consistent loop, so that the ground "
+            "state converges onto the orientation of lowest energy",
+       note="patches/0027-rotate-moments.patch; needs spinorb, reducebf < 1, "
+            "and a magnetic group whose spin rotations are all the identity"),
+    _b("elkpy_rotmom_pm", "real", shape="vector", n=4,
+       default=(1.0e-7, 0.1, 0.05, 1.0e-4), var="elkpy_rotmompm",
+       module="modmain", cat="magnetism", src=0, source="elkpy",
+       desc="'tolerance trust first_step start': the tolerance on |dE/dw| "
+            "(Ha/rad), the largest step and the first step (radians), and "
+            "the RMS potential change below which steps start",
+       note="patches/0027-rotate-moments.patch"),
+    _b("elkpy_rotmom_fixphase", "bool", default=False, var="elkpy_rotmomfix",
+       module="modmain", cat="magnetism", src=0, source="elkpy",
+       desc=".true. to hold a coplanar texture's turn about its own plane "
+            "normal (its in-plane phase); only for a phase the energy does not "
+            "depend on, since a held phase that is not stationary leaves a "
+            "residual the self-consistent loop cannot remove",
+       note="patches/0027-rotate-moments.patch"),
 ]
 
 

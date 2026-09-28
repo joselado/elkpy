@@ -35,9 +35,9 @@ extra functionality that Elk itself does not provide.
 
 ## Project status
 
-Roadmap Tiers 1-3 are implemented, plus a twenty-six-entry Fortran patch series (`patches/`) adding
+Roadmap Tiers 1-3 are implemented, plus a twenty-eight-entry Fortran patch series (`patches/`) adding
 physics Elk does not have. **143 of the 146 live task codes sit behind a named method (97.9%);
-`Calculation` exposes 116 `get_*` methods.** Full narrative, with the verification evidence for
+`Calculation` exposes 117 `get_*` methods.** Full narrative, with the verification evidence for
 each row: `docs/status.md`.
 
 **Adding a capability: one row in this table, the verification narrative in `docs/status.md`, the
@@ -70,6 +70,7 @@ file** — this section is a routing table and grew to 940 lines once by not bei
 | 33 | LAPW/ground-state export for the JAX port | 0013-0024 | see `docs/jax_port_status.md` |
 | 34 | `STATE.OUT` format + conventions; `spec.ELK_VERSION`, `parse_charges()` | — | verified (`tests/fixtures/` `h_sc`, `c_diamond`, `sic_zb`; no binary needed) |
 | 35 | Momentum-resolved tunnelling Fermi surface (planar tip) | 0025 | verified (**exactly** equals §31's map integrated over the tip plane) |
+| 36 | Turning the moments inside the SCF (`rotate_moments=`), easy axis / texture plane; Hermitian muffin-tin sigma.B (upstream fix) | 0027, 0028 | verified on FePt (gradient = Elk's own Hellmann-Feynman derivative to 0.01%) and Mn3Ir (to within ~1 degree of its (111) plane, residual unexplained); **0028 changes every magnetic noncollinear result** |
 
 **What is open, and must not be quietly asserted as done**
 
@@ -136,6 +137,29 @@ file** — this section is a routing table and grew to 940 lines once by not bei
   quoting any ratio. The check that a run IS clean is two distances: the pocket weights must
   give a κ each, and those κ must predict how the contrast grew (measured 4.17 vs 4.17).
 - `soc_scale=` requires `spinorb=True` and a binary built from the patch series.
+- **Upstream Elk's noncollinear Hamiltonian is not spin-rotation invariant once the muffin-tin
+  field is non-spherical; patch 0028 fixes it, and every magnetic noncollinear number moves.**
+  `eveqnsv.f90` builds the muffin-tin sigma.B block as harmonics to points, times B, back to
+  harmonics (Hermitian only for a spherical B), fills the two diagonal spin blocks from their
+  upper triangle and the off-diagonal one in full, and does it in single precision. Measured
+  WITHOUT spin-orbit coupling, where §36's gradient must vanish identically: bcc Fe 1.37e-6
+  Ha/rad and no convergence in 60 loops (`dv` stuck at 1.3e-7), Mn3Ir at T1 9.6e-6; a field
+  collinear to 4e-16 gave a well-separated occupied state a transverse spin of 3e-6. With 0028
+  (field block Hermitised, in double precision): bcc Fe at most 1.3e-12, converged in 23 loops.
+  With 0028 the eigenvalue sum is rotation invariant on Mn3Ir too (finite difference <= 1.2e-9),
+  but on Mn3Ir without SOC B_in x m_out still reads 4-5e-6 Ha/rad, the phase drifts and `dv`
+  stalls near 1e-6, and with SOC the relaxation ends ~1 degree off T1 with and without 0028.
+  Leading explanation, NOT tested: `rhomagk`'s pointwise magnetisation is not the one the
+  coefficient-space field couples to for a noncollinear texture. FePt's 0.08 degrees also
+  survives 0028.
+  `eveqnss.f90` (spin spirals) builds the block the same way and is NOT fixed. A result from before 0028 on a magnetic noncollinear cell is not
+  comparable with one after it at the 1e-6 Ha level.
+- **Compare magnetic energies on the SAME magnetic group.** FePt seeded exactly along c (eight
+  operations, 72 k-points) converges 0.73 meV ABOVE the same state on the {E, I} (196) or the
+  unreduced (384) mesh; along a the four-operation run is 0.07 meV high. Still 0.66 meV with
+  0028, so not the sigma.B block; cause not established. The anisotropy from the two
+  high-symmetry runs is 1.21 meV against 1.87 meV on the common group,
+  which is what the §36 torque at 45 degrees agrees with (2%).
 - `patch` exits 0 on a FUZZY apply — so "it applied" is not "it applied cleanly". There is
   no CI; grep the `patch` output for `fuzz` by hand after any `vendor/elk/` bump.
 - **Upstream Elk has bugs, and a test that has never been run has found none of them.**
@@ -143,8 +167,8 @@ file** — this section is a routing table and grew to 940 lines once by not bei
   `writeelmirep` both declare it `real(8)`, so task 22 overran the heap by 2x and aborted in
   malloc under `lmirep`'s own default; `dos.f90:58-60` splits the same two declarations
   correctly, which is what makes it a bug rather than a convention. Patch 0026 fixes it and is
-  the ONLY patch in the series that fixes upstream rather than adding to it — check on an
-  upstream bump whether it can be dropped. A heap overrun is invisible until the allocator
+  one of the TWO patches in the series that fix upstream rather than add to it (0028 is the
+  other) — check on an upstream bump whether it can be dropped. A heap overrun is invisible until the allocator
   happens to notice, so reading the Fortran would not have found this: running it did.
 - **A quantity odd under TIME REVERSAL cannot be summed on Elk's reduced k-set.** Time
   reversal is not in `nsymcrys`, so `symrvf` cannot restore it: `get_paramagnetic_current`
@@ -173,7 +197,7 @@ the parts that cause silent wrong answers if ignored.
   `magnetism_manybody`, `params`), composed in `tasks/__init__.py`'s `ALL_MIXINS`. No mixin holds
   state, defines `__init__`, or imports `..calculation`; `Calculation`'s own methods come first in
   the MRO. Verification is **labelled per method** — treat a format-derived one as untested.
-- `spec.py` — version-coupled data (152 task codes, 190 filenames, 22 templates), each entry
+- `spec.py` — version-coupled data (154 task codes, 192 filenames, 22 templates), each entry
   cross-checked against `vendor/elk/src/`. An Elk version bump should mean editing this one file.
 - `params.py` — all 315 `case(...)` branches of `readinput.f90` as data, plus validator, exact-text
   renderer and `describe`/`search`/`categories`. Its completeness test fails in BOTH directions.

@@ -8,6 +8,8 @@ table, which is more likely to drift across Elk versions (see
 docs/design.md #7).
 """
 
+import numpy as np
+
 CONVERGED_MARKER = "Convergence targets achieved"
 NOT_CONVERGED_MARKER = "Reached self-consistent loops maximum"
 
@@ -114,4 +116,62 @@ def _parse_charge_block(lines):
         key = scalars.get(label.rstrip())
         if key is not None:
             result[key] = float(value)
+    return result
+
+
+def parse_moments(info_out_path):
+    """Every "Moments :" block of INFO.OUT (src/writemom.f90), one per loop.
+
+    Returns a dict of arrays with a leading loop axis:
+
+    - "muffin_tin" (nloop, natmtot, ndmag): each atom's muffin-tin moment in
+      Elk's ``ias`` order (species outer, atom inner), in Bohr magnetons;
+      ndmag is 3 for a noncollinear run and 1 for a collinear one.
+    - "interstitial", "muffin_tin_total", "total" (nloop, ndmag).
+    - "species" (natmtot,): the element symbol of each ias.
+
+    The per-loop record is what makes this more than the last block: a
+    texture that turns inside the loop (docs/design.md #36) is read off it
+    loop by loop.
+    """
+    blocks = []
+    current = None
+    for raw in open(info_out_path):
+        line = raw.rstrip("\n")
+        if line.startswith("Moments :"):
+            current = []
+            blocks.append(current)
+            continue
+        if current is None:
+            continue
+        if not line.strip():
+            current = None
+            continue
+        current.append(line)
+    if not blocks:
+        raise ValueError(f"no 'Moments :' block found in {info_out_path}")
+    scalars = {"interstitial": "interstitial", "total in muffin-tins": "muffin_tin_total",
+               "total moment": "total"}
+    out = {"muffin_tin": [], "interstitial": [], "muffin_tin_total": [], "total": []}
+    species = []
+    for index, lines in enumerate(blocks):
+        atoms = []
+        symbol = None
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("species :"):
+                symbol = stripped.split("(", 1)[1].rstrip(")")
+                continue
+            if ":" not in stripped:
+                continue
+            label, value = (part.strip() for part in stripped.split(":", 1))
+            if label.startswith("atom "):
+                atoms.append([float(x) for x in value.split()])
+                if index == 0:
+                    species.append(symbol)
+            elif label in scalars:
+                out[scalars[label]].append([float(x) for x in value.split()])
+        out["muffin_tin"].append(atoms)
+    result = {key: np.array(value) for key, value in out.items()}
+    result["species"] = species
     return result
